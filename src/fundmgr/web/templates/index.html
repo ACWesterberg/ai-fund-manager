@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+{% block title %}Portfolio — AI Fund Manager{% endblock %}
+{% block page_title %}Portfolio Overview{% endblock %}
+
+{% block content %}
+
+<!-- ── KPI strip ── -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+
+  <div class="kpi-card">
+    <div class="kpi-label">NAV</div>
+    <div class="kpi-value">{{ "{:,.0f}".format(nav) }}</div>
+    <div class="kpi-sub">SEK</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-label">Portfolio TWR</div>
+    {% if stats %}
+      <div class="kpi-value {{ 'ret-pos' if stats.twr_pct > 0 else 'ret-neg' if stats.twr_pct < 0 else 'ret-neu' }}">
+        {{ "{:+.2f}".format(stats.twr_pct) }}%
+      </div>
+      <div class="kpi-sub">OMXSPI {{ "{:+.2f}".format(stats.benchmark_return_pct) }}%</div>
+    {% else %}
+      <div class="kpi-value ret-neu">—</div>
+      <div class="kpi-sub">No history yet</div>
+    {% endif %}
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-label">Alpha</div>
+    {% if stats %}
+      <div class="kpi-value {{ 'ret-pos' if stats.alpha_pct > 0 else 'ret-neg' if stats.alpha_pct < 0 else 'ret-neu' }}">
+        {{ "{:+.2f}".format(stats.alpha_pct) }}%
+      </div>
+      <div class="kpi-sub">vs benchmark</div>
+    {% else %}
+      <div class="kpi-value ret-neu">—</div>
+      <div class="kpi-sub">vs benchmark</div>
+    {% endif %}
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-label">Max Drawdown</div>
+    {% if stats and stats.max_drawdown_pct is not none %}
+      <div class="kpi-value {{ 'ret-neg' if stats.max_drawdown_pct < -2 else 'ret-neu' }}">
+        {{ "{:.2f}".format(stats.max_drawdown_pct) }}%
+      </div>
+    {% else %}
+      <div class="kpi-value ret-neu">—</div>
+    {% endif %}
+    <div class="kpi-sub">peak to trough</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-label">Cash</div>
+    <div class="kpi-value">{{ "{:.1f}".format(cash_pct) }}%</div>
+    <div class="kpi-sub">{{ "{:,.0f}".format(cash) }} SEK</div>
+  </div>
+
+</div>
+
+<!-- ── Two-column layout ── -->
+<div class="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-5">
+
+  <!-- LEFT column -->
+  <div class="space-y-5">
+
+    <!-- NAV chart -->
+    <section class="card">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-blue-400" style="font-size:17px">show_chart</span>
+          <h2 class="card-title">Portfolio vs OMXSPI</h2>
+        </div>
+        <div class="flex items-center gap-0.5" id="chart-period-tabs">
+          <button class="ptab" data-period="1m">1M</button>
+          <button class="ptab" data-period="3m">3M</button>
+          <button class="ptab active" data-period="all">All</button>
+        </div>
+      </div>
+      {% if has_history %}
+        <div id="nav-chart" style="height:200px"></div>
+      {% else %}
+        <p class="empty">No NAV history yet — run <code class="text-slate-500">fund run</code> to start tracking.</p>
+      {% endif %}
+    </section>
+
+    <!-- Positions -->
+    <section class="card">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-blue-400" style="font-size:17px">pie_chart</span>
+          <h2 class="card-title">Open Positions</h2>
+        </div>
+        <span class="text-xs text-slate-600">{{ positions|length }} position{{ 's' if positions|length != 1 }}</span>
+      </div>
+
+      {% if positions %}
+      <div class="overflow-x-auto -mx-1">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th class="num">Shares</th>
+              <th class="num">Avg Cost</th>
+              <th class="num">Value (SEK)</th>
+              <th class="num" style="width:120px">Weight</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in positions %}
+            <tr>
+              <td>
+                <span class="font-semibold text-slate-200">{{ p.ticker }}</span>
+              </td>
+              <td class="num">{{ "{:.0f}".format(p.shares) }}</td>
+              <td class="num">{{ "{:.2f}".format(p.avg_cost) }}</td>
+              <td class="num font-medium text-slate-200">{{ "{:,.0f}".format(p.cost_value) }}</td>
+              <td class="num" style="min-width:100px">
+                <span class="text-slate-400">{{ "{:.1f}".format(p.weight_pct) }}%</span>
+                <div class="weight-bar-track">
+                  <div class="weight-bar-fill" style="width:{{ [p.weight_pct, 100]|min }}%"></div>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td class="text-slate-500 text-xs pt-3" style="border-top:1px solid rgba(255,255,255,.06)">Cash</td>
+              <td colspan="2" style="border-top:1px solid rgba(255,255,255,.06)"></td>
+              <td class="num text-slate-400 pt-3" style="border-top:1px solid rgba(255,255,255,.06)">{{ "{:,.0f}".format(cash) }}</td>
+              <td class="num pt-3" style="border-top:1px solid rgba(255,255,255,.06)">
+                <span class="text-slate-500">{{ "{:.1f}".format(cash_pct) }}%</span>
+                <div class="weight-bar-track">
+                  <div class="weight-bar-fill" style="width:{{ [cash_pct, 100]|min }}%; background:#475569"></div>
+                </div>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {% else %}
+        <p class="empty">No open positions — portfolio is fully in cash.</p>
+      {% endif %}
+    </section>
+
+  </div><!-- /LEFT -->
+
+  <!-- RIGHT column -->
+  <div class="space-y-5">
+
+    <!-- Last Decision -->
+    <section class="card" style="background:linear-gradient(135deg,#0f172a 60%,rgba(59,130,246,.05));border-color:rgba(59,130,246,.12)">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-blue-400" style="font-size:17px">auto_awesome</span>
+          <h2 class="card-title">Last Decision</h2>
+        </div>
+        {% if last_run %}
+          <span class="text-xs text-slate-600">{{ last_run.timestamp }}</span>
+        {% endif %}
+      </div>
+
+      {% if last_run %}
+        <div class="flex items-center gap-2 mb-3">
+          <span class="badge badge-buy">{{ last_run.buys }} buy</span>
+          <span class="badge badge-sell">{{ last_run.sells }} sell</span>
+          <span class="badge badge-hold">{{ last_run.holds }} hold</span>
+        </div>
+        {% if last_run.market_summary %}
+          <p class="text-xs text-slate-400 leading-relaxed">{{ last_run.market_summary[:280] }}{% if last_run.market_summary|length > 280 %}…{% endif %}</p>
+        {% endif %}
+        {% if last_run.notes %}
+          <p class="text-xs text-slate-600 mt-2 leading-relaxed italic">{{ last_run.notes[:160] }}{% if last_run.notes|length > 160 %}…{% endif %}</p>
+        {% endif %}
+        <a href="/history" class="inline-block mt-3 text-xs text-blue-400 hover:text-blue-300 transition-colors">
+          View all decisions →
+        </a>
+      {% else %}
+        <p class="empty">No decisions yet.<br>Send <code class="text-slate-500">/run</code> in Telegram.</p>
+      {% endif %}
+    </section>
+
+    <!-- Performance stats -->
+    {% if stats %}
+    <section class="card">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-blue-400" style="font-size:17px">monitoring</span>
+          <h2 class="card-title">Stats</h2>
+        </div>
+      </div>
+      <dl class="space-y-2.5 text-xs">
+        <div class="flex justify-between">
+          <dt class="text-slate-500">Volatility (ann.)</dt>
+          <dd class="text-slate-300 font-medium">
+            {% if stats.volatility_ann_pct is not none %}{{ stats.volatility_ann_pct }}%{% else %}—{% endif %}
+          </dd>
+        </div>
+        <div class="flex justify-between border-t border-slate-800/50 pt-2.5">
+          <dt class="text-slate-500">Total fees paid</dt>
+          <dd class="text-slate-300 font-medium">{{ "{:.2f}".format(fees_paid) }} SEK</dd>
+        </div>
+      </dl>
+    </section>
+    {% endif %}
+
+  </div><!-- /RIGHT -->
+
+</div><!-- /grid -->
+
+<script>
+(function () {
+  let rawData = null;
+
+  async function loadChart(period) {
+    if (!rawData) {
+      const res = await fetch('/api/nav');
+      rawData = await res.json();
+    }
+    if (!rawData.data || !rawData.data.length) return;
+
+    let cutoff = null;
+    if (period !== 'all') {
+      const d = new Date();
+      if (period === '1m') d.setMonth(d.getMonth() - 1);
+      if (period === '3m') d.setMonth(d.getMonth() - 3);
+      cutoff = d.toISOString().slice(0, 10);
+    }
+
+    const traces = rawData.data.map(trace => {
+      if (!cutoff) return trace;
+      const keep = (trace.x || []).map((x, i) => x >= cutoff ? i : -1).filter(i => i >= 0);
+      return { ...trace, x: keep.map(i => trace.x[i]), y: keep.map(i => trace.y[i]) };
+    });
+
+    const darkLayout = {
+      ...rawData.layout,
+      paper_bgcolor: 'transparent',
+      plot_bgcolor:  'transparent',
+      font:          { color: '#475569', size: 11, family: 'Inter, sans-serif' },
+      margin:        { l: 40, r: 10, t: 10, b: 30 },
+      legend:        { font: { color: '#475569', size: 11 }, bgcolor: 'transparent' },
+      xaxis: {
+        ...(rawData.layout.xaxis || {}),
+        gridcolor: '#1e293b', linecolor: '#1e293b', tickfont: { color: '#475569' },
+      },
+      yaxis: {
+        ...(rawData.layout.yaxis || {}),
+        gridcolor: '#1e293b', linecolor: '#1e293b', tickfont: { color: '#475569' },
+      },
+    };
+
+    Plotly.react('nav-chart', traces, darkLayout, { responsive: true, displayModeBar: false });
+  }
+
+  document.querySelectorAll('.ptab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.ptab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadChart(btn.dataset.period);
+    });
+  });
+
+  loadChart('all');
+})();
+</script>
+
+{% endblock %}

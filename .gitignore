@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Runtime data (SQLite db, logs, price cache)
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# HuggingFace model cache
+.cache/
+
+# OS
+.DS_Store

@@ -1,0 +1,12 @@
+# Add to crontab with: crontab -e
+# All times are Pi local time — adjust if your Pi is set to UTC.
+
+# Weekly decision run — every Monday at 07:00
+0 7 * * 1 cd /home/pi/ai-fund-manager && .venv/bin/fund run >> data/logs/weekly.log 2>&1
+
+# News trigger check — every weekday at 09:00, 12:00, 15:00, 17:00
+# Scans recent headlines; auto-triggers 'fund run' if a held position gets bad news.
+0 9,12,15,17 * * 1-5 cd /home/pi/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+
+# Daily stop-loss check — every weekday at 17:30 (after market close)
+30 17 * * 1-5 cd /home/pi/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1

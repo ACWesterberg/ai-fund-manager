@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Decisions — AI Fund Manager{% endblock %}
+{% block page_title %}Decision History{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Decision History</h1>
+    <p class="text-sm text-slate-500 mt-1">Weekly LLM recommendations after guardrails</p>
+  </div>
+  <span class="text-xs text-slate-600">{{ recommendations|length }} run{{ 's' if recommendations|length != 1 }}</span>
+</div>
+
+{% if recommendations %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div class="overflow-x-auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Run ID</th>
+          <th class="num">Actions</th>
+          <th class="num">Buys</th>
+          <th class="num">Sells</th>
+          <th class="num">Holds</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recommendations %}
+        <tr>
+          <td class="text-slate-300">{{ r.timestamp }}</td>
+          <td><code class="text-slate-500" style="font-size:11px">{{ r.run_id }}</code></td>
+          <td class="num text-slate-400">{{ r.action_count }}</td>
+          <td class="num"><span class="badge badge-buy">{{ r.buys }}</span></td>
+          <td class="num"><span class="badge badge-sell">{{ r.sells }}</span></td>
+          <td class="num"><span class="badge badge-hold">{{ r.holds }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <p class="empty">No decisions yet — run <code class="text-slate-500">fund run</code> to generate the first one.</p>
+</div>
+{% endif %}
+
+{% endblock %}

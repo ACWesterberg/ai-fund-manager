@@ -1,0 +1,47 @@
+capital_sek: 50000
+cadence: weekly
+benchmark: "^OMXSPI"
+
+llm:
+  provider: openai          # openai | anthropic
+  model_id: "gpt-5.5"       # locked to gpt-5.5-2026-04-23 for reproducibility; override in .env
+  temperature: 0.2
+  max_tokens: 4096
+
+risk:
+  max_position_pct: 18      # max single-name weight
+  max_positions: 10
+  min_cash_pct: 12          # always keep dry powder
+  max_cash_pct: 25          # enforce ≥75% equity
+  min_trade_sek: 2500       # below this, fees eat returns
+  max_turnover_pct: 25      # max % of NAV traded per run
+  stale_after_days: 5       # block buys if price data older than N trading days
+
+fees:
+  rate: 0.001               # 0.10%
+  min_sek: 1.0
+  max_sek: 99.0             # Nordic stocks cap
+
+data:
+  price_provider: yfinance
+  lookback_days: 252        # ~1 trading year
+  news_feeds:
+    - "https://www.avanza.se/placera/rss/senaste-analyserna.rss"  # Swedish broker analysis
+    - "https://www.di.se/rss"                                      # Dagens Industri (SE)
+    - "https://mfn.se/a/all.rss"                                   # Nordic regulatory filings & press releases
+    - "https://e24.no/rss.xml"                                     # E24 (NO)
+  sentiment:
+    enabled: true
+    model: "ProsusAI/finbert"
+    device: "cpu"           # cpu | cuda
+    trigger_threshold_negative: 0.80   # fire early run if held ticker hits this (0-1)
+    trigger_threshold_positive: 0.85   # fire early run for unwatched ticker (higher bar)
+    trigger_cooldown_hours: 6          # don't fire twice within this window per ticker
+
+web:
+  host: "0.0.0.0"
+  port: 8000
+
+reporting:
+  currency: SEK
+  output_dir: "data/reports"

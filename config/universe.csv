@@ -1,0 +1,79 @@
+name,yahoo_ticker,isin,country,exchange,sector,enabled
+Volvo B,VOLV-B.ST,SE0000115446,SE,OMXS,Industrials,true
+Sandvik,SAND.ST,SE0000667891,SE,OMXS,Industrials,true
+ABB,ABB.ST,CH0012221716,SE,OMXS,Industrials,true
+Ericsson B,ERIC-B.ST,SE0000108656,SE,OMXS,Technology,true
+Alfa Laval,ALFA.ST,SE0000695876,SE,OMXS,Industrials,true
+ASSA ABLOY B,ASSA-B.ST,SE0007100581,SE,OMXS,Industrials,true
+Atlas Copco A,ATCO-A.ST,SE0011166610,SE,OMXS,Industrials,true
+Atlas Copco B,ATCO-B.ST,SE0011166628,SE,OMXS,Industrials,true
+H&M B,HM-B.ST,SE0000106270,SE,OMXS,Consumer Discretionary,true
+Investor B,INVE-B.ST,SE0015811955,SE,OMXS,Financials,true
+Nordea,NDA-SE.ST,FI4000297767,SE,OMXS,Financials,true
+SEB A,SEB-A.ST,SE0000148884,SE,OMXS,Financials,true
+Swedbank A,SWED-A.ST,SE0000242455,SE,OMXS,Financials,true
+Handelsbanken A,SHB-A.ST,SE0007100599,SE,OMXS,Financials,true
+Hexagon B,HEXA-B.ST,SE0015961909,SE,OMXS,Technology,true
+Essity B,ESSITY-B.ST,SE0009922164,SE,OMXS,Consumer Staples,true
+NIBE Industrier B,NIBE-B.ST,SE0015988019,SE,OMXS,Industrials,true
+Electrolux B,ELUX-B.ST,SE0000103814,SE,OMXS,Consumer Discretionary,true
+Telia,TELIA.ST,SE0000667925,SE,OMXS,Communication Services,true
+Tele2 B,TEL2-B.ST,SE0005190238,SE,OMXS,Communication Services,true
+Skanska B,SKA-B.ST,SE0000113250,SE,OMXS,Industrials,true
+Boliden,BOL.ST,SE0015811751,SE,OMXS,Materials,true
+SCA B,SCA-B.ST,SE0000112724,SE,OMXS,Materials,true
+SKF B,SKF-B.ST,SE0000108227,SE,OMXS,Industrials,true
+SSAB A,SSAB-A.ST,SE0008321755,SE,OMXS,Materials,true
+Trelleborg B,TREL-B.ST,SE0000114837,SE,OMXS,Industrials,true
+Getinge B,GETI-B.ST,SE0000202624,SE,OMXS,Health Care,true
+Evolution,EVO.ST,SE0012673267,SE,OMXS,Consumer Discretionary,true
+AstraZeneca,AZN.ST,GB0009895292,SE,OMXS,Health Care,true
+Lifco B,LIFCO-B.ST,SE0008320200,SE,OMXS,Industrials,true
+Latour B,LATO-B.ST,SE0002575729,SE,OMXS,Financials,true
+Bure Equity,BURE.ST,SE0000195810,SE,OMXS,Financials,true
+Industrivärden C,INDU-C.ST,SE0000190126,SE,OMXS,Financials,true
+Husqvarna B,HUSQ-B.ST,SE0001662230,SE,OMXS,Consumer Discretionary,true
+Sweco B,SWEC-B.ST,SE0014960373,SE,OMXS,Industrials,true
+PEAB B,PEAB-B.ST,SE0000106205,SE,OMXS,Industrials,true
+Mycronic,MYCR.ST,SE0000688795,SE,OMXS,Technology,true
+NCAB Group,NCAB.ST,SE0011167956,SE,OMXS,Technology,true
+Castellum,CAST.ST,SE0000379190,SE,OMXS,Real Estate,true
+Sagax B,SAGA-B.ST,SE0005127818,SE,OMXS,Real Estate,true
+Sinch,SINCH.ST,SE0016101844,SE,OMXS,Technology,true
+Clas Ohlson B,CLAS-B.ST,SE0000584948,SE,OMXS,Consumer Discretionary,true
+OEM International B,OEM-B.ST,SE0000537838,SE,OMXS,Industrials,true
+Nyfosa,NYF.ST,SE0011426428,SE,OMXS,Real Estate,true
+Betsson B,BETS-B.ST,SE0015671997,SE,OMXS,Consumer Discretionary,true
+Fabege,FABG.ST,SE0011166787,SE,OMXS,Real Estate,true
+JM,JM.ST,SE0000507185,SE,OMXS,Real Estate,true
+XVIVO Perfusion,XVIVO.ST,SE0002575340,SE,OMXS,Health Care,true
+Lagercrantz B,LAGR-B.ST,SE0014990966,SE,OMXS,Industrials,true
+Addtech B,ADDT-B.ST,SE0005568136,SE,OMXS,Industrials,true
+Novo Nordisk B,NOVO-B.CO,DK0060534915,DK,OMXC,Health Care,true
+DSV,DSV.CO,DK0060079531,DK,OMXC,Industrials,true
+Ørsted,ORSTED.CO,DK0060094928,DK,OMXC,Utilities,true
+AP Møller-Mærsk B,MAERSK-B.CO,DK0010244508,DK,OMXC,Industrials,true
+Carlsberg B,CARL-B.CO,DK0010181759,DK,OMXC,Consumer Staples,true
+Coloplast B,COLO-B.CO,DK0060448595,DK,OMXC,Health Care,true
+GN Store Nord,GN.CO,DK0010272632,DK,OMXC,Health Care,true
+Demant,DEMANT.CO,DK0060738599,DK,OMXC,Health Care,true
+Tryg,TRYG.CO,DK0060477503,DK,OMXC,Financials,true
+Nokia,NOKIA.HE,FI0009000681,FI,OMXH,Technology,true
+Neste,NESTE.HE,FI0009013296,FI,OMXH,Energy,true
+Fortum,FORTUM.HE,FI0009007132,FI,OMXH,Utilities,true
+Sampo A,SAMPO.HE,FI0009003305,FI,OMXH,Financials,true
+UPM-Kymmene,UPM.HE,FI0009005987,FI,OMXH,Materials,true
+Stora Enso R,STERV.HE,FI0009005961,FI,OMXH,Materials,true
+KONE B,KNEBV.HE,FI0009013403,FI,OMXH,Industrials,true
+Wärtsilä,WRT1V.HE,FI0009003727,FI,OMXH,Industrials,true
+Metso,METSO.HE,FI4000291245,FI,OMXH,Industrials,true
+Equinor,EQNR.OL,NO0010096985,NO,OSLO,Energy,true
+DNB Bank,DNB.OL,NO0010161896,NO,OSLO,Financials,true
+Telenor,TEL.OL,NO0010063308,NO,OSLO,Communication Services,true
+Mowi,MOWI.OL,NO0003054108,NO,OSLO,Consumer Staples,true
+Yara International,YAR.OL,NO0010208051,NO,OSLO,Materials,true
+Norsk Hydro,NHY.OL,NO0005052605,NO,OSLO,Materials,true
+Orkla,ORK.OL,NO0003733800,NO,OSLO,Consumer Staples,true
+Aker BP,AKRBP.OL,NO0010345853,NO,OSLO,Energy,true
+Schibsted A,SCHA.OL,NO0003028904,NO,OSLO,Communication Services,false
+Subsea 7,SUBC.OL,LU0075646355,NO,OSLO,Energy,true

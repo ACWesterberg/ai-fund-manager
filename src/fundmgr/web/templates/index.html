@@ -169,12 +169,47 @@
           <span class="badge badge-hold">{{ last_run.holds }} hold</span>
         </div>
         {% if last_run.market_summary %}
-          <p class="text-xs text-slate-400 leading-relaxed">{{ last_run.market_summary }}</p>
+          <p class="text-xs text-slate-400 leading-relaxed mb-3">{{ last_run.market_summary }}</p>
         {% endif %}
+
+        {% if last_run.actions %}
+          <div class="overflow-x-auto -mx-1 mb-3">
+            <table class="data-table" style="font-size:11px">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th class="num">≈ SEK</th>
+                  <th class="num">Weight</th>
+                  <th class="num">Conf</th>
+                  <th class="num">Stop</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for a in last_run.actions %}
+                <tr>
+                  <td>
+                    {% if a.side == "buy" %}<span class="badge badge-buy">BUY</span>
+                    {% else %}<span class="badge badge-sell">SELL</span>{% endif %}
+                    <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
+                  </td>
+                  <td class="num text-slate-300">{{ "{:,.0f}".format(a.sek_estimate) }}</td>
+                  <td class="num text-slate-300">{{ a.target_weight_pct }}%</td>
+                  <td class="num text-slate-300">{{ "%.2f"|format(a.confidence) }}</td>
+                  <td class="num text-slate-500">{% if a.stop_loss_pct %}-{{ a.stop_loss_pct }}%{% else %}—{% endif %}</td>
+                </tr>
+                <tr>
+                  <td colspan="5" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+
         {% if last_run.notes %}
-          <p class="text-xs text-slate-600 mt-2 leading-relaxed italic">{{ last_run.notes }}</p>
+          <p class="text-xs text-slate-600 mb-3 leading-relaxed italic">{{ last_run.notes }}</p>
         {% endif %}
-        <a href="/history" class="inline-block mt-3 text-xs text-blue-400 hover:text-blue-300 transition-colors">
+        <a href="/history" class="inline-block text-xs text-blue-400 hover:text-blue-300 transition-colors">
           View all decisions →
         </a>
       {% else %}

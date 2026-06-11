@@ -78,12 +78,25 @@ async def index(request: Request):
             actions = json.loads(last_rec.actions_json)
             last_run = {
                 "run_id": last_rec.run_id,
-                "timestamp": last_rec.timestamp.strftime("%Y-%m-%d"),
+                "timestamp": last_rec.timestamp.strftime("%Y-%m-%d %H:%M"),
                 "market_summary": llm_data.get("market_summary", ""),
                 "notes": llm_data.get("notes", ""),
                 "buys":  sum(1 for a in actions if a.get("side") == "buy"),
                 "sells": sum(1 for a in actions if a.get("side") == "sell"),
                 "holds": sum(1 for a in actions if a.get("side") == "hold"),
+                "actions": [
+                    {
+                        "ticker": a.get("ticker", ""),
+                        "side": a.get("side", ""),
+                        "shares_est": round(a.get("sek_estimate", 0) / 1) if a.get("sek_estimate") else None,
+                        "sek_estimate": round(a.get("sek_estimate", 0)),
+                        "target_weight_pct": a.get("target_weight_pct", 0),
+                        "confidence": a.get("confidence", 0),
+                        "thesis": a.get("thesis", ""),
+                        "stop_loss_pct": a.get("stop_loss_pct"),
+                    }
+                    for a in actions if a.get("side") in ("buy", "sell")
+                ],
             }
         except Exception:
             pass

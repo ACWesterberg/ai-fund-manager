@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/ai-fund-manager
-EnvironmentFile=/home/pi/ai-fund-manager/.env
-ExecStart=/home/pi/ai-fund-manager/.venv/bin/python -m fundmgr.notify.telegram_bot
+User=alexander
+WorkingDirectory=/home/alexander/Documents/ai-fund-manager
+EnvironmentFile=/home/alexander/Documents/ai-fund-manager/.env
+ExecStart=/home/alexander/Documents/ai-fund-manager/.venv/bin/python -m fundmgr.notify.telegram_bot
 Restart=on-failure
 RestartSec=30
 

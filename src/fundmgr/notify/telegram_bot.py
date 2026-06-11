@@ -102,9 +102,21 @@ async def cmd_run(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> Non
 
 
 async def cmd_run_full(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    await update.message.reply_text("⏳ Running full pipeline with news + FinBERT (this takes a few minutes)…")
-    output = _run_cli("run", timeout=600)
-    await _send(update, output)
+    import asyncio
+    chat_id = update.effective_chat.id
+    bot = context.bot
+    await update.message.reply_text(
+        "⏳ Running full pipeline with news + FinBERT…\n"
+        "This takes 10-20 min on Pi — I'll message you when it's done."
+    )
+
+    async def _run_and_notify():
+        loop = asyncio.get_event_loop()
+        output = await loop.run_in_executor(None, lambda: _run_cli("run", timeout=1800))
+        for chunk in _chunk(output):
+            await bot.send_message(chat_id=chat_id, text=chunk)
+
+    asyncio.ensure_future(_run_and_notify())
 
 
 async def cmd_fill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:

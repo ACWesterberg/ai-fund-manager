@@ -376,33 +376,39 @@ def report(html: bool):
 
 
 @cli.command("check-stops")
-def check_stops():
+@click.option("--quiet", is_flag=True, help="Suppress output unless a stop or warning fires")
+def check_stops(quiet: bool):
     """Fetch live prices and flag any position breaching its stop-loss."""
+    import urllib.parse
+    import urllib.request as _req
     import yfinance as yf
 
     cfg, store = _get_store()
     positions = store.get_positions()
     if not positions:
-        click.echo("No open positions.")
+        if not quiet:
+            click.echo("No open positions.")
         return
 
     last_rec = store.get_last_recommendation()
     stop_map: dict[str, float] = {}
     if last_rec:
-        import json as _json
         try:
-            actions = _json.loads(last_rec.actions_json)
+            actions = json.loads(last_rec.actions_json)
             for a in actions:
                 if a.get("stop_loss_pct") and a.get("ticker"):
                     stop_map[a["ticker"]] = a["stop_loss_pct"]
         except Exception:
             pass
 
-    click.echo("\n─── Stop-Loss Check ─────────────────────────────────")
-    click.echo(f"  {'Ticker':<16} {'Avg Cost':>9} {'Live Price':>10} {'Chg%':>7} {'Stop':>7} {'Status'}")
-    click.echo(f"  {'─'*16} {'─'*9} {'─'*10} {'─'*7} {'─'*7} {'─'*8}")
+    if not quiet:
+        click.echo("\n─── Stop-Loss Check ─────────────────────────────────")
+        click.echo(f"  {'Ticker':<16} {'Avg Cost':>9} {'Live Price':>10} {'Chg%':>7} {'Stop':>7} {'Status'}")
+        click.echo(f"  {'─'*16} {'─'*9} {'─'*10} {'─'*7} {'─'*7} {'─'*8}")
 
-    alerts = []
+    stops_hit = []
+    warnings = []
+
     for p in positions:
         try:
             live_price = yf.Ticker(p.ticker).fast_info.last_price
@@ -410,7 +416,8 @@ def check_stops():
             live_price = None
 
         if not live_price:
-            click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>10}")
+            if not quiet:
+                click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>10}")
             continue
 
         chg = (live_price / p.avg_cost_sek - 1) * 100
@@ -419,23 +426,50 @@ def check_stops():
 
         if stop_pct and chg <= -stop_pct:
             status = "🚨 STOP HIT"
-            alerts.append(p.ticker)
+            stops_hit.append((p.ticker, chg, stop_pct, live_price))
         elif chg < -5:
             status = "⚠ watch"
+            warnings.append((p.ticker, chg, live_price))
         else:
             status = "✓ ok"
 
-        click.echo(
-            f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {live_price:>10.2f} "
-            f"{chg:>+7.1f}% {stop_str:>7} {status}"
-        )
+        if not quiet:
+            click.echo(
+                f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {live_price:>10.2f} "
+                f"{chg:>+7.1f}% {stop_str:>7} {status}"
+            )
 
-    click.echo()
-    if alerts:
-        click.echo(f"  ⚠ Stop-loss triggered for: {', '.join(alerts)}")
-        click.echo("  Consider selling — run 'fund run' to get updated recommendations.")
-    else:
-        click.echo("  All positions within stop-loss thresholds.")
+    if not quiet:
+        click.echo()
+        if stops_hit:
+            click.echo(f"  ⚠ Stop-loss triggered for: {', '.join(t for t, *_ in stops_hit)}")
+            click.echo("  Consider selling — run 'fund run' to get updated recommendations.")
+        else:
+            click.echo("  All positions within stop-loss thresholds.")
+
+    # ── Telegram alert ────────────────────────────────────────────────────────
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if (stops_hit or warnings) and bot_token and chat_id:
+        lines = ["<b>📉 Price Alert</b>"]
+        for ticker, chg, stop_pct, price in stops_hit:
+            lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}")
+        for ticker, chg, price in warnings:
+            lines.append(f"⚠ <b>{ticker}</b> {chg:+.1f}% — down &gt;5%  live {price:.2f}")
+        if stops_hit:
+            lines.append("\nConsider reviewing — trigger <code>/run</code> for updated recommendation.")
+        msg = "\n".join(lines)
+        try:
+            data = urllib.parse.urlencode({
+                "chat_id": chat_id, "text": msg, "parse_mode": "HTML",
+            }).encode()
+            _req.urlopen(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                data, timeout=10,
+            )
+            click.echo("  Telegram alert sent.")
+        except Exception as e:
+            click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
 
 
 @cli.command("check-news")

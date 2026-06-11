@@ -223,7 +223,7 @@ Atea,ATEA.OL,,NO,OSLO,Technology,true
 Vistin Pharma,VISTN.OL,,NO,OSLO,Healthcare,true
 Nekkar,NKR.OL,,NO,OSLO,Industrials,true
 Cloudberry Clean Energy,CLOUD.OL,,NO,OSLO,Energy,true
-Aker Horizons,AKH.OL,,NO,OSLO,Energy,true
+Aker Horizons,AKH.OL,,NO,OSLO,Energy,false
 A.P. Moller - Maersk A,MAERSK-A.CO,,DK,OMXC,Industrials,true
 Bang & Olufsen,BO.CO,,DK,OMXC,Consumer Discretionary,true
 Boozt,BOOZT-DKK.CO,,DK,OMXC,Consumer Discretionary,true
@@ -232,7 +232,7 @@ ChemoMetec,CHEMM.CO,,DK,OMXC,Health Care,true
 D/S Norden,DNORD.CO,,DK,OMXC,Industrials,true
 HusCompagniet,HUSCO.CO,,DK,OMXC,Consumer Discretionary,true
 NTG Nordic Transport Group,NTG.CO,,DK,OMXC,Industrials,true
-Nilfisk Holding,NLFSK.CO,,DK,OMXC,Industrials,true
+Nilfisk Holding,NLFSK.CO,,DK,OMXC,Industrials,false
 Per Aarsleff B,PAAL-B.CO,,DK,OMXC,Industrials,true
 Ringkjoebing Landbobank,RILBA.CO,,DK,OMXC,Financials,true
 Scandinavian Tobacco Group,STG.CO,,DK,OMXC,Consumer Staples,true
@@ -460,7 +460,7 @@ Humble Group,HUMBLE.ST,,SE,OMXS-FN,Consumer Staples,true
 I-Tech,ITECH.ST,,SE,OMXS-FN,Materials,true
 Implantica,IMP-A-SDB.ST,,SE,OMXS-FN,Health Care,true
 Kjell Group,KJELL.ST,,SE,OMXS-FN,Consumer Discretionary,true
-Lipigon Pharmaceuticals,LPGO.ST,,SE,OMXS-FN,Health Care,true
+Lipigon Pharmaceuticals,LPGO.ST,,SE,OMXS-FN,Health Care,false
 Lyko Group A,LYKO-A.ST,,SE,OMXS-FN,Consumer Discretionary,true
 M.O.B.A. Network,MOBA.ST,,SE,OMXS-FN,Communication Services,true
 MPC Container Ships,MPCC.OL,,SE,OMXS-FN,Industrials,true
@@ -595,7 +595,7 @@ NOVUS,NOVUS.ST,,SE,OMXS-FN,Consumer Discretionary,false
 PAXMAN,PAXMAN.ST,,SE,OMXS-FN,Energy,false
 PROSTAT,PROSTAT.ST,,SE,OMXS-FN,Real Estate,false
 RAKETE,RAKETE.ST,,SE,OMXS-FN,Utilities,false
-REFINE,REFINE.ST,,SE,OMXS-FN,Health Care,true
+REFINE,REFINE.ST,,SE,OMXS-FN,Health Care,false
 RLS,RLS.ST,,SE,OMXS-FN,Financials,false
 RUGVISTA,RUGVISTA.ST,,SE,OMXS-FN,Consumer Staples,false
 SAFETURE,SAFETURE.ST,,SE,OMXS-FN,Materials,false
@@ -639,14 +639,14 @@ Okeanis Eco Tankers,OET.OL,MHY641771016,NO,OSLO,Energy,true
 Olav Thon Eiendomsselskap,OLT.OL,NO0005638858,NO,OSLO,Real Estate,false
 Oncoinvent,ONCIN.OL,NO0013251173,NO,OSLO,Health Care,true
 Otello Corporation,OTEC.OL,NO0010040611,NO,OSLO,Technology,true
-PCI Biotech Holding,PCIB.OL,NO0010405640,NO,OSLO,Health Care,true
+PCI Biotech Holding,PCIB.OL,NO0010405640,NO,OSLO,Health Care,false
 PetroNor E&P,PNOR.OL,NO0012942525,NO,OSLO,Energy,true
 Photocure,PHO.OL,NO0010000045,NO,OSLO,Health Care,true
 Polaris Media,POL.OL,NO0010466022,NO,OSLO,Communication Services,true
 poLight,PLT.OL,NO0012535832,NO,OSLO,Technology,true
 Prosafe,PRS.OL,NO0010861990,NO,OSLO,Energy,true
 Questor Technology,QEC.OL,CA74836K1003,NO,OSLO,Energy,true
-Rana Gruber,RANA.OL,NO0010907389,NO,OSLO,Materials,true
+Rana Gruber,RANA.OL,NO0010907389,NO,OSLO,Materials,false
 Reach Subsea,REACH.OL,NO0003117202,NO,OSLO,Energy,true
 S.D. Standard ETC,SDSD.OL,CY0101550917,NO,OSLO,Energy,true
 Saga Pure,SAGA.OL,NO0010572589,NO,OSLO,Financials,true

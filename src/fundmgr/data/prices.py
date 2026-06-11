@@ -189,60 +189,67 @@ def fetch_and_cache_prices(
     if raw.empty:
         return {sym: False for sym in to_fetch}
 
-    # yfinance returns different shapes for 1 vs N tickers
-    if len(to_fetch) == 1:
-        sym = to_fetch[0]
-        df = raw.copy()
-        # Newer yfinance returns MultiIndex columns even for a single ticker — flatten them
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.index = df.index.strftime("%Y-%m-%d")
-        rows = [
-            {
-                "date": str(idx),
-                "open": row.get("Open"),
-                "high": row.get("High"),
-                "low": row.get("Low"),
-                "close": row.get("Close"),
-                "volume": row.get("Volume"),
-            }
-            for idx, row in df.iterrows()
-            if not pd.isna(row.get("Close"))
-        ]
-        if rows:
-            store.save_prices(sym, rows)
-            results[sym] = True
+    # Normalise to a (date, ticker) -> close DataFrame regardless of yfinance version.
+    # Older yfinance: MultiIndex columns (price_type, ticker) — "Close" at level 0.
+    # Newer yfinance: MultiIndex columns (ticker, price_type) OR flat for single ticker.
+    if isinstance(raw.columns, pd.MultiIndex):
+        lvl0 = raw.columns.get_level_values(0).unique().tolist()
+        if "Close" in lvl0:
+            # (price_type, ticker) layout
+            closes_df = raw["Close"]
         else:
-            results[sym] = False
+            # (ticker, price_type) layout — swap levels then index by "Close"
+            closes_df = raw.swaplevel(axis=1)["Close"]
     else:
-        # Multi-ticker: top-level columns are (Open, High, Low, Close, Volume)
-        for sym in to_fetch:
-            try:
-                close_col = raw["Close"][sym] if "Close" in raw.columns.get_level_values(0) else raw[sym]["Close"]
-                df_sym = raw.xs(sym, axis=1, level=1) if sym in raw.columns.get_level_values(1) else None
-                if df_sym is None or df_sym.empty:
-                    results[sym] = False
-                    continue
-                df_sym.index = df_sym.index.strftime("%Y-%m-%d")
-                rows = [
-                    {
-                        "date": str(idx),
-                        "open": row.get("Open"),
-                        "high": row.get("High"),
-                        "low": row.get("Low"),
-                        "close": row.get("Close"),
-                        "volume": row.get("Volume"),
-                    }
-                    for idx, row in df_sym.iterrows()
-                    if not pd.isna(row.get("Close"))
-                ]
-                if rows:
-                    store.save_prices(sym, rows)
-                    results[sym] = True
-                else:
-                    results[sym] = False
-            except (KeyError, TypeError):
+        # Single ticker, flat columns
+        closes_df = raw[["Close"]].rename(columns={"Close": to_fetch[0]})
+
+    for sym in to_fetch:
+        try:
+            if sym not in closes_df.columns:
                 results[sym] = False
+                continue
+            series = closes_df[sym].dropna()
+            if series.empty:
+                results[sym] = False
+                continue
+            # Build full OHLCV rows by slicing from raw for this ticker
+            try:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    lvl0 = raw.columns.get_level_values(0).unique().tolist()
+                    if "Close" in lvl0:
+                        df_sym = raw.xs(sym, axis=1, level=1)
+                    else:
+                        df_sym = raw.xs(sym, axis=1, level=0)
+                else:
+                    df_sym = raw.copy()
+                if isinstance(df_sym.columns, pd.MultiIndex):
+                    df_sym.columns = df_sym.columns.get_level_values(0)
+            except Exception:
+                # Fall back to close-only rows
+                df_sym = series.to_frame("Close")
+
+            df_sym = df_sym[~df_sym["Close"].isna()] if "Close" in df_sym.columns else df_sym
+            df_sym.index = df_sym.index.strftime("%Y-%m-%d")
+            rows = [
+                {
+                    "date": str(idx),
+                    "open": float(row["Open"]) if "Open" in row and not pd.isna(row["Open"]) else None,
+                    "high": float(row["High"]) if "High" in row and not pd.isna(row["High"]) else None,
+                    "low": float(row["Low"]) if "Low" in row and not pd.isna(row["Low"]) else None,
+                    "close": float(row["Close"]) if not pd.isna(row["Close"]) else None,
+                    "volume": float(row["Volume"]) if "Volume" in row and not pd.isna(row["Volume"]) else None,
+                }
+                for idx, row in df_sym.iterrows()
+                if "Close" in row and not pd.isna(row["Close"])
+            ]
+            if rows:
+                store.save_prices(sym, rows)
+                results[sym] = True
+            else:
+                results[sym] = False
+        except Exception:
+            results[sym] = False
 
     # Tickers that were already cached
     for t in tickers:

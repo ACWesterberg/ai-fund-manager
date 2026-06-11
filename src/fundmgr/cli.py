@@ -224,27 +224,39 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
                 lines.append("<b>🟢 BUYS</b>")
                 for a in buys:
                     lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
-                    lines.append(f"  <i>{a.thesis[:260]}</i>")
+                    lines.append(f"  <i>{a.thesis}</i>")
             if sells:
                 lines.append("")
                 lines.append("<b>🔴 SELLS</b>")
                 for a in sells:
                     lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
-                    lines.append(f"  <i>{a.thesis[:260]}</i>")
+                    lines.append(f"  <i>{a.thesis}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:
-                lines.append(f"\n<i>{decision.notes[:350]}</i>")
-            msg = "\n".join(lines)
+                lines.append(f"\n<i>{decision.notes}</i>")
+            # Split into ≤4096-char chunks at line boundaries
+            full_msg = "\n".join(lines)
+            chunks, current = [], ""
+            for line in full_msg.split("\n"):
+                candidate = (current + "\n" + line) if current else line
+                if len(candidate) > 4096:
+                    chunks.append(current)
+                    current = line
+                else:
+                    current = candidate
+            if current:
+                chunks.append(current)
             try:
-                data = urllib.parse.urlencode({
-                    "chat_id": chat_id, "text": msg, "parse_mode": "HTML",
-                }).encode()
-                _req.urlopen(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    data, timeout=10,
-                )
-                click.echo("  Telegram notification sent.")
+                for chunk in chunks:
+                    data = urllib.parse.urlencode({
+                        "chat_id": chat_id, "text": chunk, "parse_mode": "HTML",
+                    }).encode()
+                    _req.urlopen(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        data, timeout=10,
+                    )
+                click.echo(f"  Telegram notification sent ({len(chunks)} message(s)).")
             except Exception as e:
                 click.echo(f"  ⚠ Telegram notification failed: {e}", err=True)
 

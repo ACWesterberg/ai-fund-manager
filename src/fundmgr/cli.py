@@ -12,6 +12,7 @@ from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_retu
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
+from fundmgr.data.screener import screen
 from fundmgr.engine.client import LLMError, call_llm
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
 from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings
@@ -121,6 +122,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
     if stale:
         click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
 
+    # ── Pre-screen: cut to top_n candidates before LLM ───────────────────────
+    held_tickers = {p.ticker for p in store.get_positions()}
+    screened_features, screened_out = screen(features, held_tickers, top_n=cfg.screener.top_n)
+    if screened_out > 0:
+        click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
+                   f"({screened_out} filtered out, held positions always included)")
+
     # ── Data quality summary ──────────────────────────────────────────────────
     click.echo(f"\n{'─'*56}")
     click.echo(f"  Data Quality Report")
@@ -141,9 +149,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
             p.current_price_sek = feat.last_price
     snap = PortfolioSnapshot(positions=positions, cash_sek=store.get_cash())
 
-    # ── Step 7: Assemble prompt ───────────────────────────────────────────────
+    # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
     run_id = f"{datetime.utcnow().strftime('%Y-%m-%d')}-{__import__('uuid').uuid4().hex[:6]}"
-    system_msg, user_msg = build_prompt(cfg, snap, features, store, run_id, macro_block=macro_block)
+    system_msg, user_msg = build_prompt(cfg, snap, screened_features, store, run_id, macro_block=macro_block)
 
     # ── Call LLM ─────────────────────────────────────────────────────────────
     click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")

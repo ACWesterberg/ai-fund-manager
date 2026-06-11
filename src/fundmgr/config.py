@@ -69,6 +69,11 @@ class WebConfig:
 
 
 @dataclass
+class ScreenerConfig:
+    top_n: int = 75  # candidates passed to LLM; held positions always added on top
+
+
+@dataclass
 class AppConfig:
     capital_sek: float = 50000.0
     cadence: str = "weekly"
@@ -78,6 +83,7 @@ class AppConfig:
     fees: FeeConfig = field(default_factory=FeeConfig)
     data: DataConfig = field(default_factory=DataConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
 
@@ -145,6 +151,9 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     if web_raw := raw.get("web"):
         cfg.web = WebConfig(**web_raw)
+
+    if screener_raw := raw.get("screener"):
+        cfg.screener = ScreenerConfig(**screener_raw)
 
     DATA_DIR.mkdir(exist_ok=True)
     (DATA_DIR / "reports").mkdir(exist_ok=True)

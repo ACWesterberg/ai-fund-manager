@@ -44,6 +44,9 @@ data:
     trigger_threshold_positive: 0.85   # fire early run for unwatched ticker (higher bar)
     trigger_cooldown_hours: 6          # don't fire twice within this window per ticker
 
+screener:
+  top_n: 75   # candidates passed to LLM per run; held positions always included on top
+
 web:
   host: "0.0.0.0"
   port: 8000

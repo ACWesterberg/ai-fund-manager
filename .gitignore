@@ -2,7 +2,7 @@
 .env
 
 # Runtime data (SQLite db, logs, price cache)
-data/
+/data/
 
 # Python
 __pycache__/

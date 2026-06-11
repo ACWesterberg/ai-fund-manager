@@ -77,3 +77,125 @@ Orkla,ORK.OL,NO0003733800,NO,OSLO,Consumer Staples,true
 Aker BP,AKRBP.OL,NO0010345853,NO,OSLO,Energy,true
 Schibsted A,SCHA.OL,NO0003028904,NO,OSLO,Communication Services,false
 Subsea 7,SUBC.OL,LU0075646355,NO,OSLO,Energy,true
+Securitas B,SECU-B.ST,,SE,OMXS,Industrials,true
+Axfood,AXFO.ST,,SE,OMXS,Consumer Staples,true
+Volvo Cars B,VOLCAR-B.ST,,SE,OMXS,Consumer Discretionary,true
+Indutrade,INDT.ST,,SE,OMXS,Industrials,true
+Beijer Ref B,BEIJ-B.ST,,SE,OMXS,Industrials,true
+Hexpol B,HPOL-B.ST,,SE,OMXS,Materials,true
+Thule Group,THULE.ST,,SE,OMXS,Consumer Discretionary,true
+Lindab International,LIAB.ST,,SE,OMXS,Industrials,true
+Coor Service Management,COOR.ST,,SE,OMXS,Industrials,true
+Medicover B,MCOV-B.ST,,SE,OMXS,Health Care,true
+Vitrolife,VITR.ST,,SE,OMXS,Health Care,true
+Mekonomen,MEKO.ST,,SE,OMXS,Consumer Discretionary,true
+Wihlborgs,WIHL.ST,,SE,OMXS,Real Estate,true
+Hufvudstaden A,HUFV-A.ST,,SE,OMXS,Real Estate,true
+Lime Technologies,LIME.ST,SE0011870195,SE,OMXS,Technology,true
+Paradox Interactive,PDX.ST,,SE,OMXS,Consumer Discretionary,true
+Note AB,NOTE.ST,,SE,OMXS,Industrials,true
+Tobii,TOBII.ST,,SE,OMXS,Technology,false
+Embracer Group B,EMBRAC-B.ST,,SE,OMXS,Consumer Discretionary,true
+Pandora,PNDORA.CO,,DK,OMXC,Consumer Discretionary,true
+Vestas Wind Systems,VWS.CO,,DK,OMXC,Utilities,true
+Genmab,GMAB.CO,,DK,OMXC,Health Care,true
+Ambu B,AMBU-B.CO,,DK,OMXC,Health Care,true
+Zealand Pharma,ZEAL.CO,,DK,OMXC,Health Care,true
+Kongsberg Gruppen,KOG.OL,,NO,OSLO,Industrials,true
+Tomra Systems,TOM.OL,,NO,OSLO,Industrials,true
+SalMar,SALM.OL,,NO,OSLO,Consumer Staples,true
+Gjensidige Forsikring,GJF.OL,,NO,OSLO,Financials,true
+Nordic Semiconductor,NOD.OL,,NO,OSLO,Technology,true
+Storebrand,STB.OL,,NO,OSLO,Financials,true
+Borregaard,BRG.OL,,NO,OSLO,Materials,true
+Elisa,ELISA.HE,,FI,OMXH,Communication Services,true
+Huhtamäki,HUH1V.HE,,FI,OMXH,Materials,true
+Valmet,VALMT.HE,,FI,OMXH,Industrials,true
+Kemira,KEMIRA.HE,,FI,OMXH,Materials,true
+Orion B,ORNAV.HE,,FI,OMXH,Health Care,true
+Holmen B,HOLM-B.ST,,SE,OMXS,Materials,true
+Billerud,BILL.ST,,SE,OMXS,Materials,true
+Lundbergföretagen B,LUND-B.ST,,SE,OMXS,Financials,true
+Dometic Group,DOM.ST,,SE,OMXS,Consumer Discretionary,true
+Intrum,INTRUM.ST,,SE,OMXS,Financials,true
+Kinnevik B,KINV-B.ST,,SE,OMXS,Financials,true
+Ratos B,RATO-B.ST,,SE,OMXS,Financials,true
+AFRY,AFRY.ST,,SE,OMXS,Industrials,true
+Nolato B,NOLA-B.ST,,SE,OMXS,Industrials,true
+Addlife B,ALIF-B.ST,,SE,OMXS,Health Care,true
+Bravida,BRAV.ST,,SE,OMXS,Industrials,true
+Catena,CATE.ST,,SE,OMXS,Real Estate,true
+Fastighets AB Balder B,BALD-B.ST,,SE,OMXS,Real Estate,true
+Dustin Group,DUST.ST,,SE,OMXS,Technology,true
+Bufab,BUFAB.ST,,SE,OMXS,Industrials,true
+Inwido,INWI.ST,,SE,OMXS,Industrials,true
+Troax Group,TROAX.ST,,SE,OMXS,Industrials,true
+Momentum Group B,MMGR-B.ST,,SE,OMXS,Industrials,true
+Platzer Fastigheter B,PLAZ-B.ST,,SE,OMXS,Real Estate,true
+Sdiptech B,SDIP-B.ST,,SE,OMXS,Industrials,true
+Ambea,AMBEA.ST,,SE,OMXS,Health Care,true
+Hoist Finance,HOFI.ST,,SE,OMXS,Financials,true
+BioArctic B,BIOA-B.ST,,SE,OMXS,Health Care,true
+Surgical Science,SUS.ST,,SE,OMXS,Health Care,true
+Mips,MIPS.ST,,SE,OMXS,Consumer Discretionary,true
+Eolus Vind B,EOLU-B.ST,,SE,OMXS,Utilities,true
+BTS Group B,BTS-B.ST,,SE,OMXS,Industrials,true
+Invisio,IVSO.ST,,SE,OMXS,Technology,true
+RaySearch Labs B,RAY-B.ST,,SE,OMXS,Health Care,true
+Catella B,CAT-B.ST,,SE,OMXS,Financials,true
+Elanders B,ELAN-B.ST,,SE,OMXS,Industrials,true
+Hansa Biopharma,HNSA.ST,,SE,OMXS,Health Care,true
+ISS A/S,ISS.CO,,DK,OMXC,Industrials,true
+NKT,NKT.CO,,DK,OMXC,Industrials,true
+Novonesis B,NSIS-B.CO,,DK,OMXC,Health Care,true
+FLSmidth,FLS.CO,,DK,OMXC,Industrials,true
+DFDS,DFDS.CO,,DK,OMXC,Industrials,true
+Royal Unibrew,RBREW.CO,,DK,OMXC,Consumer Staples,true
+Netcompany,NETC.CO,,DK,OMXC,Technology,true
+Bavarian Nordic,BAVA.CO,,DK,OMXC,Health Care,true
+ALK-Abelló B,ALK-B.CO,,DK,OMXC,Health Care,true
+Jyske Bank,JYSK.CO,,DK,OMXC,Financials,true
+H+H International,HH.CO,,DK,OMXC,Materials,true
+AutoStore,AUTO.OL,,NO,OSLO,Industrials,true
+Aker ASA,AKER.OL,,NO,OSLO,Financials,true
+Lerøy Seafood,LSG.OL,,NO,OSLO,Consumer Staples,true
+Elkem,ELK.OL,,NO,OSLO,Materials,true
+Aker Solutions,AKSO.OL,,NO,OSLO,Energy,true
+Scatec,SCATC.OL,,NO,OSLO,Utilities,true
+Wallenius Wilhelmsen,WAWI.OL,,NO,OSLO,Industrials,true
+Nel ASA,NEL.OL,,NO,OSLO,Industrials,true
+Grieg Seafood,GSF.OL,,NO,OSLO,Consumer Staples,true
+Pexip Holding,PEXIP.OL,,NO,OSLO,Technology,true
+Multiconsult,MULTI.OL,,NO,OSLO,Industrials,true
+LINK Mobility,LINK.OL,,NO,OSLO,Technology,true
+Outokumpu,OUT1V.HE,,FI,OMXH,Materials,true
+Nokian Tyres,TYRES.HE,,FI,OMXH,Consumer Discretionary,true
+Tokmanni,TOKMAN.HE,,FI,OMXH,Consumer Staples,true
+Fiskars,FSKRS.HE,,FI,OMXH,Consumer Discretionary,true
+Harvia,HARVIA.HE,,FI,OMXH,Consumer Discretionary,true
+Olvi A,OLVAS.HE,,FI,OMXH,Consumer Staples,true
+Hemnet Group,HEM.ST,,SE,OMXS,Technology,true
+Truecaller B,TRUE-B.ST,,SE,OMXS,Technology,true
+BICO Group,BICO.ST,,SE,OMXS,Health Care,true
+Camurus,CAMX.ST,,SE,OMXS,Health Care,true
+Pandox B,PNDX-B.ST,,SE,OMXS,Real Estate,true
+Addnode Group B,ANOD-B.ST,,SE,OMXS,Technology,true
+Rejlers B,REJL-B.ST,,SE,OMXS,Industrials,true
+Vimian Group,VIMIAN.ST,,SE,OMXS,Health Care,true
+Boozt,BOOZT.ST,,SE,OMXS,Consumer Discretionary,true
+Matas A/S,MATAS.CO,,DK,OMXC,Consumer Staples,true
+Entra,ENTRA.OL,,NO,OSLO,Real Estate,true
+Europris,EPR.OL,,NO,OSLO,Consumer Staples,true
+Bakkafrost,BAKKA.OL,,NO,OSLO,Consumer Staples,true
+Bouvet,BOUV.OL,,NO,OSLO,Technology,true
+SATS,SATS.OL,,NO,OSLO,Consumer Discretionary,true
+SpareBank 1 SMN,MING.OL,,NO,OSLO,Financials,true
+Veidekke,VEI.OL,,NO,OSLO,Industrials,true
+REC Silicon,RECSI.OL,,NO,OSLO,Technology,true
+Wilh. Wilhelmsen,WWI.OL,,NO,OSLO,Industrials,true
+Konecranes,KCR.HE,,FI,OMXH,Industrials,true
+Revenio Group,REG1V.HE,,FI,OMXH,Health Care,true
+Rockwool B,ROCK-B.CO,,DK,OMXC,Materials,true
+Austevoll Seafood,AUSS.OL,,NO,OSLO,Consumer Staples,true
+BioGaia B,BIOG-B.ST,,SE,OMXS,Health Care,true
+Nordnet B,SAVE.ST,,SE,OMXS,Financials,true

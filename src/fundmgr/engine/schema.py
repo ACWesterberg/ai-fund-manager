@@ -7,30 +7,45 @@ from pydantic import BaseModel, Field, field_validator
 
 class Action(BaseModel):
     ticker: str = Field(description="Yahoo Finance ticker, e.g. VOLV-B.ST")
-    side: Literal["buy", "sell", "hold"] = Field(description="Desired action this week")
+    side: Literal["buy", "sell", "hold"] = Field(description="Desired action this run")
     target_weight_pct: float = Field(
         ge=0, le=100,
-        description="Desired portfolio weight after this trade, as % of NAV (0-100)",
+        description=(
+            "Desired portfolio weight after this trade, as % of NAV. "
+            "For sells: 0 = full exit, partial sell = new lower weight. "
+            "For holds: current weight (no trade occurs). "
+            "Must respect mandate sizing rules: high conviction 10-15%, medium 5-9%, starter 3-5%."
+        ),
     )
     sek_estimate: float = Field(
         ge=0,
-        description="Approximate SEK value of the trade (0 for holds)",
+        description="Approximate SEK value of the trade (0 for holds). Used for guardrail checks.",
     )
     confidence: float = Field(
         ge=0, le=1,
-        description="Conviction level 0-1. Only recommend if genuinely above 0.4.",
+        description=(
+            "Conviction level 0.0–1.0. "
+            "Do not recommend buys below 0.40. "
+            "0.75+ = high conviction, 0.55-0.74 = medium, 0.40-0.54 = starter."
+        ),
     )
     thesis: str = Field(
         max_length=500,
-        description="1-3 sentence rationale. Why now? What is the edge?",
+        description=(
+            "1–3 sentences. Required for buys and sells; optional for holds. "
+            "Must answer: Why now? What is the edge? What would break this thesis?"
+        ),
     )
     stop_loss_pct: float | None = Field(
         default=None, ge=0, le=50,
-        description="Optional: % drop from entry that would invalidate the thesis",
+        description=(
+            "Recommended for all buys: % decline from entry price that invalidates the thesis. "
+            "Typical range 8–15%. Tighter for momentum plays, wider for value."
+        ),
     )
     take_profit_pct: float | None = Field(
         default=None, ge=0, le=200,
-        description="Optional: % gain target",
+        description="Optional upside target as % gain from entry. Helps define the risk/reward.",
     )
 
     @field_validator("ticker")

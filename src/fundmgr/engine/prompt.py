@@ -51,6 +51,8 @@ def _risk_limits_block(cfg: AppConfig, snap: PortfolioSnapshot) -> str:
         f"(≈{snap.nav_sek * cfg.risk.max_turnover_pct / 100:,.0f} SEK)\n"
         f"  Fee: {cfg.fees.rate*100:.2f}% per trade "
         f"(min {cfg.fees.min_sek:.0f} SEK, max {cfg.fees.max_sek:.0f} SEK)\n"
+        "  FX cost: non-SEK stocks (DK/NO/FI) incur a 0.10% currency conversion spread (Montrose rate) on top of brokerage.\n"
+        "  Prefer SEK-denominated stocks when conviction is equal. Only buy foreign stocks for clear alpha.\n"
         "Guardrails enforce these mechanically — size your recommendations within them."
     )
 
@@ -64,21 +66,66 @@ def _learnings_block(learnings: list[Learning]) -> str:
     return "\n".join(lines)
 
 
+_CANDIDATE_LIMIT = 50  # non-held tickers shown to LLM per run
+
+
+def _signal_score(f: TickerFeatures) -> float:
+    """
+    Simple composite signal to surface the most actionable candidates.
+    Higher = more worth the LLM's attention.
+    """
+    score = 0.0
+    # Momentum
+    r20 = f.return_20d_pct or 0.0
+    r5  = f.return_5d_pct  or 0.0
+    score += min(r20 / 5, 4.0)   # capped contribution from 20d return
+    score += min(r5  / 2, 2.0)   # recent momentum bonus
+    # Sentiment signal
+    if f.sentiment_label == "positive":
+        score += 3.0
+    elif f.sentiment_label == "negative":
+        score += 1.5  # still worth seeing — potential sell or avoid signal
+    # RSI extremes (oversold = potential entry, overbought = potential exit)
+    if f.rsi_14 is not None:
+        if f.rsi_14 < 35:
+            score += 2.5   # oversold — contrarian opportunity
+        elif f.rsi_14 > 70:
+            score += 1.0   # extended — watch for trim / avoid entry
+    # Trend alignment
+    if f.above_ma50 and f.above_ma200:
+        score += 1.0
+    # Penalise stale data
+    if f.is_stale:
+        score -= 3.0
+    return score
+
+
 def _features_block(
     features: dict[str, TickerFeatures],
     current_tickers: set[str],
 ) -> str:
-    lines = ["## Universe — Ticker Feature Blocks"]
-    lines.append("(Tickers you currently hold are marked with ★)\n")
-
-    # Current holdings first, then rest sorted by 20d return
     held = {t: f for t, f in features.items() if t in current_tickers}
     rest = {t: f for t, f in features.items() if t not in current_tickers}
-    rest_sorted = sorted(rest.values(), key=lambda f: f.return_20d_pct or 0, reverse=True)
 
-    for f in [*held.values(), *rest_sorted]:
-        star = "★ " if f.ticker in current_tickers else "  "
-        lines.append(star + f.to_prompt_block())
+    # Rank non-held candidates by signal, take top N
+    top_candidates = sorted(rest.values(), key=_signal_score, reverse=True)[:_CANDIDATE_LIMIT]
+
+    total_universe = len(features)
+    shown = len(held) + len(top_candidates)
+
+    lines = ["## Universe — Ticker Feature Blocks"]
+    lines.append(
+        f"(Showing {shown} of {total_universe} tickers: all {len(held)} held ★ "
+        f"+ top {len(top_candidates)} candidates by signal score. "
+        f"Remaining {total_universe - shown} had no notable signal this run.)\n"
+    )
+
+    for f in held.values():
+        lines.append("★ " + f.to_prompt_block())
+        lines.append("")
+
+    for f in top_candidates:
+        lines.append("  " + f.to_prompt_block())
         lines.append("")
 
     return "\n".join(lines)
@@ -90,6 +137,7 @@ def build_prompt(
     features: dict[str, TickerFeatures],
     store: Store,
     run_id: str,
+    macro_block: str = "",
 ) -> tuple[str, str]:
     """
     Returns (system_message, user_message).
@@ -117,6 +165,13 @@ def build_prompt(
 
     sections = [
         f"# Weekly Decision Run\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
+    ]
+
+    if macro_block:
+        sections.append(macro_block)
+        sections.append("")
+
+    sections += [
         _portfolio_block(snap, bench_return),
         "",
         _risk_limits_block(cfg, snap),

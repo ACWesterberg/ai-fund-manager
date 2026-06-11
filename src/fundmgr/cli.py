@@ -8,6 +8,7 @@ import click
 
 from fundmgr.config import load_config, get_enabled_tickers
 from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
+from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.engine.client import LLMError, call_llm
@@ -53,8 +54,9 @@ def init(capital: float | None):
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Run pipeline but skip saving recommendation")
 @click.option("--force-refresh", is_flag=True, help="Re-fetch all prices even if cached")
-@click.option("--skip-news", is_flag=True, help="Skip RSS + sentiment step (faster)")
-def run(dry_run: bool, force_refresh: bool, skip_news: bool):
+@click.option("--skip-news", is_flag=True, help="Skip Nordic RSS + FinBERT sentiment step (faster)")
+@click.option("--skip-macro", is_flag=True, help="Skip global macro context fetch (no yfinance indicator or news fetch)")
+def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
     """Ingest data, call the LLM, apply guardrails, and emit the action list."""
     cfg, store = _get_store()
     if not store.is_initialised():
@@ -68,7 +70,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool):
     click.echo(f"{'═'*56}")
 
     # ── Step 1: Fetch prices ──────────────────────────────────────────────────
-    click.echo(f"\n[1/4] Fetching prices for {len(tickers)} tickers…")
+    click.echo(f"\n[1/5] Fetching prices for {len(tickers)} tickers…")
     fetch_result = fetch_and_cache_prices(tickers, store, cfg.data.lookback_days, force_refresh)
     ok = sum(1 for v in fetch_result.values() if v)
     failed = [sym for sym, v in fetch_result.items() if not v]
@@ -77,14 +79,14 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool):
         click.echo(f"      ✗ Failed: {', '.join(failed)}")
 
     # ── Step 2: Fetch benchmark ────────────────────────────────────────────────
-    click.echo(f"\n[2/4] Fetching benchmark ({cfg.benchmark})…")
+    click.echo(f"\n[2/5] Fetching benchmark ({cfg.benchmark})…")
     bench_ok = fetch_and_cache_benchmark(store, cfg.benchmark, cfg.data.lookback_days, force_refresh)
     click.echo(f"      {'✓ OK' if bench_ok else '✗ Failed'}")
 
-    # ── Step 3: News + sentiment ──────────────────────────────────────────────
+    # ── Step 3: Nordic news + FinBERT sentiment ───────────────────────────────
     since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
     if not skip_news and cfg.data.news_feeds:
-        click.echo(f"\n[3/4] Fetching news from {len(cfg.data.news_feeds)} feeds…")
+        click.echo(f"\n[3/5] Fetching Nordic news from {len(cfg.data.news_feeds)} feeds…")
         ticker_news = fetch_news(cfg.data.news_feeds, tickers, max_age_hours=72)
         total_headlines = sum(len(v) for v in ticker_news.values())
         click.echo(f"      {total_headlines} matched headlines across {len(ticker_news)} tickers")
@@ -94,10 +96,22 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool):
                 ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device
             )
     else:
-        click.echo(f"\n[3/4] News skipped.")
+        click.echo(f"\n[3/5] Nordic news skipped.")
 
-    # ── Step 4: Compute features ──────────────────────────────────────────────
-    click.echo(f"\n[4/4] Computing features…")
+    # ── Step 4: Global macro context ─────────────────────────────────────────
+    macro_block = ""
+    if not skip_macro:
+        click.echo(f"\n[4/5] Fetching global macro context…")
+        macro_indicators = fetch_macro_indicators()
+        macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
+        macro_block = build_macro_block(macro_indicators, macro_headlines)
+        ind_ok = sum(1 for i in macro_indicators if i.price is not None)
+        click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
+    else:
+        click.echo(f"\n[4/5] Global macro context skipped.")
+
+    # ── Step 5: Compute features ──────────────────────────────────────────────
+    click.echo(f"\n[5/5] Computing features…")
     features = build_all_features(tickers, store, cfg, fetch_result)
     attach_sentiment_to_features(features, store, since_date=since_news)
 
@@ -128,10 +142,10 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool):
 
     # ── Step 7: Assemble prompt ───────────────────────────────────────────────
     run_id = f"{datetime.utcnow().strftime('%Y-%m-%d')}-{__import__('uuid').uuid4().hex[:6]}"
-    system_msg, user_msg = build_prompt(cfg, snap, features, store, run_id)
+    system_msg, user_msg = build_prompt(cfg, snap, features, store, run_id, macro_block=macro_block)
 
-    # ── Step 8: Call LLM ──────────────────────────────────────────────────────
-    click.echo(f"\n[5/5] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")
+    # ── Call LLM ─────────────────────────────────────────────────────────────
+    click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")
     try:
         decision, raw_response = call_llm(system_msg, user_msg, cfg)
     except LLMError as e:
@@ -208,18 +222,30 @@ def _print_feature_table(features, cfg):
 @click.argument("price", type=float)
 @click.argument("fee", type=float)
 @click.option("--side", type=click.Choice(["buy", "sell"]), default="buy", show_default=True)
-def fill(ticker: str, shares: float, price: float, fee: float, side: str):
+@click.option("--date", "trade_date", default=None, metavar="YYYY-MM-DD",
+              help="Trade date (defaults to today). Use when recording a past fill.")
+def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_date: str | None):
     """Record an actual fill from the broker.
 
     \b
     Example:
         fund fill VOLV-B.ST 12 291.50 2.91
         fund fill SAND.ST 8 217.80 1.74 --side sell
+        fund fill LIME.ST 200 199.40 39.88 --date 2026-06-10
     """
     cfg, store = _get_store()
     if not store.is_initialised():
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
+
+    if trade_date:
+        try:
+            ts = datetime.strptime(trade_date, "%Y-%m-%d").replace(hour=12, minute=0)
+        except ValueError:
+            click.echo(f"Invalid date '{trade_date}' — expected YYYY-MM-DD", err=True)
+            sys.exit(1)
+    else:
+        ts = datetime.utcnow()
 
     ticker = ticker.upper()
     txn = Transaction(
@@ -229,7 +255,7 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str):
         price_sek=price,
         fee_sek=fee,
         source="fill",
-        timestamp=datetime.utcnow(),
+        timestamp=ts,
     )
 
     store.apply_fill(txn)

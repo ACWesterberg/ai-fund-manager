@@ -7,6 +7,7 @@ llm:
   model_id: "gpt-5.5"       # locked to gpt-5.5-2026-04-23 for reproducibility; override in .env
   temperature: 0.2
   max_tokens: 4096
+  reasoning_effort: "high"  # low | medium | high — activates extended reasoning on gpt-5+/o-series
 
 risk:
   max_position_pct: 18      # max single-name weight
@@ -30,6 +31,11 @@ data:
     - "https://www.di.se/rss"                                      # Dagens Industri (SE)
     - "https://mfn.se/a/all.rss"                                   # Nordic regulatory filings & press releases
     - "https://e24.no/rss.xml"                                     # E24 (NO)
+  macro_feeds:
+    - "https://feeds.bbci.co.uk/news/business/rss.xml"             # BBC Business
+    - "https://www.cnbc.com/id/100003114/device/rss/rss.html"      # CNBC Business
+    - "https://www.cnbc.com/id/100727362/device/rss/rss.html"      # CNBC World/Economy
+    - "https://feeds.a.wsj.com/rss/RSSWorldNews.xml"               # WSJ World News
   sentiment:
     enabled: true
     model: "ProsusAI/finbert"

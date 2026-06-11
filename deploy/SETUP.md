@@ -18,6 +18,7 @@ This guide walks through setting up the AI Fund Manager on a Raspberry Pi 5 from
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y git curl build-essential python3-dev
+sudo apt install -y tesseract-ocr tesseract-ocr-swe tesseract-ocr-eng
 ```
 
 Install `uv` (Python package manager):

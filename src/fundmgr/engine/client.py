@@ -42,6 +42,21 @@ def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, s
 
     client = OpenAI(api_key=api_key)
 
+    # gpt-5+ / o-series use max_completion_tokens and don't support custom temperature
+    _NEW_API_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+    new_api = any(cfg.llm.model_id.startswith(p) for p in _NEW_API_PREFIXES)
+    token_kwargs = (
+        {"max_completion_tokens": cfg.llm.max_tokens}
+        if new_api
+        else {"max_tokens": cfg.llm.max_tokens}
+    )
+    temp_kwargs = {} if new_api else {"temperature": cfg.llm.temperature}
+    reasoning_kwargs = (
+        {"reasoning_effort": cfg.llm.reasoning_effort}
+        if cfg.llm.reasoning_effort and new_api
+        else {}
+    )
+
     try:
         # Use structured outputs — guarantees schema conformance
         response = client.beta.chat.completions.parse(
@@ -51,8 +66,9 @@ def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, s
                 {"role": "user", "content": user},
             ],
             response_format=DecisionRun,
-            temperature=cfg.llm.temperature,
-            max_tokens=cfg.llm.max_tokens,
+            **token_kwargs,
+            **temp_kwargs,
+            **reasoning_kwargs,
         )
     except Exception as e:
         raise LLMError(f"OpenAI API call failed: {e}") from e

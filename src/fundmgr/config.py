@@ -19,6 +19,7 @@ class LLMConfig:
     model_id: str = "gpt-4o"
     temperature: float = 0.2
     max_tokens: int = 4096
+    reasoning_effort: str | None = None  # "low" | "medium" | "high" — for o1/o3/gpt-5+ models
 
 
 @dataclass
@@ -57,6 +58,7 @@ class DataConfig:
     price_provider: str = "yfinance"
     lookback_days: int = 252
     news_feeds: list[str] = field(default_factory=list)
+    macro_feeds: list[str] = field(default_factory=list)
     sentiment: SentimentConfig = field(default_factory=SentimentConfig)
 
 
@@ -80,6 +82,14 @@ class AppConfig:
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
 
 
+_EXCHANGE_CURRENCY: dict[str, str] = {
+    "OMXS": "SEK",
+    "OMXC": "DKK",
+    "OSLO": "NOK",
+    "OMXH": "EUR",
+}
+
+
 @dataclass
 class UniverseTicker:
     name: str
@@ -89,6 +99,14 @@ class UniverseTicker:
     exchange: str
     sector: str
     enabled: bool
+
+    @property
+    def currency(self) -> str:
+        return _EXCHANGE_CURRENCY.get(self.exchange, "SEK")
+
+    @property
+    def needs_fx(self) -> bool:
+        return self.currency != "SEK"
 
 
 def load_config(config_path: Path | None = None) -> AppConfig:
@@ -109,6 +127,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             model_id=os.getenv("FUND_MODEL_ID", llm_raw.get("model_id", "gpt-4o")),
             temperature=llm_raw.get("temperature", 0.2),
             max_tokens=llm_raw.get("max_tokens", 4096),
+            reasoning_effort=llm_raw.get("reasoning_effort", None),
         )
 
     if risk_raw := raw.get("risk"):
@@ -154,3 +173,8 @@ def load_universe(universe_path: Path | None = None) -> list[UniverseTicker]:
 
 def get_enabled_tickers(universe_path: Path | None = None) -> list[UniverseTicker]:
     return [t for t in load_universe(universe_path) if t.enabled]
+
+
+def get_isin_map(universe_path: Path | None = None) -> dict[str, str]:
+    """Return ISIN -> yahoo_ticker for all tickers (enabled and disabled)."""
+    return {t.isin: t.yahoo_ticker for t in load_universe(universe_path) if t.isin}

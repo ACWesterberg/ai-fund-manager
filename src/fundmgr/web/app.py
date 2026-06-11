@@ -129,6 +129,36 @@ async def history(request: Request):
             actions = json.loads(r["actions_json"])
         except Exception:
             actions = []
+        try:
+            llm_data = json.loads(r["guardrail_log"]) if r["guardrail_log"] else {}
+        except Exception:
+            llm_data = {}
+        # Pull market_summary + notes from the recommendations table llm_response column
+        market_summary = ""
+        notes = ""
+        try:
+            with store._conn() as conn2:
+                row2 = conn2.execute(
+                    "SELECT llm_response FROM recommendations WHERE run_id=?", (r["run_id"],)
+                ).fetchone()
+            if row2:
+                lr = json.loads(row2["llm_response"])
+                market_summary = lr.get("market_summary", "")
+                notes = lr.get("notes", "")
+        except Exception:
+            pass
+        trade_actions = [
+            {
+                "ticker": a.get("ticker", ""),
+                "side": a.get("side", ""),
+                "sek_estimate": round(a.get("sek_estimate", 0)),
+                "target_weight_pct": a.get("target_weight_pct", 0),
+                "confidence": a.get("confidence", 0),
+                "thesis": a.get("thesis", ""),
+                "stop_loss_pct": a.get("stop_loss_pct"),
+            }
+            for a in actions if a.get("side") in ("buy", "sell")
+        ]
         recommendations.append({
             "run_id": r["run_id"],
             "timestamp": r["timestamp"][:10],
@@ -136,6 +166,10 @@ async def history(request: Request):
             "buys": sum(1 for a in actions if a.get("side") == "buy"),
             "sells": sum(1 for a in actions if a.get("side") == "sell"),
             "holds": sum(1 for a in actions if a.get("side") == "hold"),
+            "market_summary": market_summary,
+            "notes": notes,
+            "trade_actions": trade_actions,
+            "trade_actions_json": json.dumps(trade_actions),
         })
 
     return _render("history.html", {

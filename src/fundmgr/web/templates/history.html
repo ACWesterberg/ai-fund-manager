@@ -15,9 +15,10 @@
 {% if recommendations %}
 <div class="card" style="padding:0;overflow:hidden">
   <div class="overflow-x-auto">
-    <table class="data-table">
+    <table class="data-table" id="history-table">
       <thead>
         <tr>
+          <th style="width:24px"></th>
           <th>Date</th>
           <th>Run ID</th>
           <th class="num">Actions</th>
@@ -28,13 +29,57 @@
       </thead>
       <tbody>
         {% for r in recommendations %}
-        <tr>
+        <tr class="history-row" data-run="{{ r.run_id }}" style="cursor:pointer">
+          <td class="expand-toggle" style="color:#475569;font-size:11px;padding-right:0">▶</td>
           <td class="text-slate-300">{{ r.timestamp }}</td>
           <td><code class="text-slate-500" style="font-size:11px">{{ r.run_id }}</code></td>
           <td class="num text-slate-400">{{ r.action_count }}</td>
           <td class="num"><span class="badge badge-buy">{{ r.buys }}</span></td>
           <td class="num"><span class="badge badge-sell">{{ r.sells }}</span></td>
           <td class="num"><span class="badge badge-hold">{{ r.holds }}</span></td>
+        </tr>
+        <tr class="detail-row" id="detail-{{ r.run_id }}" style="display:none">
+          <td colspan="7" style="padding:0 16px 16px">
+            {% if r.market_summary %}
+              <p class="text-xs text-slate-400 leading-relaxed mb-3 mt-3">{{ r.market_summary }}</p>
+            {% endif %}
+            {% if r.trade_actions %}
+              <table class="data-table" style="font-size:11px;margin-bottom:8px">
+                <thead>
+                  <tr>
+                    <th>Ticker</th>
+                    <th class="num">≈ SEK</th>
+                    <th class="num">Weight</th>
+                    <th class="num">Conf</th>
+                    <th class="num">Stop</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for a in r.trade_actions %}
+                  <tr>
+                    <td>
+                      {% if a.side == "buy" %}<span class="badge badge-buy">BUY</span>
+                      {% else %}<span class="badge badge-sell">SELL</span>{% endif %}
+                      <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
+                    </td>
+                    <td class="num text-slate-300">{{ "{:,.0f}".format(a.sek_estimate) }}</td>
+                    <td class="num text-slate-300">{{ a.target_weight_pct }}%</td>
+                    <td class="num text-slate-300">{{ "%.2f"|format(a.confidence) }}</td>
+                    <td class="num text-slate-500">{% if a.stop_loss_pct %}-{{ a.stop_loss_pct }}%{% else %}—{% endif %}</td>
+                  </tr>
+                  <tr>
+                    <td colspan="5" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <p class="text-xs text-slate-600 mt-3">No buy/sell actions this run.</p>
+            {% endif %}
+            {% if r.notes %}
+              <p class="text-xs text-slate-600 leading-relaxed italic">{{ r.notes }}</p>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -46,5 +91,19 @@
   <p class="empty">No decisions yet — run <code class="text-slate-500">fund run</code> to generate the first one.</p>
 </div>
 {% endif %}
+
+<script>
+document.querySelectorAll('.history-row').forEach(row => {
+  row.addEventListener('click', () => {
+    const runId = row.dataset.run;
+    const detail = document.getElementById('detail-' + runId);
+    const toggle = row.querySelector('.expand-toggle');
+    const open = detail.style.display !== 'none';
+    detail.style.display = open ? 'none' : 'table-row';
+    toggle.textContent = open ? '▶' : '▼';
+    toggle.style.color = open ? '#475569' : '#60a5fa';
+  });
+});
+</script>
 
 {% endblock %}

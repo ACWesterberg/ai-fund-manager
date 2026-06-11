@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Universe — AI Fund Manager{% endblock %}
+{% block page_title %}Universe{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Universe</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ total_enabled }} enabled / {{ total }} total tickers across {{ exchanges|length }} exchanges</p>
+  </div>
+  <input id="search" type="text" placeholder="Search name or ticker…"
+         class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-300
+                placeholder-slate-600 focus:outline-none focus:border-blue-500 w-56">
+</div>
+
+{% for exchange in exchanges %}
+{% set rows = by_exchange[exchange] %}
+<section class="card mb-4" id="section-{{ exchange }}">
+  <div class="card-header mb-3">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-blue-400" style="font-size:17px">corporate_fare</span>
+      <h2 class="card-title">{{ exchange }}</h2>
+    </div>
+    <span class="text-xs text-slate-600" id="count-{{ exchange }}">
+      {{ rows|selectattr('enabled')|list|length }} enabled / {{ rows|length }} total
+    </span>
+  </div>
+  <div class="overflow-x-auto -mx-1">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Company</th>
+          <th>Ticker</th>
+          <th>Sector</th>
+          <th>ISIN</th>
+          <th class="num">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="ticker-row {% if not r.enabled %}opacity-40{% endif %}"
+            data-name="{{ r.name|lower }}" data-ticker="{{ r.ticker|lower }}">
+          <td class="text-slate-200 font-medium">{{ r.name }}</td>
+          <td><code class="text-blue-400" style="font-size:11px">{{ r.ticker }}</code></td>
+          <td class="text-slate-500 text-xs">{{ r.sector }}</td>
+          <td class="text-slate-600" style="font-size:10px">{{ r.isin }}</td>
+          <td class="num">
+            {% if r.enabled %}
+              <span class="badge badge-buy" style="font-size:9px">ON</span>
+            {% else %}
+              <span class="badge badge-hold" style="font-size:9px">OFF</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+
+<script>
+const searchInput = document.getElementById('search');
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.toLowerCase().trim();
+  document.querySelectorAll('.ticker-row').forEach(row => {
+    const match = !q || row.dataset.name.includes(q) || row.dataset.ticker.includes(q);
+    row.style.display = match ? '' : 'none';
+  });
+  // Update per-section counts
+  document.querySelectorAll('section[id^="section-"]').forEach(section => {
+    const exchange = section.id.replace('section-', '');
+    const rows = section.querySelectorAll('.ticker-row');
+    const visible = [...rows].filter(r => r.style.display !== 'none').length;
+    const countEl = document.getElementById('count-' + exchange);
+    if (countEl) countEl.textContent = q ? `${visible} match${visible !== 1 ? 'es' : ''}` : countEl.dataset.original;
+  });
+});
+// Store original counts for reset
+document.querySelectorAll('[id^="count-"]').forEach(el => {
+  el.dataset.original = el.textContent.trim();
+});
+</script>
+
+{% endblock %}

@@ -31,6 +31,8 @@ class RiskConfig:
     min_trade_sek: float = 2500.0
     max_turnover_pct: float = 25.0
     stale_after_days: int = 5
+    cold_start_cash_threshold: float = 80.0  # if cash% above this, use cold_start_turnover_pct
+    cold_start_turnover_pct: float = 50.0    # turnover cap when deploying from near-100% cash
 
 
 @dataclass

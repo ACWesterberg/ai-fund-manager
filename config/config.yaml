@@ -17,6 +17,8 @@ risk:
   min_trade_sek: 2500       # below this, fees eat returns
   max_turnover_pct: 25      # max % of NAV traded per run
   stale_after_days: 5       # block buys if price data older than N trading days
+  cold_start_cash_threshold: 80   # if cash% above this, allow faster initial deployment
+  cold_start_turnover_pct: 50     # turnover cap used when cold-starting (% of NAV)
 
 fees:
   rate: 0.001               # 0.10%

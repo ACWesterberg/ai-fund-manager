@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
 
-from fundmgr.config import load_config
+from fundmgr.config import load_config, load_universe
 from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
 from fundmgr.state.store import Store
 
@@ -241,6 +241,35 @@ async def api_positions():
         "cash_sek": cash,
         "nav_sek": nav,
     }
+
+
+@app.get("/universe", response_class=HTMLResponse)
+async def universe(request: Request):
+    tickers = load_universe()
+    by_exchange: dict[str, list] = {}
+    for t in tickers:
+        label = t.exchange
+        by_exchange.setdefault(label, []).append({
+            "name": t.name,
+            "ticker": t.yahoo_ticker,
+            "isin": t.isin,
+            "country": t.country,
+            "sector": t.sector,
+            "enabled": t.enabled,
+        })
+    # Sort each group: enabled first, then alpha
+    for rows in by_exchange.values():
+        rows.sort(key=lambda r: (not r["enabled"], r["name"].lower()))
+    exchanges = sorted(by_exchange.keys())
+    total_enabled = sum(1 for t in tickers if t.enabled)
+    return _render("universe.html", {
+        "request": request,
+        "by_exchange": by_exchange,
+        "exchanges": exchanges,
+        "total": len(tickers),
+        "total_enabled": total_enabled,
+        "active_page": "universe",
+    })
 
 
 # ── GitHub webhook deploy endpoint ────────────────────────────────────────────

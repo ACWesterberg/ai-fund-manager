@@ -151,12 +151,22 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
     run_id = f"{datetime.utcnow().strftime('%Y-%m-%d')}-{__import__('uuid').uuid4().hex[:6]}"
-    system_msg, user_msg = build_prompt(cfg, snap, screened_features, store, run_id, macro_block=macro_block)
+    # ── Cold-start: lift turnover cap when deploying from near-100% cash ─────
+    import copy
+    effective_cfg = cfg
+    if snap.cash_pct >= cfg.risk.cold_start_cash_threshold:
+        effective_cfg = copy.copy(cfg)
+        effective_cfg.risk = copy.copy(cfg.risk)
+        effective_cfg.risk.max_turnover_pct = cfg.risk.cold_start_turnover_pct
+        click.echo(f"\n      Cold start detected (cash {snap.cash_pct:.0f}%): "
+                   f"turnover cap → {cfg.risk.cold_start_turnover_pct:.0f}%")
+
+    system_msg, user_msg = build_prompt(effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block)
 
     # ── Call LLM ─────────────────────────────────────────────────────────────
     click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")
     try:
-        decision, raw_response = call_llm(system_msg, user_msg, cfg)
+        decision, raw_response = call_llm(system_msg, user_msg, effective_cfg)
     except LLMError as e:
         click.echo(f"  ✗ LLM call failed: {e}", err=True)
         sys.exit(1)
@@ -164,7 +174,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
 
     # ── Step 9: Apply guardrails ──────────────────────────────────────────────
     universe_tickers = {t.yahoo_ticker for t in tickers}
-    guardrail_result = apply_guardrails(decision, snap, features, universe_tickers, cfg)
+    guardrail_result = apply_guardrails(decision, snap, features, universe_tickers, effective_cfg)
 
     rejected_count = sum(1 for v in guardrail_result.verdicts if not v.approved)
     clipped_count = sum(1 for v in guardrail_result.verdicts if v.clipped)
@@ -214,17 +224,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
                 lines.append("<b>🟢 BUYS</b>")
                 for a in buys:
                     lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
-                    lines.append(f"  <i>{a.thesis[:140]}</i>")
+                    lines.append(f"  <i>{a.thesis[:260]}</i>")
             if sells:
                 lines.append("")
                 lines.append("<b>🔴 SELLS</b>")
                 for a in sells:
                     lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
-                    lines.append(f"  <i>{a.thesis[:140]}</i>")
+                    lines.append(f"  <i>{a.thesis[:260]}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:
-                lines.append(f"\n<i>{decision.notes[:200]}</i>")
+                lines.append(f"\n<i>{decision.notes[:350]}</i>")
             msg = "\n".join(lines)
             try:
                 data = urllib.parse.urlencode({

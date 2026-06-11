@@ -30,7 +30,7 @@ jobs:
           port: 22
           timeout: 300s
           script: |
-            DEPLOY_BRANCH=deploy bash /home/${{ secrets.PI_SSH_USER }}/ai-fund-manager/deploy/deploy.sh
+            DEPLOY_BRANCH=deploy bash $HOME/Documents/ai-fund-manager/deploy/deploy.sh
 
       - name: Notify Telegram on success
         if: success()

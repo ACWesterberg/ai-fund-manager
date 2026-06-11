@@ -3,7 +3,9 @@
 # Called by GitHub Actions (via SSH) or by the polling script.
 set -euo pipefail
 
-REPO_DIR="${FUND_DIR:-/home/pi/ai-fund-manager}"
+# Derive repo root from this script's location so it works regardless of username or path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${FUND_DIR:-$SCRIPT_DIR/..}"
 BRANCH="${DEPLOY_BRANCH:-deploy}"
 LOG_FILE="$REPO_DIR/data/logs/deploy.log"
 
@@ -30,7 +32,8 @@ git log --oneline "$BEFORE..$AFTER" | while read -r line; do log "  $line"; done
 
 # Install / update Python dependencies
 log "Updating dependencies…"
-.venv/bin/uv pip install -e . --quiet
+UV=$(command -v uv || echo "$HOME/.local/bin/uv")
+"$UV" pip install -e . --quiet
 
 # Restart services (requires sudoers entry — see SETUP.md)
 log "Restarting services…"

@@ -169,10 +169,10 @@
           <span class="badge badge-hold">{{ last_run.holds }} hold</span>
         </div>
         {% if last_run.market_summary %}
-          <p class="text-xs text-slate-400 leading-relaxed">{{ last_run.market_summary[:280] }}{% if last_run.market_summary|length > 280 %}…{% endif %}</p>
+          <p class="text-xs text-slate-400 leading-relaxed">{{ last_run.market_summary }}</p>
         {% endif %}
         {% if last_run.notes %}
-          <p class="text-xs text-slate-600 mt-2 leading-relaxed italic">{{ last_run.notes[:160] }}{% if last_run.notes|length > 160 %}…{% endif %}</p>
+          <p class="text-xs text-slate-600 mt-2 leading-relaxed italic">{{ last_run.notes }}</p>
         {% endif %}
         <a href="/history" class="inline-block mt-3 text-xs text-blue-400 hover:text-blue-300 transition-colors">
           View all decisions →

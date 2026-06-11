@@ -189,6 +189,46 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
         report_path.write_text(action_list)
         click.echo(f"\n  Action list saved to: {report_path}")
 
+    # ── Telegram notification ─────────────────────────────────────────────────
+    if not dry_run:
+        import urllib.parse
+        import urllib.request as _req
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        chat_id   = os.getenv("TELEGRAM_CHAT_ID", "")
+        if bot_token and chat_id:
+            buys  = [a for a in guardrail_result.approved_actions if a.side == "buy"]
+            sells = [a for a in guardrail_result.approved_actions if a.side == "sell"]
+            lines = [f"<b>📊 Fund Run Complete</b>  <code>{run_id}</code>"]
+            lines.append(decision.market_summary)
+            if buys:
+                lines.append("")
+                lines.append("<b>🟢 BUYS</b>")
+                for a in buys:
+                    lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
+                    lines.append(f"  <i>{a.thesis[:140]}</i>")
+            if sells:
+                lines.append("")
+                lines.append("<b>🔴 SELLS</b>")
+                for a in sells:
+                    lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
+                    lines.append(f"  <i>{a.thesis[:140]}</i>")
+            if not buys and not sells:
+                lines.append("No trades this run — holding cash.")
+            if decision.notes:
+                lines.append(f"\n<i>{decision.notes[:200]}</i>")
+            msg = "\n".join(lines)
+            try:
+                data = urllib.parse.urlencode({
+                    "chat_id": chat_id, "text": msg, "parse_mode": "HTML",
+                }).encode()
+                _req.urlopen(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    data, timeout=10,
+                )
+                click.echo("  Telegram notification sent.")
+            except Exception as e:
+                click.echo(f"  ⚠ Telegram notification failed: {e}", err=True)
+
 
 def _print_feature_table(features, cfg):
     from fundmgr.data.prices import TickerFeatures

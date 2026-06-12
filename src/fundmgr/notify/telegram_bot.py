@@ -63,24 +63,65 @@ def _get_isin_map() -> dict[str, str]:
     return _isin_map
 
 
-def _name_to_ticker(company_name: str) -> str | None:
-    """Fuzzy match company name against universe as a fallback when ISIN lookup fails."""
+def _decision_name_map() -> dict[str, str]:
+    """
+    Return {company_name_lower: yahoo_ticker} for all tickers in the last
+    recommendation's buy/sell actions. These are the most likely candidates
+    when a user photographs a trade confirmation.
+    """
+    try:
+        from fundmgr.config import load_config, load_universe
+        from fundmgr.state.store import Store
+        cfg = load_config()
+        store = Store(cfg.db_path)
+        last = store.get_last_recommendation()
+        if not last:
+            return {}
+        actions = json.loads(last.actions_json)
+        decision_tickers = {
+            a["ticker"] for a in actions
+            if a.get("side") in ("buy", "sell") and a.get("ticker")
+        }
+        # Build name → ticker map from universe for just those tickers
+        universe = load_universe()
+        return {
+            t.name.lower(): t.yahoo_ticker
+            for t in universe
+            if t.yahoo_ticker in decision_tickers
+        }
+    except Exception:
+        return {}
+
+
+def _name_to_ticker(company_name: str) -> tuple[str | None, str]:
+    """
+    Resolve company name to ticker. Returns (ticker, source) where source
+    describes how the match was found.
+    Try: last decision tickers → full universe fuzzy match.
+    """
+    name_q = company_name.lower().strip()
+
+    # 1. Match against last decision (most reliable — small candidate set)
+    decision_map = _decision_name_map()
+    for name, ticker in decision_map.items():
+        if name_q == name or name_q in name or name in name_q:
+            return ticker, "matched from last decision"
+
+    # 2. Full universe fuzzy fallback
     try:
         from fundmgr.config import load_universe
-        tickers = load_universe()
-        name_q = company_name.lower().strip()
-        # Exact match
-        for t in tickers:
+        universe = load_universe()
+        for t in universe:
             if t.name.lower() == name_q:
-                return t.yahoo_ticker
-        # Substring match (handles "Smart Eye" matching "Smart Eye AB" etc.)
-        for t in tickers:
+                return t.yahoo_ticker, "matched by name"
+        for t in universe:
             t_name = t.name.lower()
             if name_q in t_name or t_name in name_q:
-                return t.yahoo_ticker
+                return t.yahoo_ticker, "matched by name"
     except Exception:
         pass
-    return None
+
+    return None, ""
 
 
 def _run_cli(*args: str, timeout: int = 300) -> str:
@@ -330,10 +371,10 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         if ticker:
             isin_status = "✅ matched by ISIN"
         else:
-            # Fallback: fuzzy company name match
-            ticker = _name_to_ticker(company_name)
+            # Fallback: decision-aware name match
+            ticker, match_source = _name_to_ticker(company_name)
             if ticker:
-                isin_status = "✅ matched by name"
+                isin_status = f"✅ {match_source}"
             else:
                 isin_status = "⚠️ not found in universe"
 

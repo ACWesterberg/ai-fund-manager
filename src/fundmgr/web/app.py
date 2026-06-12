@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import yfinance as yf
+
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
@@ -42,8 +44,35 @@ def _get_deps():
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
+def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
+    """Fetch current prices for a list of tickers. Returns empty dict on failure."""
+    if not tickers:
+        return {}
+    try:
+        if len(tickers) == 1:
+            raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
+            close = raw.get("Close", raw.iloc[:, :1])
+            if hasattr(close, "columns"):
+                close = close.iloc[:, 0]
+            close = close.dropna()
+            return {tickers[0]: float(close.iloc[-1])} if not close.empty else {}
+        raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
+        close_df = raw.get("Close")
+        if close_df is None or close_df.empty:
+            return {}
+        result = {}
+        for t in tickers:
+            if t in close_df.columns:
+                series = close_df[t].dropna()
+                if not series.empty:
+                    result[t] = float(series.iloc[-1])
+        return result
+    except Exception:
+        return {}
+
+
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+def index(request: Request):
     cfg, store = _get_deps()
     positions = store.get_positions()
     cash = store.get_cash()
@@ -51,21 +80,32 @@ async def index(request: Request):
     nav_history = store.get_nav_history()
     stats = compute_stats(nav_history, cfg.capital_sek)
 
-    # Attach live prices where available (best-effort)
-    nav = sum(p.shares * p.avg_cost_sek for p in positions) + cash  # cost-basis fallback
-    if nav_history:
-        nav = nav_history[-1].portfolio_nav_sek
+    # Fetch live prices for held positions
+    live_prices = _fetch_live_prices([p.ticker for p in positions])
 
-    positions_data = [
-        {
+    # NAV: live if available, else cost-basis fallback
+    live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
+    nav = live_market_value + cash
+
+    positions_data = []
+    for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
+        live = live_prices.get(p.ticker)
+        cost_value = round(p.shares * p.avg_cost_sek, 0)
+        current_value = round(p.shares * live, 0) if live else None
+        pnl_sek = round(current_value - cost_value, 0) if current_value is not None else None
+        pnl_pct = round((live / p.avg_cost_sek - 1) * 100, 1) if live else None
+        weight_val = current_value if current_value is not None else cost_value
+        positions_data.append({
             "ticker": p.ticker,
             "shares": p.shares,
             "avg_cost": p.avg_cost_sek,
-            "cost_value": round(p.shares * p.avg_cost_sek, 0),
-            "weight_pct": round(p.shares * p.avg_cost_sek / nav * 100, 1) if nav > 0 else 0,
-        }
-        for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True)
-    ]
+            "cost_value": cost_value,
+            "current_price": round(live, 2) if live else None,
+            "current_value": current_value,
+            "pnl_sek": pnl_sek,
+            "pnl_pct": pnl_pct,
+            "weight_pct": round(weight_val / nav * 100, 1) if nav > 0 else 0,
+        })
 
     cash_pct = round(cash / nav * 100, 1) if nav > 0 else 100.0
 

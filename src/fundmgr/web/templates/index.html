@@ -100,7 +100,9 @@
             <th>Ticker</th>
             <th class="num">Shares</th>
             <th class="num">Avg Cost</th>
+            <th class="num">Current</th>
             <th class="num">Value (SEK)</th>
+            <th class="num">P&amp;L</th>
             <th class="num" style="width:120px">Weight</th>
           </tr>
         </thead>
@@ -111,8 +113,21 @@
               <span class="font-semibold text-slate-200">{{ p.ticker }}</span>
             </td>
             <td class="num">{{ "{:.0f}".format(p.shares) }}</td>
-            <td class="num">{{ "{:.2f}".format(p.avg_cost) }}</td>
-            <td class="num font-medium text-slate-200">{{ "{:,.0f}".format(p.cost_value) }}</td>
+            <td class="num text-slate-400">{{ "{:.2f}".format(p.avg_cost) }}</td>
+            <td class="num">
+              {% if p.current_price %}{{ "{:.2f}".format(p.current_price) }}{% else %}<span class="text-slate-600">—</span>{% endif %}
+            </td>
+            <td class="num font-medium text-slate-200">{{ "{:,.0f}".format(p.current_value if p.current_value is not none else p.cost_value) }}</td>
+            <td class="num">
+              {% if p.pnl_sek is not none %}
+                <span class="{{ 'text-green-400' if p.pnl_sek >= 0 else 'text-red-400' }}">
+                  {{ '+' if p.pnl_sek >= 0 else '' }}{{ "{:,.0f}".format(p.pnl_sek) }}
+                  ({{ '+' if p.pnl_pct >= 0 else '' }}{{ "{:.1f}".format(p.pnl_pct) }}%)
+                </span>
+              {% else %}
+                <span class="text-slate-600">—</span>
+              {% endif %}
+            </td>
             <td class="num" style="min-width:100px">
               <span class="text-slate-400">{{ "{:.1f}".format(p.weight_pct) }}%</span>
               <div class="weight-bar-track">

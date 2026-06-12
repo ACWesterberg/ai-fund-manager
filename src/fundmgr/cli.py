@@ -19,7 +19,7 @@ from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnin
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.reporting.actions import format_action_list
-from fundmgr.state.models import PortfolioSnapshot, RecommendationLog, Transaction
+from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
 from fundmgr.state.store import Store
 
 
@@ -198,6 +198,16 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
 
+        # Record NAV snapshot for portfolio chart
+        bench_rows = store.get_benchmark()
+        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
+        store.upsert_nav(NavPoint(
+            date=datetime.utcnow().strftime("%Y-%m-%d"),
+            portfolio_nav_sek=snap.nav_sek,
+            benchmark_value=bench_val,
+            cash_sek=store.get_cash(),
+        ))
+
     # ── Step 11: Print action list ────────────────────────────────────────────
     action_list = format_action_list(decision, guardrail_result, snap, features, cfg)
     click.echo("\n" + action_list)
@@ -336,6 +346,21 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
     click.echo(f"✓ {direction} {shares} × {ticker} @ {price:.2f} SEK = {gross:,.0f} SEK (fee: {fee:.2f} SEK)")
     cash = store.get_cash()
     click.echo(f"  Cash remaining: {cash:,.0f} SEK")
+
+    # Record a NAV snapshot (cost-basis) so the chart shows fill events
+    try:
+        bench_rows = store.get_benchmark()
+        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
+        positions_after = store.get_positions()
+        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash
+        store.upsert_nav(NavPoint(
+            date=ts.strftime("%Y-%m-%d"),
+            portfolio_nav_sek=nav_cost,
+            benchmark_value=bench_val,
+            cash_sek=cash,
+        ))
+    except Exception:
+        pass
 
 
 @cli.command()

@@ -251,15 +251,20 @@ _OCR_SYSTEM_PROMPT = """\
 You are extracting trade fill details from OCR text taken from a Swedish/Nordic broker \
 confirmation screen (Montrose or similar). The text may have minor OCR artifacts.
 
+IMPORTANT — price field rules for Montrose screens:
+- Use "Avslutskurs" as price_sek — this is the actual execution price.
+- Ignore "Kurs" — that is the original limit/offer price, not what was paid.
+- If Avslutskurs is missing, derive price_sek = Köpesumma / Antal (total / shares).
+
 Return ONLY a valid JSON object — no other text, no markdown fences:
 {
   "isin": "12-character ISIN (e.g. SE0000115446) — most reliable identifier, or null",
   "company_name": "company name as shown",
   "side": "buy" or "sell",
-  "shares": integer number of shares,
-  "price_sek": per-share price in SEK as a float (divide total by shares if needed),
-  "fee_sek": broker commission/courtage in SEK as a float,
-  "trade_date": "YYYY-MM-DD from Affärsdatum/trade date field, or null",
+  "shares": integer number of shares (Antal),
+  "price_sek": actual execution price per share in SEK (Avslutskurs, NOT Kurs),
+  "fee_sek": broker commission/courtage in SEK (Prel. courtage or Courtage),
+  "trade_date": "YYYY-MM-DD from Senaste avslut or Affärsdatum field, or null",
   "confidence": float 0.0-1.0
 }
 Set any field to null if it cannot be reliably determined.\

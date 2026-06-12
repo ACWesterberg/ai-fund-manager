@@ -88,13 +88,33 @@ class AppConfig:
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
+    universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
+    auto_fill: bool = False  # if True, paper-execute fills automatically after each run
 
 
 _EXCHANGE_CURRENCY: dict[str, str] = {
+    # Nordic
     "OMXS": "SEK",
+    "OMXS-FN": "SEK",
+    "SPOTLIGHT": "SEK",
+    "NGM": "SEK",
     "OMXC": "DKK",
+    "OMXC-FN": "DKK",
     "OSLO": "NOK",
     "OMXH": "EUR",
+    "OMXI": "ISK",
+    # Global
+    "NYSE": "USD",
+    "NASDAQ": "USD",
+    "LSE": "GBP",
+    "XETRA": "EUR",
+    "EURONEXT": "EUR",
+    "SIX": "CHF",
+    "TSE": "JPY",
+    "TSX": "CAD",
+    "ASX": "AUD",
+    "HKEX": "HKD",
+    "OTC": "USD",
 }
 
 
@@ -120,7 +140,9 @@ class UniverseTicker:
 def load_config(config_path: Path | None = None) -> AppConfig:
     load_dotenv(ROOT / ".env")
 
-    path = config_path or CONFIG_DIR / "config.yaml"
+    # FUND_CONFIG env var lets systemd services select which fund to run
+    env_config = os.getenv("FUND_CONFIG")
+    path = config_path or (Path(env_config) if env_config else CONFIG_DIR / "config.yaml")
     raw = yaml.safe_load(path.read_text())
 
     cfg = AppConfig(
@@ -128,6 +150,16 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cadence=raw.get("cadence", "weekly"),
         benchmark=raw.get("benchmark", "^OMXSPI"),
     )
+
+    # Paths — resolve relative to project root
+    if db := raw.get("db_path"):
+        cfg.db_path = ROOT / db
+    if mandate := raw.get("mandate_path"):
+        cfg.mandate_path = ROOT / mandate
+    if universe := raw.get("universe_path"):
+        cfg.universe_path = ROOT / universe
+    if "auto_fill" in raw:
+        cfg.auto_fill = bool(raw["auto_fill"])
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(
@@ -159,6 +191,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     DATA_DIR.mkdir(exist_ok=True)
     (DATA_DIR / "reports").mkdir(exist_ok=True)
+    cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     return cfg
 

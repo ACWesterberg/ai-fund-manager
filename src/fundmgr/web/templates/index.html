@@ -4,6 +4,13 @@
 
 {% block content %}
 
+{% if is_simulation %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-center gap-2 text-amber-400 text-xs font-semibold">
+  <span class="material-symbols-outlined" style="font-size:15px">science</span>
+  SIMULATION — Global Paper Trading Fund · Auto-executed trades · Not real money
+</div>
+{% endif %}
+
 <!-- ── KPI strip ── -->
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
 
@@ -247,7 +254,7 @@
 
   async function loadChart(period) {
     if (!rawData) {
-      const res = await fetch('/api/nav');
+      const res = await fetch('{{ api_base|default("") }}/api/nav');
       rawData = await res.json();
     }
     if (!rawData.data || !rawData.data.length) return;

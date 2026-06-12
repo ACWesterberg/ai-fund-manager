@@ -46,7 +46,7 @@ def init(capital: float | None):
         store.initialise(starting_capital)
         click.echo(f"✓ Portfolio initialised with {starting_capital:,.0f} SEK")
         click.echo(f"  Database: {cfg.db_path}")
-        click.echo(f"  Universe: {len(get_enabled_tickers())} enabled tickers")
+        click.echo(f"  Universe: {len(get_enabled_tickers(cfg.universe_path))} enabled tickers")
         click.echo("\nNext step: run 'fund run' to generate your first decision.")
     except RuntimeError as e:
         click.echo(f"Error: {e}", err=True)
@@ -65,7 +65,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
 
-    tickers = get_enabled_tickers()
+    tickers = get_enabled_tickers(cfg.universe_path)
     click.echo(f"\n{'═'*56}")
     click.echo(f"  AI Fund Manager — Weekly Run")
     click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
@@ -275,6 +275,23 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
                 click.echo(f"  Telegram notification sent ({len(chunks)} message(s)).")
             except Exception as e:
                 click.echo(f"  ⚠ Telegram notification failed: {e}", err=True)
+
+    # ── Auto-fill (paper trading simulation) ─────────────────────────────────
+    if not dry_run and cfg.auto_fill and guardrail_result.approved_actions:
+        from fundmgr.engine.auto_fill import execute_paper_fills
+        click.echo("\n[→] Auto-fill: executing paper trades…")
+        # Attach live prices to positions before computing trade sizes
+        for p in store.get_positions():
+            feat = features.get(p.ticker)
+            if feat:
+                p.current_price_sek = feat.last_price
+        fill_log = execute_paper_fills(
+            [a.model_dump() for a in guardrail_result.approved_actions],
+            store,
+            cfg,
+        )
+        for line in fill_log:
+            click.echo(line)
 
 
 def _print_feature_table(features, cfg):
@@ -626,7 +643,7 @@ def check_news(auto_run: bool, max_age_hours: int):
         click.echo("No news feeds configured — set data.news_feeds in config.yaml")
         return
 
-    tickers = get_enabled_tickers()
+    tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}
 
     click.echo(f"\n[check-news] Scanning {len(cfg.data.news_feeds)} feeds "
@@ -705,7 +722,7 @@ def reconcile():
 @cli.command()
 def universe():
     """List the enabled tickers in the universe."""
-    tickers = get_enabled_tickers()
+    tickers = get_enabled_tickers(cfg.universe_path)
     click.echo(f"\n─── Universe ({len(tickers)} enabled tickers) ───────────────────────────────")
     click.echo(f"  {'Name':<30} {'Ticker':<15} {'Country':<8} {'Sector'}")
     click.echo(f"  {'─'*30} {'─'*15} {'─'*8} {'─'*20}")

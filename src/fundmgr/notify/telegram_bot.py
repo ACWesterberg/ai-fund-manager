@@ -83,7 +83,7 @@ def _decision_name_map() -> dict[str, str]:
             if a.get("side") in ("buy", "sell") and a.get("ticker")
         }
         # Build name → ticker map from universe for just those tickers
-        universe = load_universe()
+        universe = load_universe(cfg.universe_path)
         return {
             t.name.lower(): t.yahoo_ticker
             for t in universe
@@ -109,8 +109,8 @@ def _name_to_ticker(company_name: str) -> tuple[str | None, str]:
 
     # 2. Full universe fuzzy fallback
     try:
-        from fundmgr.config import load_universe
-        universe = load_universe()
+        from fundmgr.config import load_config, load_universe
+        universe = load_universe(load_config().universe_path)
         for t in universe:
             if t.name.lower() == name_q:
                 return t.yahoo_ticker, "matched by name"

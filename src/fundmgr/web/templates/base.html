@@ -157,6 +157,17 @@
       <a href="/universe" class="nav-link {% if active_page == 'universe' %}active{% endif %}">
         <span class="material-symbols-outlined">format_list_bulleted</span>Universe
       </a>
+
+      <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Simulation</p>
+      <a href="/sim" class="nav-link {% if sim_prefix is defined and active_page == 'portfolio' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">science</span>Global Fund
+      </a>
+      <a href="/sim/history" class="nav-link {% if sim_prefix is defined and active_page == 'history' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">history</span>Sim Decisions
+      </a>
     </nav>
 
     <div class="px-5 py-4 border-t border-slate-800/50">

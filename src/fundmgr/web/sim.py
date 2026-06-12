@@ -1,15 +1,15 @@
+"""
+Simulation dashboard routes — mounted at /sim/*.
+Loads config/config_global.yaml and renders the same templates
+with is_simulation=True so pages show a "SIMULATION" badge.
+"""
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
-import os
-import subprocess
 from pathlib import Path
 
 import yfinance as yf
-
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
 
@@ -17,39 +17,15 @@ from fundmgr.config import load_config, load_universe
 from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
 from fundmgr.state.store import Store
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
+ROOT = Path(__file__).resolve().parents[3]
+_SIM_CONFIG_PATH = ROOT / "config" / "config_global.yaml"
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+_jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
 
-app = FastAPI(title="AI Fund Manager", docs_url=None, redoc_url=None)
+router = APIRouter(prefix="/sim")
 
-# Global simulation sub-routes at /sim/*
-from fundmgr.web.sim import router as sim_router  # noqa: E402
-app.include_router(sim_router)
-
-# Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
-_jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
-
-
-def _render(template_name: str, context: dict) -> HTMLResponse:
-    tmpl = _jinja_env.get_template(template_name)
-    return HTMLResponse(tmpl.render(**context))
-
-# Loaded once at startup; shared across requests
-_cfg = None
-_store = None
-
-
-def _get_deps():
-    global _cfg, _store
-    if _cfg is None:
-        _cfg = load_config()
-        _store = Store(_cfg.db_path)
-    return _cfg, _store
-
-
-# ── Pages ─────────────────────────────────────────────────────────────────────
 
 def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
-    """Fetch current prices for a list of tickers. Returns empty dict on failure."""
     if not tickers:
         return {}
     try:
@@ -74,20 +50,34 @@ def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
     except Exception:
         return {}
 
+_sim_cfg = None
+_sim_store = None
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    cfg, store = _get_deps()
+
+def _get_sim_deps():
+    global _sim_cfg, _sim_store
+    if _sim_cfg is None:
+        _sim_cfg = load_config(_SIM_CONFIG_PATH)
+        _sim_store = Store(_sim_cfg.db_path)
+    return _sim_cfg, _sim_store
+
+
+def _render(template_name: str, context: dict) -> HTMLResponse:
+    tmpl = _jinja_env.get_template(template_name)
+    return HTMLResponse(tmpl.render(**context))
+
+
+@router.get("/", response_class=HTMLResponse)
+def sim_index(request: Request):
+    cfg, store = _get_sim_deps()
     positions = store.get_positions()
     cash = store.get_cash()
     fees_paid = store.total_fees_paid()
     nav_history = store.get_nav_history()
     stats = compute_stats(nav_history, cfg.capital_sek)
 
-    # Fetch live prices for held positions
     live_prices = _fetch_live_prices([p.ticker for p in positions])
 
-    # NAV: live if available, else cost-basis fallback
     live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
     nav = live_market_value + cash
 
@@ -112,8 +102,9 @@ def index(request: Request):
         })
 
     cash_pct = round(cash / nav * 100, 1) if nav > 0 else 100.0
+    pnl_sek = round(nav - cfg.capital_sek, 0)
+    pnl_pct = round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0
 
-    # Last decision summary for right rail
     last_run = None
     last_rec = store.get_last_recommendation()
     if last_rec:
@@ -132,7 +123,6 @@ def index(request: Request):
                     {
                         "ticker": a.get("ticker", ""),
                         "side": a.get("side", ""),
-                        "shares_est": round(a.get("sek_estimate", 0) / 1) if a.get("sek_estimate") else None,
                         "sek_estimate": round(a.get("sek_estimate", 0)),
                         "target_weight_pct": a.get("target_weight_pct", 0),
                         "confidence": a.get("confidence", 0),
@@ -144,9 +134,6 @@ def index(request: Request):
             }
         except Exception:
             pass
-
-    pnl_sek = round(nav - cfg.capital_sek, 0)
-    pnl_pct = round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0
 
     return _render("index.html", {
         "request": request,
@@ -161,12 +148,15 @@ def index(request: Request):
         "pnl_sek": pnl_sek,
         "pnl_pct": pnl_pct,
         "active_page": "portfolio",
+        "is_simulation": True,
+        "api_base": "/sim",
+        "sim_prefix": "/sim",
     })
 
 
-@app.get("/history", response_class=HTMLResponse)
-async def history(request: Request):
-    cfg, store = _get_deps()
+@router.get("/history", response_class=HTMLResponse)
+def sim_history(request: Request):
+    cfg, store = _get_sim_deps()
     with store._conn() as conn:
         rows = conn.execute(
             "SELECT run_id, timestamp, actions_json, guardrail_log FROM recommendations ORDER BY timestamp DESC LIMIT 20"
@@ -178,13 +168,7 @@ async def history(request: Request):
             actions = json.loads(r["actions_json"])
         except Exception:
             actions = []
-        try:
-            llm_data = json.loads(r["guardrail_log"]) if r["guardrail_log"] else {}
-        except Exception:
-            llm_data = {}
-        # Pull market_summary + notes from the recommendations table llm_response column
-        market_summary = ""
-        notes = ""
+        market_summary, notes = "", ""
         try:
             with store._conn() as conn2:
                 row2 = conn2.execute(
@@ -225,12 +209,14 @@ async def history(request: Request):
         "request": request,
         "recommendations": recommendations,
         "active_page": "history",
+        "is_simulation": True,
+        "sim_prefix": "/sim",
     })
 
 
-@app.get("/transactions", response_class=HTMLResponse)
-async def transactions(request: Request):
-    cfg, store = _get_deps()
+@router.get("/transactions", response_class=HTMLResponse)
+def sim_transactions(request: Request):
+    cfg, store = _get_sim_deps()
     txns = store.get_transactions(limit=50)
     txn_data = [
         {
@@ -250,124 +236,20 @@ async def transactions(request: Request):
         "transactions": txn_data,
         "total_fees": store.total_fees_paid(),
         "active_page": "transactions",
+        "is_simulation": True,
+        "sim_prefix": "/sim",
     })
 
 
-# ── JSON API (for Plotly charts) ───────────────────────────────────────────────
-
-@app.get("/api/nav")
-async def api_nav():
-    cfg, store = _get_deps()
+@router.get("/api/nav")
+def sim_api_nav():
+    cfg, store = _get_sim_deps()
     nav_history = store.get_nav_history()
     return json.loads(nav_chart_json(nav_history))
 
 
-@app.get("/api/stats")
-async def api_stats():
-    cfg, store = _get_deps()
+@router.get("/api/stats")
+def sim_api_stats():
+    cfg, store = _get_sim_deps()
     nav_history = store.get_nav_history()
     return compute_stats(nav_history, cfg.capital_sek)
-
-
-@app.get("/api/positions")
-async def api_positions():
-    cfg, store = _get_deps()
-    positions = store.get_positions()
-    cash = store.get_cash()
-    total_cost = sum(p.shares * p.avg_cost_sek for p in positions)
-    nav = total_cost + cash
-    return {
-        "positions": [
-            {
-                "ticker": p.ticker,
-                "shares": p.shares,
-                "avg_cost_sek": p.avg_cost_sek,
-                "cost_value_sek": round(p.shares * p.avg_cost_sek, 2),
-                "weight_pct": round(p.shares * p.avg_cost_sek / nav * 100, 1) if nav > 0 else 0,
-            }
-            for p in positions
-        ],
-        "cash_sek": cash,
-        "nav_sek": nav,
-    }
-
-
-@app.get("/universe", response_class=HTMLResponse)
-async def universe(request: Request):
-    tickers = load_universe(cfg.universe_path)
-    by_exchange: dict[str, list] = {}
-    for t in tickers:
-        label = t.exchange
-        by_exchange.setdefault(label, []).append({
-            "name": t.name,
-            "ticker": t.yahoo_ticker,
-            "isin": t.isin,
-            "country": t.country,
-            "sector": t.sector,
-            "enabled": t.enabled,
-        })
-    # Sort each group: enabled first, then alpha
-    for rows in by_exchange.values():
-        rows.sort(key=lambda r: (not r["enabled"], r["name"].lower()))
-    exchanges = sorted(by_exchange.keys())
-    total_enabled = sum(1 for t in tickers if t.enabled)
-    return _render("universe.html", {
-        "request": request,
-        "by_exchange": by_exchange,
-        "exchanges": exchanges,
-        "total": len(tickers),
-        "total_enabled": total_enabled,
-        "active_page": "universe",
-    })
-
-
-# ── GitHub webhook deploy endpoint ────────────────────────────────────────────
-# Alternative to Tailscale SSH: GitHub sends a POST here on push to `deploy`.
-# Requires DEPLOY_WEBHOOK_SECRET in .env and the Pi's port 8000 accessible
-# (e.g. via Cloudflare Tunnel or port forwarding).
-
-ROOT_DIR = Path(__file__).resolve().parents[3]
-
-
-@app.post("/deploy")
-async def github_webhook(
-    request: Request,
-    x_hub_signature_256: str = Header(default=""),
-    x_github_event: str = Header(default=""),
-):
-    webhook_secret = os.getenv("DEPLOY_WEBHOOK_SECRET", "")
-    if not webhook_secret:
-        raise HTTPException(status_code=503, detail="Webhook not configured (DEPLOY_WEBHOOK_SECRET not set)")
-
-    body = await request.body()
-
-    # Verify GitHub HMAC signature
-    expected = "sha256=" + hmac.new(
-        webhook_secret.encode(), body, hashlib.sha256  # type: ignore[attr-defined]
-    ).hexdigest()
-    if not hmac.compare_digest(expected, x_hub_signature_256):
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    if x_github_event != "push":
-        return JSONResponse({"status": "ignored", "event": x_github_event})
-
-    payload = json.loads(body)
-    ref = payload.get("ref", "")
-    deploy_branch = os.getenv("DEPLOY_BRANCH", "deploy")
-
-    if ref != f"refs/heads/{deploy_branch}":
-        return JSONResponse({"status": "ignored", "ref": ref})
-
-    # Fire deploy script in background — don't block the response
-    script = ROOT_DIR / "deploy" / "deploy.sh"
-    subprocess.Popen(
-        ["bash", str(script)],
-        env={**os.environ, "DEPLOY_BRANCH": deploy_branch},
-        stdout=open(ROOT_DIR / "data" / "logs" / "deploy.log", "a"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-
-    commit = payload.get("after", "")[:8]
-    pusher = payload.get("pusher", {}).get("name", "unknown")
-    return JSONResponse({"status": "deploying", "commit": commit, "pusher": pusher})

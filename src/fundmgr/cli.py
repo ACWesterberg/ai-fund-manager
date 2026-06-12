@@ -363,6 +363,73 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         pass
 
 
+@cli.command("backfill-nav")
+def backfill_nav():
+    """Reconstruct NAV history from transaction log (one point per trading day)."""
+    cfg, store = _get_store()
+    if not store.is_initialised():
+        click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
+        sys.exit(1)
+
+    txns = store.get_transactions(limit=10_000)
+    if not txns:
+        click.echo("No transactions found — nothing to backfill.")
+        return
+
+    # Sort ascending (get_transactions returns DESC)
+    txns = sorted(txns, key=lambda t: t.timestamp)
+
+    # Build benchmark lookup {date_str: close}
+    bench_rows = store.get_benchmark()
+    bench_lookup: dict[str, float] = {r["date"]: r["close"] for r in bench_rows}
+
+    # Replay transactions: simulate portfolio state at each transaction date
+    sim_positions: dict[str, tuple[float, float]] = {}  # ticker -> (shares, avg_cost)
+    cash = cfg.capital_sek
+
+    # Record starting NAV one day before first transaction (all cash)
+    from datetime import timedelta
+    start_date = (txns[0].timestamp - timedelta(days=1)).strftime("%Y-%m-%d")
+    bench_start = bench_lookup.get(start_date, list(bench_lookup.values())[0] if bench_lookup else 0.0)
+    store.upsert_nav(NavPoint(
+        date=start_date,
+        portfolio_nav_sek=cfg.capital_sek,
+        benchmark_value=bench_start,
+        cash_sek=cfg.capital_sek,
+    ))
+
+    inserted = 1
+    for txn in txns:
+        if txn.side == "buy":
+            existing_shares, existing_cost = sim_positions.get(txn.ticker, (0.0, 0.0))
+            new_shares = existing_shares + txn.shares
+            new_cost = (existing_shares * existing_cost + txn.shares * txn.price_sek) / new_shares
+            sim_positions[txn.ticker] = (new_shares, new_cost)
+            cash -= txn.shares * txn.price_sek + txn.fee_sek
+        elif txn.side == "sell":
+            existing_shares, existing_cost = sim_positions.get(txn.ticker, (0.0, 0.0))
+            new_shares = existing_shares - txn.shares
+            if new_shares <= 0.001:
+                sim_positions.pop(txn.ticker, None)
+            else:
+                sim_positions[txn.ticker] = (new_shares, existing_cost)
+            cash += txn.shares * txn.price_sek - txn.fee_sek
+
+        date_str = txn.timestamp.strftime("%Y-%m-%d")
+        nav_cost = sum(s * c for s, c in sim_positions.values()) + cash
+        bench_val = bench_lookup.get(date_str, 0.0)
+        store.upsert_nav(NavPoint(
+            date=date_str,
+            portfolio_nav_sek=nav_cost,
+            benchmark_value=bench_val,
+            cash_sek=cash,
+        ))
+        inserted += 1
+
+    click.echo(f"✓ Backfilled {inserted} NAV points from {txns[0].timestamp.date()} to {txns[-1].timestamp.date()}")
+    click.echo("  (NAV uses cost-basis, not live prices — next 'fund run' will update today's point with live prices)")
+
+
 @cli.command()
 def status():
     """Print current portfolio snapshot: positions, cash, NAV."""

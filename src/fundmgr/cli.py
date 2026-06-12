@@ -15,7 +15,7 @@ from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
 from fundmgr.engine.client import LLMError, call_llm
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
-from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings
+from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.reporting.actions import format_action_list
@@ -136,10 +136,16 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
     _print_feature_table(features, cfg)
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
-    updated = evaluate_pending_outcomes(store)
-    if updated:
-        new_learnings = generate_learnings(store)
-        click.echo(f"\n[*] Evaluated {updated} past decisions; {len(new_learnings)} new learnings generated.")
+    evaluated = evaluate_pending_outcomes(store)
+    if evaluated:
+        stat_learnings = generate_learnings(store)
+        qual_learnings = generate_qualitative_learnings(store, evaluated)
+        total_learnings = len(stat_learnings) + len(qual_learnings)
+        click.echo(
+            f"\n[*] Evaluated {len(evaluated)} past decisions; "
+            f"{total_learnings} new learnings generated "
+            f"({len(qual_learnings)} qualitative, {len(stat_learnings)} calibration)."
+        )
 
     # ── Step 6: Build portfolio snapshot (attach live prices) ────────────────
     positions = store.get_positions()

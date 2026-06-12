@@ -308,6 +308,23 @@ class Store:
             actions_json=row["actions_json"],
         )
 
+    def get_recommendation_by_run_id(self, run_id: str) -> RecommendationLog | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM recommendations WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return RecommendationLog(
+            id=row["id"],
+            run_id=row["run_id"],
+            timestamp=datetime.fromisoformat(row["timestamp"]),
+            prompt_snapshot=row["prompt_snapshot"],
+            llm_response=row["llm_response"],
+            guardrail_log=row["guardrail_log"],
+            actions_json=row["actions_json"],
+        )
+
     # ── NAV history ───────────────────────────────────────────────────────────
 
     def upsert_nav(self, nav: NavPoint) -> None:

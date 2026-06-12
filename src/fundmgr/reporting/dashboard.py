@@ -58,45 +58,59 @@ def compute_stats(nav_history: list[NavPoint], initial_capital: float) -> dict:
 
 def nav_chart_json(nav_history: list[NavPoint]) -> str:
     """Return Plotly-compatible JSON for the NAV vs benchmark chart."""
-    dates = [n.date for n in nav_history]
-    if not dates:
+    if not nav_history:
         return json.dumps({"data": [], "layout": {}})
 
-    # Normalise both series to 100 at start
     nav0 = nav_history[0].portfolio_nav_sek
-    bench0 = nav_history[0].benchmark_value
+    if nav0 == 0:
+        return json.dumps({"data": [], "layout": {}})
 
-    nav_indexed = [n.portfolio_nav_sek / nav0 * 100 for n in nav_history]
-    bench_indexed = [n.benchmark_value / bench0 * 100 for n in nav_history]
+    nav_indexed = [round(n.portfolio_nav_sek / nav0 * 100, 2) for n in nav_history]
+    dates = [n.date for n in nav_history]
 
     data = [
         {
             "x": dates,
-            "y": [round(v, 2) for v in nav_indexed],
+            "y": nav_indexed,
             "type": "scatter",
             "mode": "lines",
             "name": "Portfolio",
             "line": {"color": "#2563eb", "width": 2},
         },
-        {
+    ]
+
+    # Only render benchmark line if we have real (non-zero) values to index from
+    bench_vals_raw = [n.benchmark_value for n in nav_history]
+    # Forward-fill zeros from the last known value so gaps don't crater the line
+    bench_filled: list[float] = []
+    last_valid = next((v for v in bench_vals_raw if v > 0), None)
+    for v in bench_vals_raw:
+        if v > 0:
+            last_valid = v
+        bench_filled.append(last_valid or 0.0)
+
+    bench0 = bench_filled[0] if bench_filled else 0.0
+    if bench0 > 0:
+        bench_indexed = [round(v / bench0 * 100, 2) if v else None for v in bench_filled]
+        data.append({
             "x": dates,
-            "y": [round(v, 2) for v in bench_indexed],
+            "y": bench_indexed,
             "type": "scatter",
             "mode": "lines",
             "name": "OMXSPI",
             "line": {"color": "#9ca3af", "width": 1.5, "dash": "dot"},
-        },
-    ]
+            "connectgaps": True,
+        })
 
     layout = {
-        "title": "Portfolio vs OMXSPI (indexed to 100)",
-        "xaxis": {"title": "Date", "showgrid": False},
-        "yaxis": {"title": "Indexed value", "showgrid": True, "gridcolor": "#f3f4f6"},
-        "plot_bgcolor": "#ffffff",
-        "paper_bgcolor": "#ffffff",
-        "legend": {"orientation": "h", "y": -0.2},
-        "margin": {"l": 50, "r": 20, "t": 50, "b": 60},
+        "xaxis": {"title": "Date", "showgrid": False, "color": "#94a3b8"},
+        "yaxis": {"title": "Indexed to 100", "showgrid": True, "gridcolor": "rgba(255,255,255,0.06)", "color": "#94a3b8"},
+        "plot_bgcolor": "transparent",
+        "paper_bgcolor": "transparent",
+        "legend": {"orientation": "h", "y": -0.2, "font": {"color": "#94a3b8"}},
+        "margin": {"l": 50, "r": 20, "t": 10, "b": 60},
         "hovermode": "x unified",
+        "font": {"color": "#94a3b8"},
     }
 
     return json.dumps({"data": data, "layout": layout})

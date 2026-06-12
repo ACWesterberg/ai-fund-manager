@@ -379,9 +379,20 @@ def backfill_nav():
     # Sort ascending (get_transactions returns DESC)
     txns = sorted(txns, key=lambda t: t.timestamp)
 
-    # Build benchmark lookup {date_str: close}
+    # Build benchmark lookup {date_str: close}, sorted by date
     bench_rows = store.get_benchmark()
     bench_lookup: dict[str, float] = {r["date"]: r["close"] for r in bench_rows}
+    bench_dates_sorted = sorted(bench_lookup.keys())
+
+    def nearest_bench(date_str: str) -> float:
+        """Return benchmark close for date_str, falling back to nearest available date."""
+        if date_str in bench_lookup:
+            return bench_lookup[date_str]
+        if not bench_dates_sorted:
+            return 0.0
+        # Find closest date (prefer earlier dates so we don't look into the future)
+        earlier = [d for d in bench_dates_sorted if d <= date_str]
+        return bench_lookup[earlier[-1]] if earlier else bench_lookup[bench_dates_sorted[0]]
 
     # Replay transactions: simulate portfolio state at each transaction date
     sim_positions: dict[str, tuple[float, float]] = {}  # ticker -> (shares, avg_cost)
@@ -390,11 +401,10 @@ def backfill_nav():
     # Record starting NAV one day before first transaction (all cash)
     from datetime import timedelta
     start_date = (txns[0].timestamp - timedelta(days=1)).strftime("%Y-%m-%d")
-    bench_start = bench_lookup.get(start_date, list(bench_lookup.values())[0] if bench_lookup else 0.0)
     store.upsert_nav(NavPoint(
         date=start_date,
         portfolio_nav_sek=cfg.capital_sek,
-        benchmark_value=bench_start,
+        benchmark_value=nearest_bench(start_date),
         cash_sek=cfg.capital_sek,
     ))
 
@@ -417,11 +427,10 @@ def backfill_nav():
 
         date_str = txn.timestamp.strftime("%Y-%m-%d")
         nav_cost = sum(s * c for s, c in sim_positions.values()) + cash
-        bench_val = bench_lookup.get(date_str, 0.0)
         store.upsert_nav(NavPoint(
             date=date_str,
             portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_val,
+            benchmark_value=nearest_bench(date_str),
             cash_sek=cash,
         ))
         inserted += 1

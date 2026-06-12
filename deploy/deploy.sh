@@ -36,6 +36,20 @@ UV=$(command -v uv || echo "$HOME/.local/bin/uv")
 "$UV" pip install -e . --quiet
 
 # Restart services (requires sudoers entry — see SETUP.md)
+# Wait if a fund run is currently in progress (avoid killing mid-run)
+log "Checking for active fund run…"
+WAIT=0
+while pgrep -f "fund run" > /dev/null 2>&1; do
+    if [ $WAIT -eq 0 ]; then log "  Fund run in progress — waiting for it to finish…"; fi
+    WAIT=$((WAIT + 5))
+    if [ $WAIT -gt 1800 ]; then
+        log "  ⚠ Waited 30 min — proceeding anyway"
+        break
+    fi
+    sleep 5
+done
+[ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
+
 log "Restarting services…"
 sudo systemctl restart fundmgr-bot fundmgr-web
 

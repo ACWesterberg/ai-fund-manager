@@ -104,7 +104,7 @@ def nav_chart_json(nav_history: list[NavPoint]) -> str:
 
     layout = {
         "xaxis": {"title": "Date", "showgrid": False, "color": "#94a3b8"},
-        "yaxis": {"title": "Indexed to 100", "showgrid": True, "gridcolor": "rgba(255,255,255,0.06)", "color": "#94a3b8"},
+        "yaxis": {"title": "", "showgrid": True, "gridcolor": "rgba(255,255,255,0.06)", "color": "#94a3b8"},
         "plot_bgcolor": "transparent",
         "paper_bgcolor": "transparent",
         "legend": {"orientation": "h", "y": -0.2, "font": {"color": "#94a3b8"}},

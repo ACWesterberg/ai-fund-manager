@@ -96,9 +96,14 @@ async def _send(update: "Update", text: str) -> None:
 # ── Command handlers ──────────────────────────────────────────────────────────
 
 async def cmd_run(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    await update.message.reply_text("⏳ Running weekly decision pipeline (skipping news for speed)…")
+    await update.message.reply_text("⏳ Running weekly decision pipeline (skipping news)…")
     output = _run_cli("run", "--skip-news", timeout=300)
-    await _send(update, output)
+    # fund run sends its own formatted Telegram notification on success;
+    # only echo output back here if something went wrong
+    if "Error" in output or "Traceback" in output or "timed out" in output:
+        await _send(update, f"⚠️ Run finished with errors:\n\n{output[:3000]}")
+    else:
+        await update.message.reply_text("✅ Done — decision summary sent above.")
 
 
 async def cmd_run_full(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -113,8 +118,11 @@ async def cmd_run_full(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     async def _run_and_notify():
         loop = asyncio.get_event_loop()
         output = await loop.run_in_executor(None, lambda: _run_cli("run", timeout=1800))
-        for chunk in _chunk(output):
-            await bot.send_message(chat_id=chat_id, text=chunk)
+        if "Error" in output or "Traceback" in output or "timed out" in output:
+            for chunk in _chunk(f"⚠️ Run finished with errors:\n\n{output}"):
+                await bot.send_message(chat_id=chat_id, text=chunk)
+        else:
+            await bot.send_message(chat_id=chat_id, text="✅ Full run complete — decision summary sent above.")
 
     asyncio.ensure_future(_run_and_notify())
 

@@ -63,6 +63,26 @@ def _get_isin_map() -> dict[str, str]:
     return _isin_map
 
 
+def _name_to_ticker(company_name: str) -> str | None:
+    """Fuzzy match company name against universe as a fallback when ISIN lookup fails."""
+    try:
+        from fundmgr.config import load_universe
+        tickers = load_universe()
+        name_q = company_name.lower().strip()
+        # Exact match
+        for t in tickers:
+            if t.name.lower() == name_q:
+                return t.yahoo_ticker
+        # Substring match (handles "Smart Eye" matching "Smart Eye AB" etc.)
+        for t in tickers:
+            t_name = t.name.lower()
+            if name_q in t_name or t_name in name_q:
+                return t.yahoo_ticker
+    except Exception:
+        pass
+    return None
+
+
 def _run_cli(*args: str, timeout: int = 300) -> str:
     """Run a fund CLI command and return its stdout as a string."""
     cmd = [str(FUND_BIN), *args]
@@ -298,8 +318,9 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         )
         return
 
-    # ISIN → Yahoo ticker lookup
+    # ISIN → name fallback → Yahoo ticker lookup
     isin = (data.get("isin") or "").strip().upper()
+    company_name = (data.get("company_name") or "").strip()
     ticker = None
     isin_status = ""
 
@@ -307,9 +328,14 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         isin_map = _get_isin_map()
         ticker = isin_map.get(isin)
         if ticker:
-            isin_status = f"✅ matched in universe"
+            isin_status = "✅ matched by ISIN"
         else:
-            isin_status = f"⚠️ not in universe — verify ticker"
+            # Fallback: fuzzy company name match
+            ticker = _name_to_ticker(company_name)
+            if ticker:
+                isin_status = "✅ matched by name"
+            else:
+                isin_status = "⚠️ not found in universe"
 
     confidence = float(data.get("confidence") or 0.0)
     conf_bar   = "🟢" if confidence >= 0.85 else "🟡" if confidence >= 0.60 else "🔴"
@@ -317,7 +343,7 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     trade_date = (data.get("trade_date") or "").strip() or None
 
     lines = ["🧾 <b>Extracted from screenshot</b>\n"]
-    lines.append(f"Company: {data.get('company_name') or '?'}")
+    lines.append(f"Company: {company_name or '?'}")
     if isin:
         lines.append(f"ISIN: <code>{isin}</code>  {isin_status}")
     lines.append(f"Ticker: <b>{ticker or '?'}</b>")
@@ -329,17 +355,23 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         lines.append(f"Date: <b>{trade_date}</b>")
     lines.append(f"\n{conf_bar} Confidence: {confidence:.0%}")
 
+    chat_id = update.effective_chat.id
+
     if not ticker:
-        date_flag = f" --date {trade_date}" if trade_date else ""
-        lines.append(
-            "\n⚠️ Ticker not found — edit and use:\n"
-            f"/fill TICKER {data.get('shares','?')} {data.get('price_sek','?')} {data.get('fee_sek','?')} {data.get('side','buy')}{date_flag}"
-        )
+        # Store pending fill without ticker — ask user to reply with it
+        _pending_fills[chat_id] = {
+            "ticker":     None,
+            "side":       data.get("side", "buy"),
+            "shares":     data.get("shares"),
+            "price":      data.get("price_sek"),
+            "fee":        data.get("fee_sek", 0),
+            "trade_date": trade_date,
+        }
+        lines.append("\n📝 Reply with the ticker (e.g. <code>SEYE.ST</code>) to confirm.")
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         return
 
     # Store pending fill and show confirm / cancel buttons
-    chat_id = update.effective_chat.id
     _pending_fills[chat_id] = {
         "ticker":     ticker,
         "side":       data.get("side", "buy"),
@@ -398,6 +430,39 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     await query.edit_message_text(f"✅ Fill recorded!\n\n{output}")
 
 
+async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Catch a plain ticker reply when a pending fill is waiting for one."""
+    chat_id = update.effective_chat.id
+    pending = _pending_fills.get(chat_id)
+    if not pending or pending.get("ticker"):
+        return  # not waiting for a ticker — ignore
+
+    text = (update.message.text or "").strip().upper()
+    # Basic ticker sanity check: letters, digits, dots, dashes
+    if not re.match(r'^[A-Z0-9][A-Z0-9\-\.]{1,15}$', text):
+        await update.message.reply_text("That doesn't look like a ticker. Try again (e.g. <code>SEYE.ST</code>).", parse_mode="HTML")
+        return
+
+    pending["ticker"] = text
+    _pending_fills[chat_id] = pending
+
+    data = pending
+    lines = [f"🧾 <b>Confirm fill</b>\n"]
+    lines.append(f"Ticker: <b>{text}</b>")
+    lines.append(f"Side: <b>{data['side'].upper()}</b>")
+    lines.append(f"Shares: <b>{data['shares']}</b>")
+    lines.append(f"Price: <b>{data['price']} SEK</b>")
+    lines.append(f"Fee: <b>{data['fee']} SEK</b>")
+    if data.get("trade_date"):
+        lines.append(f"Date: <b>{data['trade_date']}</b>")
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),
+        InlineKeyboardButton("✗ Cancel",      callback_data="fill_cancel"),
+    ]])
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=keyboard)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -430,6 +495,7 @@ def main() -> None:
     # Screenshot fill extraction
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(fill_callback, pattern="^fill_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     log.info("Bot polling… (Ctrl+C to stop)")
     app.run_polling(allowed_updates=["message", "callback_query"])

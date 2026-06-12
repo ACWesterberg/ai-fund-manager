@@ -5,12 +5,22 @@
 {% block content %}
 
 <!-- ── KPI strip ── -->
-<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
 
   <div class="kpi-card">
     <div class="kpi-label">NAV</div>
     <div class="kpi-value">{{ "{:,.0f}".format(nav) }}</div>
     <div class="kpi-sub">SEK</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-label">Total P&amp;L</div>
+    <div class="kpi-value {{ 'ret-pos' if pnl_sek > 0 else 'ret-neg' if pnl_sek < 0 else 'ret-neu' }}">
+      {{ "{:+,.0f}".format(pnl_sek) }}
+    </div>
+    <div class="kpi-sub {{ 'ret-pos' if pnl_pct > 0 else 'ret-neg' if pnl_pct < 0 else 'ret-neu' }}">
+      {{ "{:+.2f}".format(pnl_pct) }}% vs initial
+    </div>
   </div>
 
   <div class="kpi-card">

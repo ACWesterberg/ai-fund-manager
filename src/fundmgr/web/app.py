@@ -141,6 +141,9 @@ def index(request: Request):
         except Exception:
             pass
 
+    pnl_sek = round(nav - cfg.capital_sek, 0)
+    pnl_pct = round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0
+
     return _render("index.html", {
         "request": request,
         "positions": positions_data,
@@ -151,6 +154,8 @@ def index(request: Request):
         "stats": stats,
         "has_history": len(nav_history) >= 2,
         "last_run": last_run,
+        "pnl_sek": pnl_sek,
+        "pnl_pct": pnl_pct,
         "active_page": "portfolio",
     })
 

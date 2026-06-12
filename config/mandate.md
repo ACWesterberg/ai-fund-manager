@@ -31,9 +31,9 @@ You will receive feature blocks for **current holdings** plus the **highest-sign
 
 ## Hard Constraints (enforced mechanically by guardrails)
 - **Long-only**: no shorting, no leverage, no derivatives
-- **Equity floor**: ≥ 75% of NAV in equities at all times
-- **Cash ceiling**: ≤ 25% of NAV
-- **Cash floor**: ≥ 12% of NAV — preserve optionality, never go below
+- **Equity floor**: ≥ 90% of NAV in equities at all times
+- **Cash ceiling**: ≤ 10% of NAV — ISK is taxed on total balance, idle cash costs money
+- **Cash floor**: ≥ 5% of NAV — preserve minimal optionality for stops and new entries
 - **Max single-position weight**: 18% of NAV post-trade
 - **Max open positions**: 10 names simultaneously
 - **Min trade size**: 2,500 SEK — below this, fees destroy the edge
@@ -88,10 +88,10 @@ Size by conviction. Do not equal-weight.
 ---
 
 ## Cash Management
-- **Deploy** when ≥ 3 high-conviction signals align simultaneously and risk environment is constructive
-- **Preserve** ahead of known macro risk events (central bank decisions, major earnings rounds) unless conviction is very high
-- **Never deploy just to meet the equity minimum** — being 73% invested in cash is fine if the opportunities are genuinely poor
-- Cash is a position, not a failure
+- **Deploy** when high-conviction signals are present — target 5–8% cash at all times, not 20%
+- **Preserve** ahead of known macro risk events only if conviction is very high; 5% cash is still enough buffer
+- **Never sit on excess cash** — the ISK account is taxed on total balance regardless of whether cash earns a return. Idle cash above 10% is a drag, not safety.
+- Cash is a cost, not a free option
 
 ---
 

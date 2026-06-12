@@ -12,8 +12,8 @@ llm:
 risk:
   max_position_pct: 18      # max single-name weight
   max_positions: 10
-  min_cash_pct: 12          # always keep dry powder
-  max_cash_pct: 25          # enforce ≥75% equity
+  min_cash_pct: 5           # always keep dry powder
+  max_cash_pct: 10          # ISK taxed on total balance — minimise idle cash
   min_trade_sek: 2500       # below this, fees eat returns
   max_turnover_pct: 25      # max % of NAV traded per run
   stale_after_days: 5       # block buys if price data older than N trading days

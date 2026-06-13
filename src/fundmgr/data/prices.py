@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import pandas as pd
-import yfinance as yf
+import yfinance as yf  # still needed for batch price download
 
 from fundmgr.config import AppConfig, UniverseTicker
 from fundmgr.state.store import Store
@@ -26,12 +26,29 @@ class TickerFeatures:
     rsi_14: float | None = None
     above_ma50: bool | None = None
     above_ma200: bool | None = None
-    # Fundamentals (yfinance, may be None for many SE tickers)
-    pe_ratio: float | None = None
-    pb_ratio: float | None = None
+    # ── Valuation (filled from fundamentals cache) ───────────────────────────
+    pe_ratio: float | None = None           # trailing P/E
+    forward_pe: float | None = None         # forward P/E
+    pb_ratio: float | None = None           # price / book
+    ev_to_ebitda: float | None = None       # enterprise value / EBITDA
+    price_to_sales: float | None = None     # trailing P/S
+    market_cap_msek: float | None = None    # market cap, millions (native currency)
     dividend_yield_pct: float | None = None
-    market_cap_msek: float | None = None
-    # Sentiment (filled by news pipeline)
+    # ── Quality / profitability ───────────────────────────────────────────────
+    gross_margin_pct: float | None = None
+    profit_margin_pct: float | None = None
+    roe_pct: float | None = None            # return on equity
+    debt_to_equity: float | None = None
+    # ── Growth ───────────────────────────────────────────────────────────────
+    revenue_growth_pct: float | None = None
+    earnings_growth_pct: float | None = None
+    # ── Market / risk ────────────────────────────────────────────────────────
+    beta: float | None = None
+    pct_from_52w_high: float | None = None  # negative = below high
+    # ── Analyst consensus ────────────────────────────────────────────────────
+    analyst_target_pct: float | None = None  # mean target % upside vs current price
+    analyst_count: int | None = None
+    # ── Sentiment (filled by news pipeline) ──────────────────────────────────
     sentiment_label: str | None = None    # positive | negative | neutral
     sentiment_score: float | None = None
     news_count: int = 0
@@ -45,48 +62,83 @@ class TickerFeatures:
 
     def to_prompt_block(self) -> str:
         """Compact text block for the LLM prompt."""
-        fx_note = f"  ⚠ FX: trades in {self.currency} — SEK conversion cost applies" if self.needs_fx else ""
         lines = [f"[{self.ticker}] {self.name}"]
-        lines.append(f"  Price: {self.last_price:.2f} SEK  (as of {self.last_date})")
-        if fx_note:
-            lines.append(fx_note)
 
+        price_line = f"  Price: {self.last_price:.2f}  (as of {self.last_date})"
+        if self.needs_fx:
+            price_line += f"  [FX: {self.currency}]"
+        if self.market_cap_msek is not None:
+            price_line += f"  mktcap {self.market_cap_msek:,.0f}M"
+        lines.append(price_line)
+
+        # Returns
         ret_parts = []
-        if self.return_1d_pct is not None:
-            ret_parts.append(f"1d {self.return_1d_pct:+.1f}%")
-        if self.return_5d_pct is not None:
-            ret_parts.append(f"5d {self.return_5d_pct:+.1f}%")
-        if self.return_20d_pct is not None:
-            ret_parts.append(f"20d {self.return_20d_pct:+.1f}%")
-        if self.return_60d_pct is not None:
-            ret_parts.append(f"60d {self.return_60d_pct:+.1f}%")
+        for label, val in (("1d", self.return_1d_pct), ("5d", self.return_5d_pct),
+                           ("20d", self.return_20d_pct), ("60d", self.return_60d_pct)):
+            if val is not None:
+                ret_parts.append(f"{label} {val:+.1f}%")
+        if self.pct_from_52w_high is not None:
+            ret_parts.append(f"52wH {self.pct_from_52w_high:+.1f}%")
         if ret_parts:
             lines.append(f"  Returns: {', '.join(ret_parts)}")
 
+        # Technical
         tech_parts = []
         if self.vol_20d_ann_pct is not None:
             tech_parts.append(f"vol {self.vol_20d_ann_pct:.0f}%")
         if self.rsi_14 is not None:
             tech_parts.append(f"RSI {self.rsi_14:.0f}")
         if self.above_ma50 is not None:
-            tech_parts.append(f"{'above' if self.above_ma50 else 'below'} MA50")
+            tech_parts.append(f"{'▲' if self.above_ma50 else '▼'} MA50")
         if self.above_ma200 is not None:
-            tech_parts.append(f"{'above' if self.above_ma200 else 'below'} MA200")
+            tech_parts.append(f"{'▲' if self.above_ma200 else '▼'} MA200")
+        if self.beta is not None:
+            tech_parts.append(f"β {self.beta:.2f}")
         if tech_parts:
             lines.append(f"  Technical: {', '.join(tech_parts)}")
 
-        fund_parts = []
-        if self.pe_ratio is not None:
-            fund_parts.append(f"P/E {self.pe_ratio:.1f}x")
-        if self.pb_ratio is not None:
-            fund_parts.append(f"P/B {self.pb_ratio:.1f}x")
+        # Valuation
+        val_parts = []
+        for label, val in (
+            ("P/E", self.pe_ratio), ("fP/E", self.forward_pe),
+            ("P/B", self.pb_ratio), ("EV/EBITDA", self.ev_to_ebitda),
+            ("P/S", self.price_to_sales),
+        ):
+            if val is not None:
+                val_parts.append(f"{label} {val:.1f}x")
         if self.dividend_yield_pct is not None:
-            fund_parts.append(f"yield {self.dividend_yield_pct:.1f}%")
-        if self.market_cap_msek is not None:
-            fund_parts.append(f"mkt cap {self.market_cap_msek:,.0f}M SEK")
-        if fund_parts:
-            lines.append(f"  Fundamentals: {', '.join(fund_parts)}")
+            val_parts.append(f"div {self.dividend_yield_pct:.1f}%")
+        if val_parts:
+            lines.append(f"  Valuation: {', '.join(val_parts)}")
 
+        # Quality / profitability
+        qual_parts = []
+        if self.gross_margin_pct is not None:
+            qual_parts.append(f"gm {self.gross_margin_pct:.1f}%")
+        if self.profit_margin_pct is not None:
+            qual_parts.append(f"nm {self.profit_margin_pct:.1f}%")
+        if self.roe_pct is not None:
+            qual_parts.append(f"ROE {self.roe_pct:.1f}%")
+        if self.debt_to_equity is not None:
+            qual_parts.append(f"D/E {self.debt_to_equity:.1f}")
+        if qual_parts:
+            lines.append(f"  Quality: {', '.join(qual_parts)}")
+
+        # Growth
+        grow_parts = []
+        if self.revenue_growth_pct is not None:
+            grow_parts.append(f"rev {self.revenue_growth_pct:+.1f}%")
+        if self.earnings_growth_pct is not None:
+            grow_parts.append(f"earn {self.earnings_growth_pct:+.1f}%")
+        if grow_parts:
+            lines.append(f"  Growth (YoY): {', '.join(grow_parts)}")
+
+        # Analyst consensus
+        if self.analyst_target_pct is not None:
+            count_str = f" ({self.analyst_count} analysts)" if self.analyst_count else ""
+            lines.append(f"  Analysts: mean target {self.analyst_target_pct:+.1f}% upside{count_str}")
+
+        # Sentiment
         if self.sentiment_label:
             lines.append(
                 f"  Sentiment: {self.sentiment_label} ({self.sentiment_score:.2f}) "
@@ -96,7 +148,7 @@ class TickerFeatures:
             lines.append("  Sentiment: no recent news")
 
         if self.is_stale:
-            lines.append(f"  ⚠ DATA STALE ({self.data_age_trading_days} trading days old)")
+            lines.append(f"  ⚠ DATA STALE ({self.data_age_trading_days}d old)")
 
         return "\n".join(lines)
 
@@ -277,7 +329,7 @@ def compute_features(
     last_price = rows[-1]["close"]
     age = _count_trading_days_since(last_date)
 
-    feat = TickerFeatures(
+    return TickerFeatures(
         ticker=ticker.yahoo_ticker,
         name=ticker.name,
         last_price=last_price,
@@ -294,24 +346,6 @@ def compute_features(
         above_ma50=bool(last_price > closes.rolling(50).mean().iloc[-1]) if len(closes) >= 50 else None,
         above_ma200=bool(last_price > closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else None,
     )
-
-    # Fundamentals via yfinance (best-effort)
-    try:
-        info = yf.Ticker(ticker.yahoo_ticker).fast_info
-        feat.pe_ratio = _safe_float(getattr(info, "pe_ratio", None))
-        feat.market_cap_msek = _safe_float(getattr(info, "market_cap", None), scale=1e-6)
-    except Exception:
-        pass
-
-    try:
-        full_info = yf.Ticker(ticker.yahoo_ticker).info
-        feat.pb_ratio = _safe_float(full_info.get("priceToBook"))
-        dy = full_info.get("dividendYield")
-        feat.dividend_yield_pct = round(dy * 100, 2) if dy else None
-    except Exception:
-        pass
-
-    return feat
 
 
 def _safe_float(val, scale: float = 1.0) -> float | None:

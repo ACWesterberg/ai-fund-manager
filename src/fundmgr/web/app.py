@@ -294,6 +294,7 @@ async def api_positions():
 
 @app.get("/universe", response_class=HTMLResponse)
 async def universe(request: Request):
+    cfg, store = _get_deps()
     tickers = load_universe(cfg.universe_path)
     by_exchange: dict[str, list] = {}
     for t in tickers:

@@ -136,23 +136,30 @@ sudo systemctl restart fundmgr-bot fundmgr-web
 
 ---
 
-## 7. Weekly cron job
+## 7. Set timezone + cron jobs
 
-Run the full pipeline every Monday at 07:00:
+Set the Pi timezone so cron times track DST automatically:
+
+```bash
+sudo timedatectl set-timezone Europe/Stockholm
+date   # should show CET or CEST
+```
+
+Then install the cron jobs:
 
 ```bash
 crontab -e
 ```
 
-Add:
+Paste the contents of `deploy/cron.example` — see that file for the full schedule with comments. Summary:
 
-```cron
-# AI Fund Manager — weekly run
-0 7 * * 1 /home/pi/ai-fund-manager/.venv/bin/fund run >> /home/pi/ai-fund-manager/data/logs/cron.log 2>&1
-
-# Optional: check stop-losses daily at 17:30
-# 30 17 * * 1-5 /home/pi/ai-fund-manager/.venv/bin/fund check-stops >> /home/pi/ai-fund-manager/data/logs/cron.log 2>&1
-```
+| Fund | Job | Time (CET) | Reason |
+|------|-----|------------|--------|
+| Nordic | Weekly run | Mon 09:30 | 30 min after OMX opens |
+| Nordic | News checks | Weekdays 09/11/14/16 | Full trading day coverage |
+| Nordic | Stop-loss | Weekdays 17:45 | 15 min after OMX closes |
+| Global sim | Weekly run | Mon 16:00 | NYSE open 30 min + EU still live |
+| Global sim | Stop-loss | Weekdays 22:15 | 15 min after NYSE closes |
 
 ---
 

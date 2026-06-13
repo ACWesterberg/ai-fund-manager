@@ -1,12 +1,37 @@
-# Add to crontab with: crontab -e
-# All times are Pi local time — adjust if your Pi is set to UTC.
+# AI Fund Manager — crontab
+#
+# IMPORTANT: set the Pi timezone first so times here track DST automatically:
+#   sudo timedatectl set-timezone Europe/Stockholm
+#   date   # verify
+#
+# Install with: crontab -e   (then paste the lines below)
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Weekly decision run — every Monday at 07:00
-0 7 * * 1 cd /home/pi/ai-fund-manager && .venv/bin/fund run >> data/logs/weekly.log 2>&1
+# ═══ NORDIC FUND (real trades) — OMX Stockholm, opens 09:00 CET ══════════════
 
-# News trigger check — every weekday at 09:00, 12:00, 15:00, 17:00
-# Scans recent headlines; auto-triggers 'fund run' if a held position gets bad news.
-0 9,12,15,17 * * 1-5 cd /home/pi/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+# Weekly decision run — Monday 09:30 CET
+# 30 min after open: price discovery done, spreads tight, full day ahead
+30 9 * * 1 cd /home/pi/ai-fund-manager && .venv/bin/fund run >> data/logs/weekly.log 2>&1
 
-# Daily stop-loss check — every weekday at 17:30 (after market close)
-30 17 * * 1-5 cd /home/pi/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
+# News trigger checks — weekdays during Nordic trading hours
+# Covers morning open, mid-session, early and late afternoon
+0 9,11,14,16 * * 1-5 cd /home/pi/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+
+# Stop-loss check — weekdays 17:45 CET (15 min after OMX closes at 17:30)
+45 17 * * 1-5 cd /home/pi/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
+
+
+# ═══ GLOBAL SIMULATION FUND — NYSE/NASDAQ + European overlap ═════════════════
+#
+# Best execution window: 16:00 CET
+#   - NYSE/NASDAQ open at 15:30 CET → 30 min in, opening noise settled
+#   - European markets (XETRA, Euronext, LSE) still open until 17:30 CET
+#   - Only window where both hemispheres are live simultaneously
+#
+# --skip-news: Nordic RSS feeds don't cover US/global stocks
+
+# Weekly decision run — Monday 16:00 CET
+0 16 * * 1 cd /home/pi/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund run --skip-news >> data/logs/weekly_global.log 2>&1
+
+# Stop-loss check — weekdays 22:15 CET (15 min after NYSE closes at ~22:00 CET)
+15 22 * * 1-5 cd /home/pi/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1

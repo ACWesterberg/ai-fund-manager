@@ -9,6 +9,7 @@ import click
 
 from fundmgr.config import load_config, get_enabled_tickers
 from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
+from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
@@ -58,7 +59,8 @@ def init(capital: float | None):
 @click.option("--force-refresh", is_flag=True, help="Re-fetch all prices even if cached")
 @click.option("--skip-news", is_flag=True, help="Skip Nordic RSS + FinBERT sentiment step (faster)")
 @click.option("--skip-macro", is_flag=True, help="Skip global macro context fetch (no yfinance indicator or news fetch)")
-def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
+@click.option("--skip-fundamentals", is_flag=True, help="Skip fundamentals cache refresh (use cached data as-is)")
+def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, skip_fundamentals: bool):
     """Ingest data, call the LLM, apply guardrails, and emit the action list."""
     cfg, store = _get_store()
     if not store.is_initialised():
@@ -72,7 +74,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
     click.echo(f"{'═'*56}")
 
     # ── Step 1: Fetch prices ──────────────────────────────────────────────────
-    click.echo(f"\n[1/5] Fetching prices for {len(tickers)} tickers…")
+    click.echo(f"\n[1/6] Fetching prices for {len(tickers)} tickers…")
     fetch_result = fetch_and_cache_prices(tickers, store, cfg.data.lookback_days, force_refresh)
     ok = sum(1 for v in fetch_result.values() if v)
     failed = [sym for sym, v in fetch_result.items() if not v]
@@ -80,15 +82,28 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
     if failed:
         click.echo(f"      ✗ Failed: {', '.join(failed)}")
 
-    # ── Step 2: Fetch benchmark ────────────────────────────────────────────────
-    click.echo(f"\n[2/5] Fetching benchmark ({cfg.benchmark})…")
+    # ── Step 2: Fetch / refresh fundamentals cache (weekly TTL) ───────────────
+    ticker_symbols = [t.yahoo_ticker for t in tickers]
+    if not skip_fundamentals:
+        stale_count = len(store.get_stale_fundamentals_tickers(ticker_symbols, ttl_days=7))
+        click.echo(f"\n[2/6] Fundamentals cache — {stale_count} tickers need refresh…")
+        if stale_count > 0:
+            refreshed = fetch_and_cache_fundamentals(ticker_symbols, store, ttl_days=7, max_workers=12)
+            click.echo(f"      {refreshed}/{stale_count} refreshed")
+        else:
+            click.echo(f"      All fresh (TTL 7d)")
+    else:
+        click.echo(f"\n[2/6] Fundamentals refresh skipped.")
+
+    # ── Step 3: Fetch benchmark ────────────────────────────────────────────────
+    click.echo(f"\n[3/6] Fetching benchmark ({cfg.benchmark})…")
     bench_ok = fetch_and_cache_benchmark(store, cfg.benchmark, cfg.data.lookback_days, force_refresh)
     click.echo(f"      {'✓ OK' if bench_ok else '✗ Failed'}")
 
-    # ── Step 3: Nordic news + FinBERT sentiment ───────────────────────────────
+    # ── Step 4: Nordic news + FinBERT sentiment ───────────────────────────────
     since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
     if not skip_news and cfg.data.news_feeds:
-        click.echo(f"\n[3/5] Fetching Nordic news from {len(cfg.data.news_feeds)} feeds…")
+        click.echo(f"\n[4/6] Fetching Nordic news from {len(cfg.data.news_feeds)} feeds…")
         ticker_news = fetch_news(cfg.data.news_feeds, tickers, max_age_hours=72)
         total_headlines = sum(len(v) for v in ticker_news.values())
         click.echo(f"      {total_headlines} matched headlines across {len(ticker_news)} tickers")
@@ -98,27 +113,29 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool):
                 ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device
             )
     else:
-        click.echo(f"\n[3/5] Nordic news skipped.")
+        click.echo(f"\n[4/6] Nordic news skipped.")
 
-    # ── Step 4: Global macro context ─────────────────────────────────────────
+    # ── Step 5: Global macro context ─────────────────────────────────────────
     macro_block = ""
     if not skip_macro:
-        click.echo(f"\n[4/5] Fetching global macro context…")
+        click.echo(f"\n[5/6] Fetching global macro context…")
         macro_indicators = fetch_macro_indicators()
         macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
         macro_block = build_macro_block(macro_indicators, macro_headlines)
         ind_ok = sum(1 for i in macro_indicators if i.price is not None)
         click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
     else:
-        click.echo(f"\n[4/5] Global macro context skipped.")
+        click.echo(f"\n[5/6] Global macro context skipped.")
 
-    # ── Step 5: Compute features ──────────────────────────────────────────────
-    click.echo(f"\n[5/5] Computing features…")
+    # ── Step 6: Compute features + attach fundamentals & sentiment ────────────
+    click.echo(f"\n[6/6] Computing features…")
     features = build_all_features(tickers, store, cfg, fetch_result)
+    apply_to_features(features, store)
     attach_sentiment_to_features(features, store, since_date=since_news)
 
+    fund_count = sum(1 for f in features.values() if f.ev_to_ebitda is not None or f.revenue_growth_pct is not None)
     stale = [sym for sym, f in features.items() if f.is_stale]
-    click.echo(f"      {len(features)} tickers with features computed")
+    click.echo(f"      {len(features)} tickers with features  ({fund_count} with fundamentals data)")
     if stale:
         click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
 
@@ -536,6 +553,12 @@ def check_stops(quiet: bool):
     import urllib.parse
     import urllib.request as _req
     import yfinance as yf
+
+    # Markets are closed on weekends — nothing to check
+    if datetime.utcnow().weekday() >= 5:
+        if not quiet:
+            click.echo("Weekend — markets closed, skipping stop-loss check.")
+        return
 
     cfg, store = _get_store()
     positions = store.get_positions()

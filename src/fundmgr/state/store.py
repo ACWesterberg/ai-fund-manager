@@ -99,6 +99,14 @@ CREATE TABLE IF NOT EXISTS benchmark_cache (
     fetched_at  TEXT NOT NULL
 );
 
+-- Weekly fundamentals cache (valuation, growth, quality from yfinance .info).
+-- Refreshed at most once per ttl_days to keep runs fast.
+CREATE TABLE IF NOT EXISTS fundamentals_cache (
+    ticker      TEXT PRIMARY KEY,
+    data_json   TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL
+);
+
 -- Per-ticker news sentiment cache.
 CREATE TABLE IF NOT EXISTS news_cache (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -575,6 +583,49 @@ class Store:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (datetime.utcnow().isoformat(), ticker, headline, sentiment_label, sentiment_score, article_hash),
             )
+
+    # ── Fundamentals cache ────────────────────────────────────────────────────
+
+    def save_fundamentals(self, ticker: str, data: dict) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO fundamentals_cache (ticker, data_json, fetched_at) "
+                "VALUES (?, ?, ?)",
+                (ticker, json.dumps(data), now),
+            )
+
+    def get_fundamentals(self, ticker: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT data_json FROM fundamentals_cache WHERE ticker = ?", (ticker,)
+            ).fetchone()
+        return json.loads(row["data_json"]) if row else None
+
+    def get_stale_fundamentals_tickers(self, tickers: list[str], ttl_days: int = 7) -> list[str]:
+        """Return tickers whose fundamentals cache entry is missing or older than ttl_days."""
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=ttl_days)).isoformat()
+        with self._conn() as conn:
+            fresh = {
+                row["ticker"]
+                for row in conn.execute(
+                    "SELECT ticker FROM fundamentals_cache WHERE fetched_at > ?", (cutoff,)
+                ).fetchall()
+            }
+        return [t for t in tickers if t not in fresh]
+
+    def get_all_fundamentals(self, tickers: list[str]) -> dict[str, dict]:
+        """Return cached fundamentals for all requested tickers as {ticker: data_dict}."""
+        if not tickers:
+            return {}
+        placeholders = ",".join("?" * len(tickers))
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT ticker, data_json FROM fundamentals_cache WHERE ticker IN ({placeholders})",
+                tickers,
+            ).fetchall()
+        return {r["ticker"]: json.loads(r["data_json"]) for r in rows}
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

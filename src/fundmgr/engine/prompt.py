@@ -40,21 +40,60 @@ def _portfolio_block(snap: PortfolioSnapshot, benchmark_return: float | None) ->
     return "\n".join(lines)
 
 
-def _risk_limits_block(cfg: AppConfig, snap: PortfolioSnapshot) -> str:
-    return (
-        "## Risk Limits (hard constraints)\n"
-        f"  Max single-name weight: {cfg.risk.max_position_pct}%\n"
-        f"  Max open positions: {cfg.risk.max_positions}\n"
-        f"  Cash range: {cfg.risk.min_cash_pct}% – {cfg.risk.max_cash_pct}%\n"
-        f"  Min trade size: {cfg.risk.min_trade_sek:,.0f} SEK\n"
+def _sector_weights_block(
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+    max_sector_pct: float,
+) -> str:
+    """Compute current sector weights from held positions and feature sector tags."""
+    if not snap.positions:
+        return ""
+    nav = snap.nav_sek
+    if nav <= 0:
+        return ""
+
+    sector_values: dict[str, float] = {}
+    for p in snap.positions:
+        feat = features.get(p.ticker)
+        sector = feat.sector if feat and feat.sector else "Unknown"
+        sector_values[sector] = sector_values.get(sector, 0.0) + p.market_value_sek
+
+    if not sector_values:
+        return ""
+
+    lines = [f"  Current sector exposure (cap {max_sector_pct:.0f}%):"]
+    for sector, val in sorted(sector_values.items(), key=lambda x: x[1], reverse=True):
+        pct = val / nav * 100
+        headroom = max_sector_pct - pct
+        flag = " ⚠ near cap" if headroom < 5 else ""
+        lines.append(f"    {sector:<30} {pct:>5.1f}%  (headroom {headroom:.1f}%){flag}")
+    return "\n".join(lines)
+
+
+def _risk_limits_block(
+    cfg: AppConfig,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+) -> str:
+    sector_block = _sector_weights_block(snap, features, cfg.risk.max_sector_pct)
+    lines = [
+        "## Risk Limits (hard constraints)",
+        f"  Max single-name weight: {cfg.risk.max_position_pct}%",
+        f"  Max sector weight: {cfg.risk.max_sector_pct}% of NAV per GICS sector",
+        f"  Max open positions: {cfg.risk.max_positions}",
+        f"  Cash range: {cfg.risk.min_cash_pct}% – {cfg.risk.max_cash_pct}%",
+        f"  Min trade size: {cfg.risk.min_trade_sek:,.0f} SEK",
         f"  Max turnover this run: {cfg.risk.max_turnover_pct}% of NAV "
-        f"(≈{snap.nav_sek * cfg.risk.max_turnover_pct / 100:,.0f} SEK)\n"
+        f"(≈{snap.nav_sek * cfg.risk.max_turnover_pct / 100:,.0f} SEK)",
         f"  Fee: {cfg.fees.rate*100:.2f}% per trade "
-        f"(min {cfg.fees.min_sek:.0f} SEK, max {cfg.fees.max_sek:.0f} SEK)\n"
-        "  FX cost: non-SEK stocks (DK/NO/FI) incur a 0.10% currency conversion spread (Montrose rate) on top of brokerage.\n"
-        "  Prefer SEK-denominated stocks when conviction is equal. Only buy foreign stocks for clear alpha.\n"
-        "Guardrails enforce these mechanically — size your recommendations within them."
-    )
+        f"(min {cfg.fees.min_sek:.0f} SEK, max {cfg.fees.max_sek:.0f} SEK)",
+        "  FX cost: non-SEK stocks incur a 0.10% currency conversion spread on top of brokerage.",
+        "  Prefer SEK-denominated stocks when conviction is equal. Only buy foreign stocks for clear alpha.",
+    ]
+    if sector_block:
+        lines.append(sector_block)
+    lines.append("Guardrails enforce these mechanically — size your recommendations within them.")
+    return "\n".join(lines)
 
 
 def _learnings_block(learnings: list[Learning]) -> str:
@@ -94,6 +133,15 @@ def _signal_score(f: TickerFeatures) -> float:
     # Trend alignment
     if f.above_ma50 and f.above_ma200:
         score += 1.0
+    # Penalise earnings imminent (binary event risk)
+    if f.days_to_earnings is not None:
+        if 0 <= f.days_to_earnings <= 2:
+            score -= 4.0
+        elif 0 <= f.days_to_earnings <= 5:
+            score -= 1.5
+    # Volume confirmation
+    if f.rel_volume is not None and f.rel_volume > 2.5:
+        score += 1.5
     # Penalise stale data
     if f.is_stale:
         score -= 3.0
@@ -174,7 +222,7 @@ def build_prompt(
     sections += [
         _portfolio_block(snap, bench_return),
         "",
-        _risk_limits_block(cfg, snap),
+        _risk_limits_block(cfg, snap, features),
         "",
     ]
 

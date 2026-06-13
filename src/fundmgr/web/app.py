@@ -5,9 +5,13 @@ import hmac
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import yfinance as yf
+
+_price_cache: dict[frozenset, tuple[float, dict[str, float]]] = {}
+_PRICE_TTL = 300  # seconds
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -49,9 +53,15 @@ def _get_deps():
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
-    """Fetch current prices for a list of tickers. Returns empty dict on failure."""
+    """Fetch current prices, cached for 5 minutes to avoid blocking on every page load."""
     if not tickers:
         return {}
+    key = frozenset(tickers)
+    now = time.time()
+    if key in _price_cache:
+        ts, data = _price_cache[key]
+        if now - ts < _PRICE_TTL:
+            return data
     try:
         if len(tickers) == 1:
             raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
@@ -59,17 +69,19 @@ def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
             if hasattr(close, "columns"):
                 close = close.iloc[:, 0]
             close = close.dropna()
-            return {tickers[0]: float(close.iloc[-1])} if not close.empty else {}
-        raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
-        close_df = raw.get("Close")
-        if close_df is None or close_df.empty:
-            return {}
-        result = {}
-        for t in tickers:
-            if t in close_df.columns:
-                series = close_df[t].dropna()
-                if not series.empty:
-                    result[t] = float(series.iloc[-1])
+            result = {tickers[0]: float(close.iloc[-1])} if not close.empty else {}
+        else:
+            raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
+            close_df = raw.get("Close")
+            result = {}
+            if close_df is not None and not close_df.empty:
+                for t in tickers:
+                    if t in close_df.columns:
+                        series = close_df[t].dropna()
+                        if not series.empty:
+                            result[t] = float(series.iloc[-1])
+        if result:
+            _price_cache[key] = (now, result)
         return result
     except Exception:
         return {}

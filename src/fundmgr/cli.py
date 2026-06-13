@@ -221,6 +221,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
 
+        # Persist stop-losses per position so check-stops survives multiple runs
+        for action in guardrail_result.approved_actions:
+            if action.side == "buy" and action.stop_loss_pct:
+                store.set_position_stop(action.ticker, action.stop_loss_pct)
+            elif action.side == "sell" and action.target_weight_pct == 0:
+                store.clear_position_stop(action.ticker)
+
         # Record NAV snapshot for portfolio chart
         bench_rows = store.get_benchmark()
         bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
@@ -567,16 +574,7 @@ def check_stops(quiet: bool):
             click.echo("No open positions.")
         return
 
-    last_rec = store.get_last_recommendation()
-    stop_map: dict[str, float] = {}
-    if last_rec:
-        try:
-            actions = json.loads(last_rec.actions_json)
-            for a in actions:
-                if a.get("stop_loss_pct") and a.get("ticker"):
-                    stop_map[a["ticker"]] = a["stop_loss_pct"]
-        except Exception:
-            pass
+    stop_map = store.get_position_stops()
 
     if not quiet:
         click.echo("\n─── Stop-Loss Check ─────────────────────────────────")
@@ -620,9 +618,27 @@ def check_stops(quiet: bool):
         click.echo()
         if stops_hit:
             click.echo(f"  ⚠ Stop-loss triggered for: {', '.join(t for t, *_ in stops_hit)}")
-            click.echo("  Consider selling — run 'fund run' to get updated recommendations.")
+            if cfg.auto_fill:
+                click.echo("  Auto-executing stop sells (simulation fund)…")
+            else:
+                click.echo("  Consider selling — run 'fund run' to get updated recommendations.")
         else:
             click.echo("  All positions within stop-loss thresholds.")
+
+    # ── Auto-execute stops for simulation fund ────────────────────────────────
+    auto_sold: list[str] = []
+    if stops_hit and cfg.auto_fill:
+        from fundmgr.engine.auto_fill import execute_paper_fills
+        sell_actions = [
+            {"ticker": t, "side": "sell", "target_weight_pct": 0, "sek_estimate": price * 1}
+            for t, _chg, _stop_pct, price in stops_hit
+        ]
+        fill_log = execute_paper_fills(sell_actions, store, cfg)
+        for line in fill_log:
+            click.echo(f"  {line}")
+        for ticker, *_ in stops_hit:
+            store.clear_position_stop(ticker)
+            auto_sold.append(ticker)
 
     # ── Telegram alert ────────────────────────────────────────────────────────
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -630,11 +646,12 @@ def check_stops(quiet: bool):
     if (stops_hit or warnings) and bot_token and chat_id:
         lines = ["<b>📉 Price Alert</b>"]
         for ticker, chg, stop_pct, price in stops_hit:
-            lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}")
+            sold_note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review & sell"
+            lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{sold_note}")
         for ticker, chg, price in warnings:
             lines.append(f"⚠ <b>{ticker}</b> {chg:+.1f}% — down &gt;5%  live {price:.2f}")
-        if stops_hit:
-            lines.append("\nConsider reviewing — trigger <code>/run</code> for updated recommendation.")
+        if stops_hit and not auto_sold:
+            lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)
         try:
             data = urllib.parse.urlencode({

@@ -107,6 +107,14 @@ CREATE TABLE IF NOT EXISTS fundamentals_cache (
     fetched_at  TEXT NOT NULL
 );
 
+-- Per-position stop-loss percentages, persisted independently of run history.
+-- Set when a buy is approved; cleared on full exit.
+CREATE TABLE IF NOT EXISTS position_stops (
+    ticker      TEXT PRIMARY KEY,
+    stop_pct    REAL NOT NULL,
+    set_at      TEXT NOT NULL
+);
+
 -- Per-ticker news sentiment cache.
 CREATE TABLE IF NOT EXISTS news_cache (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -626,6 +634,25 @@ class Store:
                 tickers,
             ).fetchall()
         return {r["ticker"]: json.loads(r["data_json"]) for r in rows}
+
+    # ── Position stops ────────────────────────────────────────────────────────
+
+    def set_position_stop(self, ticker: str, stop_pct: float) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO position_stops (ticker, stop_pct, set_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(ticker) DO UPDATE SET stop_pct = excluded.stop_pct, set_at = excluded.set_at",
+                (ticker, stop_pct, datetime.utcnow().isoformat()),
+            )
+
+    def clear_position_stop(self, ticker: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM position_stops WHERE ticker = ?", (ticker,))
+
+    def get_position_stops(self) -> dict[str, float]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT ticker, stop_pct FROM position_stops").fetchall()
+        return {r["ticker"]: float(r["stop_pct"]) for r in rows}
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

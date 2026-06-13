@@ -48,6 +48,13 @@ class TickerFeatures:
     # ── Analyst consensus ────────────────────────────────────────────────────
     analyst_target_pct: float | None = None  # mean target % upside vs current price
     analyst_count: int | None = None
+    # ── Calendar events (filled from fundamentals cache) ─────────────────────
+    days_to_earnings: int | None = None      # trading days until next earnings report
+    days_to_ex_div: int | None = None        # calendar days until next ex-dividend date
+    # ── Volume ───────────────────────────────────────────────────────────────
+    rel_volume: float | None = None          # latest day volume / 20d avg volume
+    # ── Classification ───────────────────────────────────────────────────────
+    sector: str | None = None               # GICS sector from universe CSV
     # ── Sentiment (filled by news pipeline) ──────────────────────────────────
     sentiment_label: str | None = None    # positive | negative | neutral
     sentiment_score: float | None = None
@@ -106,8 +113,6 @@ class TickerFeatures:
         ):
             if val is not None:
                 val_parts.append(f"{label} {val:.1f}x")
-        if self.dividend_yield_pct is not None:
-            val_parts.append(f"div {self.dividend_yield_pct:.1f}%")
         if val_parts:
             lines.append(f"  Valuation: {', '.join(val_parts)}")
 
@@ -137,6 +142,25 @@ class TickerFeatures:
         if self.analyst_target_pct is not None:
             count_str = f" ({self.analyst_count} analysts)" if self.analyst_count else ""
             lines.append(f"  Analysts: mean target {self.analyst_target_pct:+.1f}% upside{count_str}")
+
+        # Calendar events
+        cal_parts = []
+        if self.days_to_earnings is not None:
+            cal_parts.append(f"earnings in {self.days_to_earnings}d")
+        if self.days_to_ex_div is not None:
+            cal_parts.append(f"ex-div in {self.days_to_ex_div}d")
+        if self.dividend_yield_pct is not None:
+            cal_parts.append(f"yield {self.dividend_yield_pct:.1f}%")
+        if cal_parts:
+            lines.append(f"  Calendar: {', '.join(cal_parts)}")
+
+        # Volume
+        if self.rel_volume is not None:
+            lines.append(f"  Volume: {self.rel_volume:.1f}x 20d avg")
+
+        # Sector / classification
+        if self.sector:
+            lines.append(f"  Sector: {self.sector}")
 
         # Sentiment
         if self.sentiment_label:
@@ -329,6 +353,13 @@ def compute_features(
     last_price = rows[-1]["close"]
     age = _count_trading_days_since(last_date)
 
+    volumes = pd.Series([r["volume"] for r in rows if r.get("volume") is not None])
+    rel_vol = None
+    if len(volumes) >= 21:
+        avg_20d = volumes.iloc[-21:-1].mean()
+        if avg_20d > 0:
+            rel_vol = round(float(volumes.iloc[-1]) / avg_20d, 2)
+
     return TickerFeatures(
         ticker=ticker.yahoo_ticker,
         name=ticker.name,
@@ -337,6 +368,7 @@ def compute_features(
         data_age_trading_days=age,
         currency=ticker.currency,
         needs_fx=ticker.needs_fx,
+        sector=ticker.sector or None,
         return_1d_pct=_pct_return(closes, 1),
         return_5d_pct=_pct_return(closes, 5),
         return_20d_pct=_pct_return(closes, 20),
@@ -345,6 +377,7 @@ def compute_features(
         rsi_14=_rsi(closes),
         above_ma50=bool(last_price > closes.rolling(50).mean().iloc[-1]) if len(closes) >= 50 else None,
         above_ma200=bool(last_price > closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else None,
+        rel_volume=rel_vol,
     )
 
 

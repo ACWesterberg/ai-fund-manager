@@ -74,6 +74,15 @@ Size by conviction. Do not equal-weight.
 3. The sector is not already at or above 35% portfolio weight
 4. Conviction ≥ 0.40
 
+## Earnings & Dividend Calendar Awareness
+- **Avoid buying within 2 trading days of earnings**: binary outcome risk dwarfs any edge. Screener scores already penalise proximity — respect it.
+- **Post-earnings dip entries**: if a stock drops on earnings but the thesis is intact (guidance maintained, beat on key metrics), the dip can be a high-conviction entry. Verify the thesis wasn't broken first.
+- **Ex-dividend date mechanics**: on ex-div date a stock drops ~the dividend amount at open — mechanical, not a sell signal.
+- **Pre-ex-div caution**: do not buy 1-2 calendar days before ex-div — you pay the pre-div price but value immediately resets lower by the dividend. Only acceptable for long-term holds through the full dividend cycle.
+- **Post-ex-div dip opportunity**: a quality stock with a meaningful yield (>2%) shortly after ex-div often offers an attractive entry — captures the price recovery without the mechanical drop.
+- **US stocks**: earnings dates are strictly followed — miss risk on FAANG/megacap names can trigger -5% to -15% moves in hours. Always check `days_to_earnings` before entering.
+- **Dividend yield as quality signal**: yield >3% with covered earnings and strong fundamentals (low D/E, positive margins) is worth holding through dividend cycles. Include in thesis reasoning where relevant.
+
 ## Sell / Trim Criteria — any ONE is sufficient:
 1. **Thesis broken**: fundamental deterioration, guidance cut, adverse regulatory change
 2. **Momentum fading after a run**: RSI > 75 and 5d return slowing

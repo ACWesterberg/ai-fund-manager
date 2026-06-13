@@ -115,6 +115,24 @@ def _score(feat: TickerFeatures) -> float:
             elif feat.analyst_target_pct < -10:
                 score -= 1.5   # consensus sell
 
+    # ── Earnings proximity ────────────────────────────────────────────────────
+    # Binary-event risk: avoid new buys right before earnings
+    if feat.days_to_earnings is not None:
+        if 0 <= feat.days_to_earnings <= 2:
+            score -= 8.0   # imminent — high uncertainty, skip
+        elif 0 <= feat.days_to_earnings <= 5:
+            score -= 3.0   # this week — caution
+
+    # ── Volume confirmation ───────────────────────────────────────────────────
+    # Elevated relative volume signals institutional interest or news catalyst
+    if feat.rel_volume is not None:
+        if feat.rel_volume > 3.0:
+            score += 2.5
+        elif feat.rel_volume > 2.0:
+            score += 1.0
+        elif feat.rel_volume < 0.3:
+            score -= 1.5   # extremely thin — liquidity risk
+
     # ── Stale data is almost never actionable ────────────────────────────────
     if feat.is_stale:
         score -= 30.0

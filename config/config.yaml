@@ -12,6 +12,7 @@ llm:
 risk:
   max_position_pct: 18      # max single-name weight
   max_positions: 10
+  max_sector_pct: 35        # max NAV weight in any single GICS sector
   min_cash_pct: 5           # always keep dry powder
   max_cash_pct: 10          # ISK taxed on total balance — minimise idle cash
   min_trade_sek: 2500       # below this, fees eat returns

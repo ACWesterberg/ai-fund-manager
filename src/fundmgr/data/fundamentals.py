@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 import yfinance as yf
 
@@ -34,10 +35,25 @@ _FIELD_MAP: dict[str, str] = {
     "targetMeanPrice":                  "analyst_target_price",
     "numberOfAnalystOpinions":          "analyst_count",
     "currency":                         "currency",
+    "earningsTimestamp":                "earnings_timestamp",  # Unix ts → days_to_earnings
+    "exDividendDate":                   "ex_div_timestamp",    # Unix ts → days_to_ex_div
 }
 
 # Fields stored as fractions that should be reported as percentages
 _FRACTION_FIELDS = {"profit_margin", "gross_margin", "roe", "revenue_growth", "earnings_growth", "dividend_yield"}
+
+
+def _ts_to_days(ts) -> int | None:
+    """Convert Unix timestamp to calendar days from today. Returns None if past or invalid."""
+    if ts is None:
+        return None
+    try:
+        today = datetime.utcnow().date()
+        target = datetime.utcfromtimestamp(float(ts)).date()
+        delta = (target - today).days
+        return delta if delta >= 0 else None
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _safe(val) -> float | None:
@@ -140,3 +156,7 @@ def apply_to_features(features: dict, store: Store) -> None:
         target = data.get("analyst_target_price")
         if target and feat.last_price and feat.last_price > 0:
             feat.analyst_target_pct = round((target / feat.last_price - 1) * 100, 1)
+
+        # Calendar: days to next earnings and ex-dividend date (future only)
+        feat.days_to_earnings = _ts_to_days(data.get("earnings_timestamp"))
+        feat.days_to_ex_div = _ts_to_days(data.get("ex_div_timestamp"))

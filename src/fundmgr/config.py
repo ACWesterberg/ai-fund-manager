@@ -26,6 +26,7 @@ class LLMConfig:
 class RiskConfig:
     max_position_pct: float = 18.0
     max_positions: int = 10
+    max_sector_pct: float = 35.0             # max NAV weight in any single GICS sector
     min_cash_pct: float = 12.0
     max_cash_pct: float = 25.0
     min_trade_sek: float = 2500.0

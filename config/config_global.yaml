@@ -15,6 +15,7 @@ llm:
 risk:
   max_position_pct: 18
   max_positions: 10
+  max_sector_pct: 35        # max NAV weight in any single GICS sector
   min_cash_pct: 5
   max_cash_pct: 10
   min_trade_sek: 2500

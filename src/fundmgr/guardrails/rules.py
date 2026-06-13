@@ -154,14 +154,35 @@ def _check_action(
             f"Weight clipped from {v.action.target_weight_pct:.1f}% to {clipped_weight:.1f}% (max_position_pct)"
         )
 
-    # 5. New position count limit
+    # 5. Sector concentration cap
+    if action.side == "buy":
+        feat = features.get(action.ticker)
+        if feat and feat.sector:
+            sector = feat.sector
+            sector_value_now = sum(
+                p.market_value_sek
+                for p in snap.positions
+                if p.shares > 0
+                and features.get(p.ticker) is not None
+                and features[p.ticker].sector == sector
+            )
+            projected_sector_pct = (sector_value_now + action.sek_estimate) / nav * 100 if nav > 0 else 0
+            if projected_sector_pct > cfg.risk.max_sector_pct:
+                v.approved = False
+                v.rejection_reason = (
+                    f"Sector cap breach: {sector} would reach {projected_sector_pct:.1f}% "
+                    f"(max {cfg.risk.max_sector_pct:.0f}%)"
+                )
+                return v
+
+    # 6. New position count limit
     if action.side == "buy" and action.ticker not in current_positions:
         if len(current_positions) >= cfg.risk.max_positions:
             v.approved = False
             v.rejection_reason = f"Max positions ({cfg.risk.max_positions}) already reached"
             return v
 
-    # 6. Cash floor check for buys
+    # 7. Cash floor check for buys
     if action.side == "buy":
         projected_cash = snap.cash_sek - action.sek_estimate
         projected_cash_pct = projected_cash / nav * 100 if nav > 0 else 0

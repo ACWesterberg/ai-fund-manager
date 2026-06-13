@@ -107,12 +107,13 @@ CREATE TABLE IF NOT EXISTS fundamentals_cache (
     fetched_at  TEXT NOT NULL
 );
 
--- Per-position stop-loss percentages, persisted independently of run history.
+-- Per-position stop-loss and take-profit levels, persisted independently of run history.
 -- Set when a buy is approved; cleared on full exit.
 CREATE TABLE IF NOT EXISTS position_stops (
-    ticker      TEXT PRIMARY KEY,
-    stop_pct    REAL NOT NULL,
-    set_at      TEXT NOT NULL
+    ticker          TEXT PRIMARY KEY,
+    stop_pct        REAL,
+    take_profit_pct REAL,
+    set_at          TEXT NOT NULL
 );
 
 -- Per-ticker news sentiment cache.
@@ -163,6 +164,12 @@ class Store:
     def _init_db(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+        # Migrations: add columns to existing tables that predate schema changes
+        with self._conn() as conn:
+            try:
+                conn.execute("ALTER TABLE position_stops ADD COLUMN take_profit_pct REAL")
+            except Exception:
+                pass  # column already exists
 
     # ── Cash ──────────────────────────────────────────────────────────────────
 
@@ -637,22 +644,35 @@ class Store:
 
     # ── Position stops ────────────────────────────────────────────────────────
 
-    def set_position_stop(self, ticker: str, stop_pct: float) -> None:
+    def set_position_stop(
+        self,
+        ticker: str,
+        stop_pct: float | None = None,
+        take_profit_pct: float | None = None,
+    ) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO position_stops (ticker, stop_pct, set_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(ticker) DO UPDATE SET stop_pct = excluded.stop_pct, set_at = excluded.set_at",
-                (ticker, stop_pct, datetime.utcnow().isoformat()),
+                "INSERT INTO position_stops (ticker, stop_pct, take_profit_pct, set_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(ticker) DO UPDATE SET "
+                "stop_pct = excluded.stop_pct, take_profit_pct = excluded.take_profit_pct, set_at = excluded.set_at",
+                (ticker, stop_pct, take_profit_pct, datetime.utcnow().isoformat()),
             )
 
     def clear_position_stop(self, ticker: str) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM position_stops WHERE ticker = ?", (ticker,))
 
-    def get_position_stops(self) -> dict[str, float]:
+    def get_position_stops(self) -> dict[str, dict]:
+        """Return {ticker: {stop_pct, take_profit_pct}} for all stored positions."""
         with self._conn() as conn:
-            rows = conn.execute("SELECT ticker, stop_pct FROM position_stops").fetchall()
-        return {r["ticker"]: float(r["stop_pct"]) for r in rows}
+            rows = conn.execute("SELECT ticker, stop_pct, take_profit_pct FROM position_stops").fetchall()
+        return {
+            r["ticker"]: {
+                "stop_pct": float(r["stop_pct"]) if r["stop_pct"] is not None else None,
+                "take_profit_pct": float(r["take_profit_pct"]) if r["take_profit_pct"] is not None else None,
+            }
+            for r in rows
+        }
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

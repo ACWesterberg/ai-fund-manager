@@ -33,5 +33,9 @@
 # Weekly decision run — Monday 16:00 CET
 0 16 * * 1 cd /home/pi/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund run --skip-news >> data/logs/weekly_global.log 2>&1
 
-# Stop-loss check — weekdays 22:15 CET (15 min after NYSE closes at ~22:00 CET)
+# News trigger checks — weekdays during US trading hours
+# 14:00: pre-market US sentiment; 18:00: mid NYSE session; 21:00: late NYSE / earnings window
+0 14,18,21 * * 1-5 cd /home/pi/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-news >> data/logs/news_global.log 2>&1
+
+# Stop/take-profit check — weekdays 22:15 CET (15 min after NYSE closes at ~22:00 CET)
 15 22 * * 1-5 cd /home/pi/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1

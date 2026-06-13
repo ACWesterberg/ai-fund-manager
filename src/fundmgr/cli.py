@@ -221,10 +221,14 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
 
-        # Persist stop-losses per position so check-stops survives multiple runs
+        # Persist stop/take-profit levels per position so check-stops survives multiple runs
         for action in guardrail_result.approved_actions:
-            if action.side == "buy" and action.stop_loss_pct:
-                store.set_position_stop(action.ticker, action.stop_loss_pct)
+            if action.side == "buy" and (action.stop_loss_pct or action.take_profit_pct):
+                store.set_position_stop(
+                    action.ticker,
+                    stop_pct=action.stop_loss_pct,
+                    take_profit_pct=action.take_profit_pct,
+                )
             elif action.side == "sell" and action.target_weight_pct == 0:
                 store.clear_position_stop(action.ticker)
 
@@ -259,6 +263,16 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
             sells = [a for a in guardrail_result.approved_actions if a.side == "sell"]
             lines = [f"<b>📊 Fund Run Complete</b>  <code>{run_id}</code>"]
             lines.append(decision.market_summary)
+            # NAV vs benchmark performance line
+            from fundmgr.data.benchmark import get_benchmark_return_pct
+            nav_history = store.get_nav_history()
+            if nav_history:
+                first = nav_history[0]
+                fund_ret = (snap.nav_sek / first.portfolio_nav_sek - 1) * 100 if first.portfolio_nav_sek else None
+                bench_ret = get_benchmark_return_pct(store, since_date=first.date)
+                if fund_ret is not None:
+                    bench_str = f"  vs {cfg.benchmark} {bench_ret:+.1f}%" if bench_ret is not None else ""
+                    lines.append(f"NAV {snap.nav_sek:,.0f} SEK ({fund_ret:+.1f}%{bench_str})")
             if buys:
                 lines.append("")
                 lines.append("<b>🟢 BUYS</b>")
@@ -577,12 +591,13 @@ def check_stops(quiet: bool):
     stop_map = store.get_position_stops()
 
     if not quiet:
-        click.echo("\n─── Stop-Loss Check ─────────────────────────────────")
-        click.echo(f"  {'Ticker':<16} {'Avg Cost':>9} {'Live Price':>10} {'Chg%':>7} {'Stop':>7} {'Status'}")
-        click.echo(f"  {'─'*16} {'─'*9} {'─'*10} {'─'*7} {'─'*7} {'─'*8}")
+        click.echo("\n─── Price Level Check ───────────────────────────────")
+        click.echo(f"  {'Ticker':<16} {'Avg Cost':>9} {'Live':>8} {'Chg%':>7} {'Levels':>14} {'Status'}")
+        click.echo(f"  {'─'*16} {'─'*9} {'─'*8} {'─'*7} {'─'*14} {'─'*12}")
 
-    stops_hit = []
-    warnings = []
+    stops_hit: list[tuple] = []
+    profits_hit: list[tuple] = []
+    warnings: list[tuple] = []
 
     for p in positions:
         try:
@@ -592,16 +607,27 @@ def check_stops(quiet: bool):
 
         if not live_price:
             if not quiet:
-                click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>10}")
+                click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}")
             continue
 
         chg = (live_price / p.avg_cost_sek - 1) * 100
-        stop_pct = stop_map.get(p.ticker)
-        stop_str = f"-{stop_pct:.0f}%" if stop_pct else "  n/a"
+        levels = stop_map.get(p.ticker, {})
+        stop_pct = levels.get("stop_pct")
+        tp_pct = levels.get("take_profit_pct")
+
+        parts = []
+        if stop_pct:
+            parts.append(f"-{stop_pct:.0f}%")
+        if tp_pct:
+            parts.append(f"+{tp_pct:.0f}%")
+        levels_str = " / ".join(parts) if parts else "n/a"
 
         if stop_pct and chg <= -stop_pct:
             status = "🚨 STOP HIT"
             stops_hit.append((p.ticker, chg, stop_pct, live_price))
+        elif tp_pct and chg >= tp_pct:
+            status = "🎯 TARGET HIT"
+            profits_hit.append((p.ticker, chg, tp_pct, live_price))
         elif chg < -5:
             status = "⚠ watch"
             warnings.append((p.ticker, chg, live_price))
@@ -610,47 +636,57 @@ def check_stops(quiet: bool):
 
         if not quiet:
             click.echo(
-                f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {live_price:>10.2f} "
-                f"{chg:>+7.1f}% {stop_str:>7} {status}"
+                f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {live_price:>8.2f} "
+                f"{chg:>+7.1f}% {levels_str:>14} {status}"
             )
 
     if not quiet:
         click.echo()
         if stops_hit:
-            click.echo(f"  ⚠ Stop-loss triggered for: {', '.join(t for t, *_ in stops_hit)}")
+            click.echo(f"  ⚠ Stop triggered: {', '.join(t for t, *_ in stops_hit)}")
             if cfg.auto_fill:
                 click.echo("  Auto-executing stop sells (simulation fund)…")
             else:
-                click.echo("  Consider selling — run 'fund run' to get updated recommendations.")
-        else:
-            click.echo("  All positions within stop-loss thresholds.")
+                click.echo("  Consider selling — run 'fund run' for updated recommendations.")
+        if profits_hit:
+            click.echo(f"  🎯 Take-profit triggered: {', '.join(t for t, *_ in profits_hit)}")
+            if cfg.auto_fill:
+                click.echo("  Auto-executing take-profit sells (simulation fund)…")
+            else:
+                click.echo("  Consider trimming — run 'fund run' for updated recommendations.")
+        if not stops_hit and not profits_hit:
+            click.echo("  All positions within thresholds.")
 
-    # ── Auto-execute stops for simulation fund ────────────────────────────────
+    # ── Auto-execute stops/profits for simulation fund ────────────────────────
     auto_sold: list[str] = []
-    if stops_hit and cfg.auto_fill:
+    triggered = stops_hit + profits_hit
+    if triggered and cfg.auto_fill:
         from fundmgr.engine.auto_fill import execute_paper_fills
         sell_actions = [
-            {"ticker": t, "side": "sell", "target_weight_pct": 0, "sek_estimate": price * 1}
-            for t, _chg, _stop_pct, price in stops_hit
+            {"ticker": t, "side": "sell", "target_weight_pct": 0, "sek_estimate": price}
+            for t, _chg, _pct, price in triggered
         ]
         fill_log = execute_paper_fills(sell_actions, store, cfg)
         for line in fill_log:
             click.echo(f"  {line}")
-        for ticker, *_ in stops_hit:
+        for ticker, *_ in triggered:
             store.clear_position_stop(ticker)
             auto_sold.append(ticker)
 
     # ── Telegram alert ────────────────────────────────────────────────────────
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if (stops_hit or warnings) and bot_token and chat_id:
+    if (stops_hit or profits_hit or warnings) and bot_token and chat_id:
         lines = ["<b>📉 Price Alert</b>"]
         for ticker, chg, stop_pct, price in stops_hit:
-            sold_note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review & sell"
-            lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{sold_note}")
+            note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review &amp; sell"
+            lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")
+        for ticker, chg, tp_pct, price in profits_hit:
+            note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — consider trimming"
+            lines.append(f"🎯 <b>{ticker}</b> {chg:+.1f}% — TARGET HIT (+{tp_pct:.0f}%)  live {price:.2f}{note}")
         for ticker, chg, price in warnings:
             lines.append(f"⚠ <b>{ticker}</b> {chg:+.1f}% — down &gt;5%  live {price:.2f}")
-        if stops_hit and not auto_sold:
+        if (stops_hit or profits_hit) and not auto_sold:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)
         try:

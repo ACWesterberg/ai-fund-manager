@@ -81,6 +81,9 @@ def sim_index(request: Request):
     live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
     nav = live_market_value + cash
 
+    universe = load_universe(cfg.universe_path)
+    name_map = {t.yahoo_ticker: t.name for t in universe}
+
     positions_data = []
     for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
         live = live_prices.get(p.ticker)
@@ -91,6 +94,7 @@ def sim_index(request: Request):
         weight_val = current_value if current_value is not None else cost_value
         positions_data.append({
             "ticker": p.ticker,
+            "name": name_map.get(p.ticker, p.ticker),
             "shares": p.shares,
             "avg_cost": p.avg_cost_sek,
             "cost_value": cost_value,

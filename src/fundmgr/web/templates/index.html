@@ -99,6 +99,30 @@
     {% endif %}
   </section>
 
+  <!-- Portfolio Composition Visualization -->
+  {% if positions %}
+  <section class="card" id="viz-card">
+    <div class="card-header">
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-blue-400" style="font-size:17px">bubble_chart</span>
+        <h2 class="card-title">Portfolio Composition</h2>
+      </div>
+      <div class="flex items-center gap-0.5">
+        <button class="ptab active" id="viz-tab-treemap" onclick="switchViz('treemap')">
+          <span class="material-symbols-outlined" style="font-size:12px;vertical-align:-2px;margin-right:2px">grid_view</span>Treemap
+        </button>
+        <button class="ptab" id="viz-tab-bubbles" onclick="switchViz('bubbles')">
+          <span class="material-symbols-outlined" style="font-size:12px;vertical-align:-2px;margin-right:2px">bubble_chart</span>Bubbles
+        </button>
+      </div>
+    </div>
+    <div style="position:relative;height:300px;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.015)">
+      <div id="viz-treemap" style="position:absolute;inset:0"></div>
+      <canvas id="viz-bubbles" style="position:absolute;inset:0;display:none;width:100%;height:100%"></canvas>
+    </div>
+  </section>
+  {% endif %}
+
   <!-- Positions -->
   <section class="card">
     <div class="card-header">
@@ -247,6 +271,276 @@
   </section>
 
 </div><!-- /main content -->
+
+<script>
+// ── Portfolio Composition Visualization ─────────────────────────────────────
+(function () {
+  const RAW = {{ positions | tojson }};
+  const CASH_PCT = {{ cash_pct }};
+  const CASH_VAL = {{ cash }};
+  if (!RAW.length) return;
+
+  const PALETTE = [
+    '#3b82f6','#8b5cf6','#06b6d4','#10b981',
+    '#f59e0b','#ef4444','#ec4899','#14b8a6','#f97316','#6366f1',
+  ];
+  const items = [
+    ...RAW.map((p, i) => ({
+      ticker: p.ticker, name: p.name || p.ticker,
+      weight: p.weight_pct, pnl_pct: p.pnl_pct || 0,
+      color: PALETTE[i % PALETTE.length],
+    })),
+    { ticker: 'Cash', name: 'Cash', weight: CASH_PCT, pnl_pct: 0, color: '#334155' },
+  ].filter(i => i.weight > 0.1);
+
+  // ticker → clearbit domain lookup for logos
+  const LOGO_MAP = {
+    'AAPL':'apple.com','MSFT':'microsoft.com','NVDA':'nvidia.com',
+    'GOOGL':'google.com','GOOG':'google.com','META':'meta.com',
+    'AMZN':'amazon.com','TSLA':'tesla.com','NFLX':'netflix.com',
+    'ORCL':'oracle.com','CRM':'salesforce.com','ADBE':'adobe.com',
+    'AMD':'amd.com','INTC':'intel.com','QCOM':'qualcomm.com',
+    'ASML':'asml.com','SAP':'sap.com','SHOP':'shopify.com',
+    'V':'visa.com','MA':'mastercard.com','JPM':'jpmorganchase.com',
+    'BAC':'bankofamerica.com','GS':'goldmansachs.com',
+    'JNJ':'jnj.com','UNH':'unitedhealthgroup.com','PG':'pg.com',
+    'KO':'coca-cola.com','PEP':'pepsico.com','MCD':'mcdonalds.com',
+    'WMT':'walmart.com','HD':'homedepot.com','DIS':'disney.com',
+    'NVO':'novonordisk.com','NOVO-B.CO':'novonordisk.com',
+    'EQNR':'equinor.com','DNB.OL':'dnb.no',
+    'VOLV-B.ST':'volvo.com','ERIC-B.ST':'ericsson.com','HM-B.ST':'hm.com',
+    'SWED-A.ST':'swedbank.com','SHB-A.ST':'handelsbanken.com',
+    'SEB-A.ST':'sebgroup.com','SKF-B.ST':'skf.com','SAND.ST':'sandvik.com',
+    'ALFA.ST':'alfalaval.com','ATCO-A.ST':'atlas-copco.com',
+    'ESSITY-B.ST':'essity.com','AZN.ST':'astrazeneca.com',
+    'INVE-B.ST':'investorab.com','NIBE-B.ST':'nibe.se',
+    'HEXA-B.ST':'hexagon.com','EVO.ST':'evolutiongaming.com',
+    'KINV-B.ST':'kinnevik.com','CAST.ST':'castellum.se',
+  };
+  function logoUrl(ticker) {
+    const d = LOGO_MAP[ticker];
+    if (d) return `https://logo.clearbit.com/${d}`;
+    const base = ticker.replace(/[-.].*/, '').toLowerCase();
+    return `https://logo.clearbit.com/${base}.com`;
+  }
+
+  // ── Treemap (squarified-ish recursive split) ─────────────────────────────
+  function tileLayout(its, x, y, w, h) {
+    if (!its.length) return [];
+    if (its.length === 1) return [{ ...its[0], x, y, w, h }];
+    const total = its.reduce((s, i) => s + i.weight, 0);
+    let acc = 0, half = 0;
+    for (let i = 0; i < its.length; i++) {
+      acc += its[i].weight;
+      if (acc >= total / 2) { half = i + 1; break; }
+    }
+    const G = 2;
+    const ratio = its.slice(0, half).reduce((s, i) => s + i.weight, 0) / total;
+    if (w >= h) {
+      const lw = Math.max(0, Math.round(w * ratio) - G);
+      return [...tileLayout(its.slice(0, half), x, y, lw, h),
+              ...tileLayout(its.slice(half), x + lw + G, y, w - lw - G, h)];
+    } else {
+      const th = Math.max(0, Math.round(h * ratio) - G);
+      return [...tileLayout(its.slice(0, half), x, y, w, th),
+              ...tileLayout(its.slice(half), x, y + th + G, w, h - th - G)];
+    }
+  }
+
+  function renderTreemap() {
+    const el = document.getElementById('viz-treemap');
+    const W = el.offsetWidth, H = el.offsetHeight;
+    if (!W || !H) return;
+    const sorted = [...items].sort((a, b) => b.weight - a.weight);
+    const rects = tileLayout(sorted, 0, 0, W, H);
+    el.innerHTML = rects.map(r => {
+      const tiny = r.w < 55 || r.h < 44;
+      const micro = r.w < 30 || r.h < 28;
+      const short = r.ticker.replace(/[-.].*/, '');
+      const sign = r.pnl_pct > 0 ? '+' : '';
+      const pnlCol = r.pnl_pct > 0 ? '#34d399' : r.pnl_pct < 0 ? '#f87171' : '#475569';
+      return `<div style="
+          position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;
+          background:${r.color}1a;border:1px solid ${r.color}44;border-radius:7px;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;
+          overflow:hidden;box-sizing:border-box;transition:background .18s;"
+        onmouseenter="this.style.background='${r.color}33'"
+        onmouseleave="this.style.background='${r.color}1a'"
+        title="${r.name} · ${r.weight.toFixed(1)}% weight${r.pnl_pct ? ' · P&L ' + sign + r.pnl_pct.toFixed(1) + '%' : ''}">
+        ${micro ? '' : tiny ? `
+          <div style="font-size:9px;font-weight:700;color:#94a3b8;text-align:center;padding:0 3px;white-space:nowrap;overflow:hidden">${short}</div>
+        ` : `
+          <img src="${logoUrl(r.ticker)}" width="24" height="24"
+               style="object-fit:contain;margin-bottom:4px;flex-shrink:0"
+               onerror="this.style.display='none'">
+          <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 12 : 10}px;font-weight:700;color:#e2e8f0;text-align:center;line-height:1.2;padding:0 4px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${short}</div>
+          <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 15 : 12}px;font-weight:800;color:${r.color};margin-top:1px">${r.weight.toFixed(1)}%</div>
+          ${r.pnl_pct !== 0 && r.h > 80 ? `<div style="font-size:10px;color:${pnlCol};margin-top:2px">${sign}${r.pnl_pct.toFixed(1)}%</div>` : ''}
+        `}
+      </div>`;
+    }).join('');
+  }
+
+  // ── Bubble chart with physics ────────────────────────────────────────────
+  let animId = null;
+  const imgCache = {};
+
+  function loadImg(url) {
+    if (!imgCache[url]) {
+      const img = new Image(); img.crossOrigin = 'anonymous'; img.src = url;
+      imgCache[url] = img;
+    }
+    return imgCache[url];
+  }
+
+  function renderBubbles() {
+    const canvas = document.getElementById('viz-bubbles');
+    if (!canvas) return;
+    if (animId) { cancelAnimationFrame(animId); animId = null; }
+
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.offsetWidth, H = canvas.offsetHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const cx = W / 2, cy = H / 2;
+    const maxW = Math.max(...items.map(i => i.weight));
+    const maxR = Math.min(W, H) * 0.20;
+
+    const bubbles = items.map(item => {
+      const r = Math.max(22, maxR * Math.sqrt(item.weight / maxW));
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * Math.min(cx, cy) * 0.5;
+      return {
+        item, r,
+        x: cx + Math.cos(angle) * dist,
+        y: cy + Math.sin(angle) * dist,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: (Math.random() - 0.5) * 0.6,
+        logo: item.ticker !== 'Cash' ? loadImg(logoUrl(item.ticker)) : null,
+      };
+    });
+
+    function step() {
+      ctx.clearRect(0, 0, W, H);
+
+      // Physics update
+      for (const b of bubbles) {
+        b.vx += (cx - b.x) * 0.00055;
+        b.vy += (cy - b.y) * 0.00055;
+        b.vx *= 0.972; b.vy *= 0.972;
+        b.x += b.vx; b.y += b.vy;
+        const pad = b.r + 3;
+        if (b.x < pad)   { b.x = pad;   b.vx =  Math.abs(b.vx) * 0.4; }
+        if (b.x > W-pad) { b.x = W-pad; b.vx = -Math.abs(b.vx) * 0.4; }
+        if (b.y < pad)   { b.y = pad;   b.vy =  Math.abs(b.vy) * 0.4; }
+        if (b.y > H-pad) { b.y = H-pad; b.vy = -Math.abs(b.vy) * 0.4; }
+      }
+      // Collision resolution (2 iterations for stability)
+      for (let iter = 0; iter < 2; iter++) {
+        for (let i = 0; i < bubbles.length; i++) {
+          for (let j = i + 1; j < bubbles.length; j++) {
+            const a = bubbles[i], b = bubbles[j];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const d = Math.hypot(dx, dy);
+            const min = a.r + b.r + 3;
+            if (d < min && d > 0.01) {
+              const ov = (min - d) / 2, nx = dx/d, ny = dy/d;
+              a.x -= nx*ov; a.y -= ny*ov;
+              b.x += nx*ov; b.y += ny*ov;
+              const dot = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;
+              if (dot < 0) {
+                a.vx += dot*nx*0.5; a.vy += dot*ny*0.5;
+                b.vx -= dot*nx*0.5; b.vy -= dot*ny*0.5;
+              }
+            }
+          }
+        }
+      }
+
+      // Draw
+      for (const b of bubbles) {
+        const { x, y, r, item, logo } = b;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+
+        const g = ctx.createRadialGradient(x - r*0.28, y - r*0.28, 0, x, y, r);
+        g.addColorStop(0, item.color + 'bb');
+        g.addColorStop(1, item.color + '38');
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.strokeStyle = item.color + '77';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.clip();
+
+        // Logo
+        const logoOk = logo && logo.complete && logo.naturalWidth > 0;
+        const logoSz = r * 0.44;
+        const textY  = r > 46 ? y + r * 0.12 : y;
+        const logoTop = r > 46 ? y - r * 0.44 : null;
+
+        if (r > 36 && logoOk && logoTop !== null) {
+          ctx.drawImage(logo, x - logoSz/2, logoTop, logoSz, logoSz);
+        } else if (r > 36) {
+          // Initials fallback
+          ctx.fillStyle = '#ffffff55';
+          ctx.font = `bold ${Math.round(r * 0.32)}px Manrope,sans-serif`;
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(item.ticker.replace(/[-.].*/, '').slice(0, 2).toUpperCase(),
+                       x, r > 46 ? logoTop + logoSz/2 : y - r*0.12);
+        }
+
+        // Ticker
+        ctx.fillStyle = '#f1f5f9';
+        ctx.font = `700 ${Math.max(9, Math.round(r * 0.21))}px Manrope,sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(item.ticker.replace(/[-.].*/, ''), x, textY);
+
+        // Weight
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = `600 ${Math.max(8, Math.round(r * 0.18))}px Inter,sans-serif`;
+        ctx.fillText(item.weight.toFixed(1) + '%', x, textY + r * 0.26);
+
+        // P&L (only for larger bubbles)
+        if (r > 52 && item.pnl_pct !== 0) {
+          ctx.fillStyle = item.pnl_pct > 0 ? '#34d399' : '#f87171';
+          ctx.font = `500 ${Math.max(7, Math.round(r * 0.15))}px Inter,sans-serif`;
+          const sign = item.pnl_pct > 0 ? '+' : '';
+          ctx.fillText(sign + item.pnl_pct.toFixed(1) + '%', x, textY + r * 0.46);
+        }
+
+        ctx.restore();
+      }
+
+      animId = requestAnimationFrame(step);
+    }
+    step();
+  }
+
+  // ── Tab switch ───────────────────────────────────────────────────────────
+  window.switchViz = function(mode) {
+    document.getElementById('viz-tab-treemap').classList.toggle('active', mode === 'treemap');
+    document.getElementById('viz-tab-bubbles').classList.toggle('active', mode === 'bubbles');
+    document.getElementById('viz-treemap').style.display  = mode === 'treemap' ? 'block' : 'none';
+    document.getElementById('viz-bubbles').style.display  = mode === 'bubbles' ? 'block' : 'none';
+    if (mode === 'treemap') {
+      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      renderTreemap();
+    } else {
+      renderBubbles();
+    }
+  };
+
+  // Init
+  renderTreemap();
+  window.addEventListener('resize', () => {
+    if (document.getElementById('viz-treemap').style.display !== 'none') renderTreemap();
+  });
+})();
+</script>
 
 <script>
 (function () {

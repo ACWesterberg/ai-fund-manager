@@ -20,11 +20,11 @@
         <tr>
           <th style="width:24px"></th>
           <th>Date</th>
-          <th>Run ID</th>
-          <th class="num">Actions</th>
+          <th class="hidden sm:table-cell">Run ID</th>
+          <th class="num hidden md:table-cell">Actions</th>
           <th class="num">Buys</th>
           <th class="num">Sells</th>
-          <th class="num">Holds</th>
+          <th class="num hidden sm:table-cell">Holds</th>
         </tr>
       </thead>
       <tbody>
@@ -32,11 +32,11 @@
         <tr class="history-row" data-run="{{ r.run_id }}" style="cursor:pointer">
           <td class="expand-toggle" style="color:#475569;font-size:11px;padding-right:0">▶</td>
           <td class="text-slate-300">{{ r.timestamp }}</td>
-          <td><code class="text-slate-500" style="font-size:11px">{{ r.run_id }}</code></td>
-          <td class="num text-slate-400">{{ r.action_count }}</td>
+          <td class="hidden sm:table-cell"><code class="text-slate-500" style="font-size:11px">{{ r.run_id }}</code></td>
+          <td class="num text-slate-400 hidden md:table-cell">{{ r.action_count }}</td>
           <td class="num"><span class="badge badge-buy">{{ r.buys }}</span></td>
           <td class="num"><span class="badge badge-sell">{{ r.sells }}</span></td>
-          <td class="num"><span class="badge badge-hold">{{ r.holds }}</span></td>
+          <td class="num hidden sm:table-cell"><span class="badge badge-hold">{{ r.holds }}</span></td>
         </tr>
         <tr class="detail-row" id="detail-{{ r.run_id }}" style="display:none">
           <td colspan="7" style="padding:0 16px 16px">

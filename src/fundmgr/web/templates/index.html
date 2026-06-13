@@ -139,9 +139,9 @@
         <thead>
           <tr>
             <th>Ticker</th>
-            <th class="num">Shares</th>
-            <th class="num">Avg Cost</th>
-            <th class="num">Current</th>
+            <th class="num hidden sm:table-cell">Shares</th>
+            <th class="num hidden sm:table-cell">Avg Cost</th>
+            <th class="num hidden md:table-cell">Current</th>
             <th class="num">Value (SEK)</th>
             <th class="num">P&amp;L</th>
             <th class="num" style="width:120px">Weight</th>
@@ -153,9 +153,9 @@
             <td>
               <span class="font-semibold text-slate-200">{{ p.ticker }}</span>
             </td>
-            <td class="num">{{ "{:.0f}".format(p.shares) }}</td>
-            <td class="num text-slate-400">{{ "{:.2f}".format(p.avg_cost) }}</td>
-            <td class="num">
+            <td class="num hidden sm:table-cell">{{ "{:.0f}".format(p.shares) }}</td>
+            <td class="num text-slate-400 hidden sm:table-cell">{{ "{:.2f}".format(p.avg_cost) }}</td>
+            <td class="num hidden md:table-cell">
               {% if p.current_price %}{{ "{:.2f}".format(p.current_price) }}{% else %}<span class="text-slate-600">—</span>{% endif %}
             </td>
             <td class="num font-medium text-slate-200">{{ "{:,.0f}".format(p.current_value if p.current_value is not none else p.cost_value) }}</td>
@@ -205,12 +205,12 @@
         <span class="material-symbols-outlined text-blue-400" style="font-size:17px">auto_awesome</span>
         <h2 class="card-title">Last Decision</h2>
       </div>
-      <div class="flex items-center gap-4">
+      <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
         {% if last_run %}
-          <span class="text-xs text-slate-600">{{ last_run.timestamp }}</span>
+          <span class="text-xs text-slate-600 hidden sm:inline">{{ last_run.timestamp }}</span>
         {% endif %}
         {% if stats %}
-          <span class="text-xs text-slate-600">
+          <span class="text-xs text-slate-600 hidden md:inline">
             vol {{ stats.volatility_ann_pct }}% ann. &middot; fees {{ "{:.2f}".format(fees_paid) }} SEK
           </span>
         {% endif %}
@@ -384,6 +384,8 @@
   // ── Bubble chart with physics ────────────────────────────────────────────
   let animId = null;
   const imgCache = {};
+  let grabbed = null, grabVX = 0, grabVY = 0, lastGrabX = 0, lastGrabY = 0, lastGrabT = 0;
+  let bubbleAC = null;
 
   function loadImg(url) {
     if (!imgCache[url]) {
@@ -397,6 +399,9 @@
     const canvas = document.getElementById('viz-bubbles');
     if (!canvas) return;
     if (animId) { cancelAnimationFrame(animId); animId = null; }
+    if (bubbleAC) { bubbleAC.abort(); }
+    bubbleAC = new AbortController();
+    grabbed = null;
 
     const dpr = window.devicePixelRatio || 1;
     const W = canvas.offsetWidth, H = canvas.offsetHeight;
@@ -422,11 +427,59 @@
       };
     });
 
+    // ── Drag / throw interaction ──────────────────────────────────────────
+    const sig = { signal: bubbleAC.signal };
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const src  = e.touches ? e.touches[0] : e;
+      return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+    }
+    function onDragStart(e) {
+      const { x, y } = getPos(e);
+      for (let i = bubbles.length - 1; i >= 0; i--) {
+        const b = bubbles[i];
+        if (Math.hypot(b.x - x, b.y - y) <= b.r) {
+          grabbed = b; b.vx = 0; b.vy = 0;
+          lastGrabX = x; lastGrabY = y; lastGrabT = performance.now();
+          grabVX = 0; grabVY = 0;
+          canvas.style.cursor = 'grabbing';
+          if (e.cancelable) e.preventDefault();
+          break;
+        }
+      }
+    }
+    function onDragMove(e) {
+      const { x, y } = getPos(e);
+      if (!grabbed) {
+        canvas.style.cursor = bubbles.some(b => Math.hypot(b.x - x, b.y - y) <= b.r) ? 'grab' : '';
+        return;
+      }
+      if (e.cancelable) e.preventDefault();
+      const now = performance.now(), dt = now - lastGrabT;
+      if (dt > 0) { grabVX = (x - lastGrabX) / dt * 16; grabVY = (y - lastGrabY) / dt * 16; }
+      grabbed.x = x; grabbed.y = y;
+      lastGrabX = x; lastGrabY = y; lastGrabT = now;
+    }
+    function onDragEnd() {
+      if (!grabbed) return;
+      grabbed.vx = grabVX; grabbed.vy = grabVY;
+      grabbed = null; canvas.style.cursor = '';
+    }
+
+    canvas.addEventListener('mousedown',  onDragStart, sig);
+    canvas.addEventListener('mousemove',  onDragMove,  sig);
+    canvas.addEventListener('mouseup',    onDragEnd,   sig);
+    canvas.addEventListener('mouseleave', onDragEnd,   sig);
+    canvas.addEventListener('touchstart', onDragStart, { signal: bubbleAC.signal, passive: false });
+    canvas.addEventListener('touchmove',  onDragMove,  { signal: bubbleAC.signal, passive: false });
+    canvas.addEventListener('touchend',   onDragEnd,   sig);
+
     function step() {
       ctx.clearRect(0, 0, W, H);
 
-      // Physics update
+      // Physics update (skip grabbed bubble — it follows the cursor directly)
       for (const b of bubbles) {
+        if (b === grabbed) continue;
         b.vx += (cx - b.x) * 0.00055;
         b.vy += (cy - b.y) * 0.00055;
         b.vx *= 0.972; b.vy *= 0.972;

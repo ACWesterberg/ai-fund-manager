@@ -293,8 +293,9 @@
     { ticker: 'Cash', name: 'Cash', weight: CASH_PCT, pnl_pct: 0, color: '#334155' },
   ].filter(i => i.weight > 0.1);
 
-  // ticker → clearbit domain lookup for logos
+  // ticker → canonical domain for logo lookup
   const LOGO_MAP = {
+    // ── US large caps ────────────────────────────────────────────────────────
     'AAPL':'apple.com','MSFT':'microsoft.com','NVDA':'nvidia.com',
     'GOOGL':'google.com','GOOG':'google.com','META':'meta.com',
     'AMZN':'amazon.com','TSLA':'tesla.com','NFLX':'netflix.com',
@@ -306,23 +307,109 @@
     'JNJ':'jnj.com','UNH':'unitedhealthgroup.com','PG':'pg.com',
     'KO':'coca-cola.com','PEP':'pepsico.com','MCD':'mcdonalds.com',
     'WMT':'walmart.com','HD':'homedepot.com','DIS':'disney.com',
-    'NVO':'novonordisk.com','NOVO-B.CO':'novonordisk.com',
-    'EQNR':'equinor.com','DNB.OL':'dnb.no',
-    'VOLV-B.ST':'volvo.com','ERIC-B.ST':'ericsson.com','HM-B.ST':'hm.com',
-    'SWED-A.ST':'swedbank.com','SHB-A.ST':'handelsbanken.com',
-    'SEB-A.ST':'sebgroup.com','SKF-B.ST':'skf.com','SAND.ST':'sandvik.com',
-    'ALFA.ST':'alfalaval.com','ATCO-A.ST':'atlas-copco.com',
-    'ESSITY-B.ST':'essity.com','AZN.ST':'astrazeneca.com',
-    'INVE-B.ST':'investorab.com','NIBE-B.ST':'nibe.se',
-    'HEXA-B.ST':'hexagon.com','EVO.ST':'evolutiongaming.com',
-    'KINV-B.ST':'kinnevik.com','CAST.ST':'castellum.se',
+    'PYPL':'paypal.com','UBER':'uber.com','ABNB':'airbnb.com',
+    'COIN':'coinbase.com','SNOW':'snowflake.com','PLTR':'palantir.com',
+    'SPOT':'spotify.com',
+    // ── Swedish large & mid caps ─────────────────────────────────────────────
+    'VOLV-B.ST':'volvo.com','VOLV-A.ST':'volvo.com',
+    'ERIC-B.ST':'ericsson.com','ERIC-A.ST':'ericsson.com',
+    'HM-B.ST':'hm.com','HM-A.ST':'hm.com',
+    'SWED-A.ST':'swedbank.com','SWED-B.ST':'swedbank.com',
+    'SHB-A.ST':'handelsbanken.com','SHB-B.ST':'handelsbanken.com',
+    'SEB-A.ST':'sebgroup.com','SEB-C.ST':'sebgroup.com',
+    'NDA-SE.ST':'nordea.com',
+    'SKF-B.ST':'skf.com','SKF-A.ST':'skf.com',
+    'SAND.ST':'sandvik.com',
+    'ALFA.ST':'alfalaval.com',
+    'ATCO-A.ST':'atlas-copco.com','ATCO-B.ST':'atlas-copco.com',
+    'ESSITY-B.ST':'essity.com','ESSITY-A.ST':'essity.com',
+    'AZN.ST':'astrazeneca.com',
+    'INVE-B.ST':'investorab.com','INVE-A.ST':'investorab.com',
+    'NIBE-B.ST':'nibe.se',
+    'HEXA-B.ST':'hexagon.com',
+    'EVO.ST':'evolutiongaming.com',
+    'KINV-B.ST':'kinnevik.com',
+    'CAST.ST':'castellum.se',
+    'ABB.ST':'abb.com',
+    'ASSA-B.ST':'assaabloy.com','ASSA-A.ST':'assaabloy.com',
+    'ELUX-B.ST':'electrolux.com','ELUX-A.ST':'electrolux.com',
+    'TELIA.ST':'telia.com',
+    'TEL2-B.ST':'tele2.com','TEL2-A.ST':'tele2.com',
+    'SKA-B.ST':'skanska.com','SKA-A.ST':'skanska.com',
+    'BOL.ST':'boliden.com',
+    'SCA-B.ST':'sca.com','SCA-A.ST':'sca.com',
+    'SSAB-A.ST':'ssab.com','SSAB-B.ST':'ssab.com',
+    'TREL-B.ST':'trelleborg.com',
+    'GETI-B.ST':'getinge.com','GETI-A.ST':'getinge.com',
+    'INDU-C.ST':'industrivarden.se','INDU-A.ST':'industrivarden.se',
+    'HUSQ-B.ST':'husqvarna.com','HUSQ-A.ST':'husqvarna.com',
+    'SWEC-B.ST':'sweco.com',
+    'PEAB-B.ST':'peab.se',
+    'LIFCO-B.ST':'lifco.se',
+    'LATO-B.ST':'latour.se',
+    'BURE.ST':'bure.se',
+    'MYCR.ST':'mycronic.com',
+    'NCAB.ST':'ncabgroup.com',
+    'SAGA-B.ST':'sagax.se',
+    'SINCH.ST':'sinch.com',
+    'CLAS-B.ST':'clasohlson.com',
+    'OEM-B.ST':'oem.se',
+    'FABG.ST':'fabege.se',
+    'JM.ST':'jm.se',
+    'XVIVO.ST':'xvivoperfusion.com',
+    'LAGR-B.ST':'lagercrantz.com',
+    'ADDT-B.ST':'addtech.com',
+    'BETS-B.ST':'betsson.com',
+    'NYF.ST':'nyfosa.se',
+    'SKA-B.ST':'skanska.com',
+    // ── Danish ──────────────────────────────────────────────────────────────
+    'NOVO-B.CO':'novonordisk.com','NOVO-A.CO':'novonordisk.com','NVO':'novonordisk.com',
+    'DSV.CO':'dsv.com',
+    'ORSTED.CO':'orsted.com',
+    'MAERSK-B.CO':'maersk.com','MAERSK-A.CO':'maersk.com',
+    'CARL-B.CO':'carlsberg.com','CARL-A.CO':'carlsberg.com',
+    'COLO-B.CO':'coloplast.com','COLO-A.CO':'coloplast.com',
+    'GN.CO':'gn.com',
+    'DEMANT.CO':'demant.com',
+    'TRYG.CO':'tryg.com',
+    // ── Norwegian ───────────────────────────────────────────────────────────
+    'EQNR':'equinor.com','EQNR.OL':'equinor.com',
+    'DNB.OL':'dnb.no',
+    'TEL.OL':'telenor.com',
+    'MOWI.OL':'mowi.com',
+    'SALM.OL':'salmar.no',
+    // ── Finnish ─────────────────────────────────────────────────────────────
+    'NOKIA.HE':'nokia.com',
+    'NESTE.HE':'neste.com',
+    'FORTUM.HE':'fortum.com',
+    'SAMPO.HE':'sampo.com',
+    'UPM.HE':'upm.com',
+    'STORA.HE':'storaenso.com',
+    'GOFORE.HE':'gofore.com',
+    'VINCIT.HE':'vincit.fi',
   };
-  function logoUrl(ticker) {
+
+  // Returns an ordered list of logo URLs to try; canvas onerror chains through them.
+  // Clearbit is highest quality; DuckDuckGo favicon is the last-resort fallback.
+  function logoUrls(ticker) {
     const d = LOGO_MAP[ticker];
-    if (d) return `https://logo.clearbit.com/${d}`;
-    const base = ticker.replace(/[-.].*/, '').toLowerCase();
-    return `https://logo.clearbit.com/${base}.com`;
+    const base = ticker.replace(/[-.].*/,'').toLowerCase();
+    const suffix = (ticker.match(/\.([A-Za-z]+)$/) || [])[1]?.toLowerCase();
+    const countryTld = { st:'se', he:'fi', ol:'no', co:'dk' }[suffix];
+    const domain = d || (countryTld ? `${base}.${countryTld}` : `${base}.com`);
+    const urls = d
+      ? [`https://logo.clearbit.com/${d}`]
+      : countryTld
+        ? [`https://logo.clearbit.com/${base}.${countryTld}`, `https://logo.clearbit.com/${base}.com`]
+        : [`https://logo.clearbit.com/${base}.com`];
+    urls.push(`https://icons.duckduckgo.com/ip3/${domain}.ico`);
+    return urls;
   }
+
+  // Legacy single-URL shim used by treemap <img> tags (no CORS restriction needed)
+  function logoUrl(ticker) { return logoUrls(ticker)[0]; }
+  // DuckDuckGo fallback URL for treemap onerror chain
+  function logoDdg(ticker) { return logoUrls(ticker).at(-1); }
 
   // ── Treemap (squarified-ish recursive split) ─────────────────────────────
   function tileLayout(its, x, y, w, h) {
@@ -372,7 +459,8 @@
         ` : `
           <img src="${logoUrl(r.ticker)}" width="24" height="24"
                style="object-fit:contain;margin-bottom:4px;flex-shrink:0"
-               onerror="this.style.display='none'">
+               data-fb="${logoDdg(r.ticker)}"
+               onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.removeAttribute('data-fb')}else{this.style.display='none'}">
           <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 12 : 10}px;font-weight:700;color:#e2e8f0;text-align:center;line-height:1.2;padding:0 4px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${short}</div>
           <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 15 : 12}px;font-weight:800;color:${r.color};margin-top:1px">${r.weight.toFixed(1)}%</div>
           ${r.pnl_pct !== 0 && r.h > 80 ? `<div style="font-size:10px;color:${pnlCol};margin-top:2px">${sign}${r.pnl_pct.toFixed(1)}%</div>` : ''}
@@ -387,12 +475,18 @@
   let grabbed = null, grabVX = 0, grabVY = 0, lastGrabX = 0, lastGrabY = 0, lastGrabT = 0;
   let bubbleAC = null;
 
-  function loadImg(url) {
-    if (!imgCache[url]) {
-      const img = new Image(); img.crossOrigin = 'anonymous'; img.src = url;
-      imgCache[url] = img;
-    }
-    return imgCache[url];
+  function loadImg(urls) {
+    if (!Array.isArray(urls)) urls = [urls];
+    const key = urls[0];
+    if (imgCache[key]) return imgCache[key];
+    const img = new Image();
+    // No crossOrigin — we only draw to canvas, never read pixels back, so taint is fine.
+    // This allows DuckDuckGo and other non-CORS sources as fallbacks.
+    let idx = 0;
+    img.onerror = () => { if (++idx < urls.length) img.src = urls[idx]; };
+    img.src = key;
+    imgCache[key] = img;
+    return img;
   }
 
   function renderBubbles() {
@@ -423,7 +517,7 @@
         y: cy + Math.sin(angle) * dist,
         vx: (Math.random() - 0.5) * 0.6,
         vy: (Math.random() - 0.5) * 0.6,
-        logo: item.ticker !== 'Cash' ? loadImg(logoUrl(item.ticker)) : null,
+        logo: item.ticker !== 'Cash' ? loadImg(logoUrls(item.ticker)) : null,
       };
     });
 

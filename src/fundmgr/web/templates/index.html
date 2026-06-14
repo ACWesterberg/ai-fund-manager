@@ -289,6 +289,7 @@
       ticker: p.ticker, name: p.name || p.ticker,
       weight: p.weight_pct, pnl_pct: p.pnl_pct || 0,
       color: PALETTE[i % PALETTE.length],
+      logo_domain: p.logo_domain || null,
     })),
     { ticker: 'Cash', name: 'Cash', weight: CASH_PCT, pnl_pct: 0, color: '#334155' },
   ].filter(i => i.weight > 0.1);
@@ -818,9 +819,9 @@
   };
 
   // Returns an ordered list of logo URLs to try; canvas onerror chains through them.
-  // Clearbit is highest quality; DuckDuckGo favicon is the last-resort fallback.
-  function logoUrls(ticker) {
-    const d = LOGO_MAP[ticker];
+  // Priority: server-provided domain (from yfinance website field) > LOGO_MAP > TLD guess > DuckDuckGo
+  function logoUrls(ticker, serverDomain) {
+    const d = serverDomain || LOGO_MAP[ticker];
     const base = ticker.replace(/[-.].*/,'').toLowerCase();
     const suffix = (ticker.match(/\.([A-Za-z]+)$/) || [])[1]?.toLowerCase();
     const countryTld = { st:'se', he:'fi', ol:'no', co:'dk' }[suffix];
@@ -834,10 +835,8 @@
     return urls;
   }
 
-  // Legacy single-URL shim used by treemap <img> tags (no CORS restriction needed)
-  function logoUrl(ticker) { return logoUrls(ticker)[0]; }
-  // DuckDuckGo fallback URL for treemap onerror chain
-  function logoDdg(ticker) { return logoUrls(ticker).at(-1); }
+  function logoUrl(item)  { return logoUrls(item.ticker, item.logo_domain)[0]; }
+  function logoDdg(item)  { return logoUrls(item.ticker, item.logo_domain).at(-1); }
 
   // ── Treemap (squarified-ish recursive split) ─────────────────────────────
   function tileLayout(its, x, y, w, h) {
@@ -885,9 +884,9 @@
         ${micro ? '' : tiny ? `
           <div style="font-size:9px;font-weight:700;color:#94a3b8;text-align:center;padding:0 3px;white-space:nowrap;overflow:hidden">${short}</div>
         ` : `
-          <img src="${logoUrl(r.ticker)}" width="24" height="24"
+          <img src="${logoUrl(r)}" width="24" height="24"
                style="object-fit:contain;margin-bottom:4px;flex-shrink:0"
-               data-fb="${logoDdg(r.ticker)}"
+               data-fb="${logoDdg(r)}"
                onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.removeAttribute('data-fb')}else{this.style.display='none'}">
           <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 12 : 10}px;font-weight:700;color:#e2e8f0;text-align:center;line-height:1.2;padding:0 4px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${short}</div>
           <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 15 : 12}px;font-weight:800;color:${r.color};margin-top:1px">${r.weight.toFixed(1)}%</div>
@@ -945,7 +944,7 @@
         y: cy + Math.sin(angle) * dist,
         vx: (Math.random() - 0.5) * 0.6,
         vy: (Math.random() - 0.5) * 0.6,
-        logo: item.ticker !== 'Cash' ? loadImg(logoUrls(item.ticker)) : null,
+        logo: item.ticker !== 'Cash' ? loadImg(logoUrls(item.ticker, item.logo_domain)) : null,
       };
     });
 

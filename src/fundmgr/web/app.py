@@ -7,11 +7,23 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yfinance as yf
 
 _price_cache: dict[frozenset, tuple[float, dict[str, float]]] = {}
 _PRICE_TTL = 300  # seconds
+
+
+def _logo_domain(website: str | None) -> str | None:
+    """Extract bare domain from a company website URL, e.g. 'https://www.volvo.com/' → 'volvo.com'."""
+    if not website:
+        return None
+    try:
+        netloc = urlparse(website).netloc
+        return netloc.removeprefix("www.") or None
+    except Exception:
+        return None
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -106,6 +118,13 @@ def index(request: Request):
     universe = load_universe(cfg.universe_path)
     name_map = {t.yahoo_ticker: t.name for t in universe}
 
+    # Pull website domains from fundamentals cache for logo resolution
+    fund_domains: dict[str, str | None] = {}
+    if positions:
+        cached_fund = store.get_all_fundamentals([p.ticker for p in positions])
+        for ticker, fdata in cached_fund.items():
+            fund_domains[ticker] = _logo_domain(fdata.get("website"))
+
     positions_data = []
     for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
         live = live_prices.get(p.ticker)
@@ -125,6 +144,7 @@ def index(request: Request):
             "pnl_sek": pnl_sek,
             "pnl_pct": pnl_pct,
             "weight_pct": round(weight_val / nav * 100, 1) if nav > 0 else 0,
+            "logo_domain": fund_domains.get(p.ticker),
         })
 
     cash_pct = round(cash / nav * 100, 1) if nav > 0 else 100.0

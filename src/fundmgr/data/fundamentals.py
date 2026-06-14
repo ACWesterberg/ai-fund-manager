@@ -37,6 +37,7 @@ _FIELD_MAP: dict[str, str] = {
     "currency":                         "currency",
     "earningsTimestamp":                "earnings_timestamp",  # Unix ts → days_to_earnings
     "exDividendDate":                   "ex_div_timestamp",    # Unix ts → days_to_ex_div
+    "website":                          "website",             # company website URL
 }
 
 # Fields stored as fractions that should be reported as percentages
@@ -74,7 +75,7 @@ def _fetch_one(ticker: str) -> tuple[str, dict | None]:
         data: dict = {}
         for yf_key, our_key in _FIELD_MAP.items():
             raw = info.get(yf_key)
-            if our_key == "currency":
+            if our_key in ("currency", "website"):
                 data[our_key] = raw if isinstance(raw, str) else None
             elif our_key == "analyst_count":
                 data[our_key] = int(raw) if raw is not None else None

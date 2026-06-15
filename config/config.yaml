@@ -8,6 +8,7 @@ llm:
   temperature: 0.2
   max_tokens: 16000
   reasoning_effort: "high"  # low | medium | high — activates extended reasoning on gpt-5+/o-series
+  n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled
 
 risk:
   max_position_pct: 18      # max single-name weight

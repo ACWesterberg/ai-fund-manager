@@ -14,7 +14,7 @@ from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines,
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
-from fundmgr.engine.client import LLMError, call_llm
+from fundmgr.engine.client import LLMError, call_llm_consensus
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
 from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
@@ -186,14 +186,26 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
 
     system_msg, user_msg = build_prompt(effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block)
 
-    # ── Call LLM ─────────────────────────────────────────────────────────────
-    click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")
+    # ── Call LLM (with optional consensus sampling) ───────────────────────────
+    n_samples = effective_cfg.llm.n_samples
+    if n_samples > 1:
+        click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id} × {n_samples} (consensus mode)…")
+    else:
+        click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")
     try:
-        decision, raw_response = call_llm(system_msg, user_msg, effective_cfg)
+        decision, raw_response, vote_counts = call_llm_consensus(system_msg, user_msg, effective_cfg)
     except LLMError as e:
         click.echo(f"  ✗ LLM call failed: {e}", err=True)
         sys.exit(1)
-    click.echo(f"      ✓ Got {len(decision.actions)} action(s)")
+    if vote_counts is not None and n_samples > 1:
+        unanimous = sum(1 for v in vote_counts.values() if v == n_samples)
+        majority  = len(vote_counts) - unanimous
+        click.echo(
+            f"      ✓ Consensus: {len(decision.actions)} action(s) "
+            f"({unanimous} unanimous, {majority} majority-only)"
+        )
+    else:
+        click.echo(f"      ✓ Got {len(decision.actions)} action(s)")
 
     # ── Step 9: Apply guardrails ──────────────────────────────────────────────
     universe_tickers = {t.yahoo_ticker for t in tickers}
@@ -243,7 +255,10 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         ))
 
     # ── Step 11: Print action list ────────────────────────────────────────────
-    action_list = format_action_list(decision, guardrail_result, snap, features, cfg)
+    action_list = format_action_list(
+        decision, guardrail_result, snap, features, cfg,
+        vote_counts=vote_counts, n_samples=n_samples,
+    )
     click.echo("\n" + action_list)
 
     # Save action list to file
@@ -261,7 +276,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         if bot_token and chat_id:
             buys  = [a for a in guardrail_result.approved_actions if a.side == "buy"]
             sells = [a for a in guardrail_result.approved_actions if a.side == "sell"]
-            lines = [f"<b>📊 Fund Run Complete</b>  <code>{run_id}</code>"]
+            holds = [a for a in guardrail_result.approved_actions if a.side == "hold"]
+            tg_consensus = vote_counts is not None and n_samples > 1
+            tg_vote = (lambda t: f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else "")
+            header = f"<b>📊 Fund Run Complete</b>  <code>{run_id}</code>"
+            if tg_consensus:
+                header += f"  <i>({n_samples}-run consensus)</i>"
+            lines = [header]
             lines.append(decision.market_summary)
             # NAV vs benchmark performance line
             from fundmgr.data.benchmark import get_benchmark_return_pct
@@ -277,14 +298,19 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
                 lines.append("")
                 lines.append("<b>🟢 BUYS</b>")
                 for a in buys:
-                    lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
+                    lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
                     lines.append(f"  <i>{a.thesis}</i>")
             if sells:
                 lines.append("")
                 lines.append("<b>🔴 SELLS</b>")
                 for a in sells:
-                    lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}")
+                    lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
                     lines.append(f"  <i>{a.thesis}</i>")
+            if holds:
+                lines.append("")
+                lines.append("<b>⏸ HOLDS</b>")
+                for a in holds:
+                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{a.thesis[:120]}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:

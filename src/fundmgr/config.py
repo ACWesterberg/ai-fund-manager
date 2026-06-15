@@ -20,6 +20,7 @@ class LLMConfig:
     temperature: float = 0.2
     max_tokens: int = 4096
     reasoning_effort: str | None = None  # "low" | "medium" | "high" — for o1/o3/gpt-5+ models
+    n_samples: int = 1  # run LLM this many times and take majority-vote consensus; 1 = disabled
 
 
 @dataclass
@@ -169,6 +170,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             temperature=llm_raw.get("temperature", 0.2),
             max_tokens=llm_raw.get("max_tokens", 4096),
             reasoning_effort=llm_raw.get("reasoning_effort", None),
+            n_samples=int(llm_raw.get("n_samples", 1)),
         )
 
     if risk_raw := raw.get("risk"):

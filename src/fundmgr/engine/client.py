@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from pydantic import ValidationError
 
 from fundmgr.config import AppConfig
-from fundmgr.engine.schema import DecisionRun
+from fundmgr.engine.schema import Action, DecisionRun
 
 
 class LLMError(Exception):
@@ -135,3 +137,111 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun
         raise LLMError(f"Failed to parse Anthropic response: {e}\n\nRaw response:\n{raw_text}") from e
 
     return parsed, raw_text
+
+
+# ── Consensus sampling ────────────────────────────────────────────────────────
+
+def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str, int]]:
+    """
+    Majority-vote aggregate of N DecisionRun objects.
+
+    A ticker makes it into the consensus only if strictly more than half the runs
+    agree on the same side (buy/sell/hold). Numeric fields are averaged across
+    the agreeing runs; the thesis is taken from the highest-confidence agreeing run.
+
+    Returns (consensus_decision, {ticker: n_agreeing_runs}).
+    """
+    n = len(runs)
+    threshold = n // 2 + 1  # e.g. 2 out of 3, 3 out of 5
+
+    all_tickers: set[str] = {a.ticker for run in runs for a in run.actions}
+
+    consensus_actions: list[Action] = []
+    vote_counts: dict[str, int] = {}
+
+    for ticker in all_tickers:
+        per_run = [a for run in runs for a in run.actions if a.ticker == ticker]
+        if not per_run:
+            continue
+
+        best_side, best_n = Counter(a.side for a in per_run).most_common(1)[0]
+        if best_n < threshold:
+            continue
+
+        agreeing = [a for a in per_run if a.side == best_side]
+
+        stop_losses    = [a.stop_loss_pct    for a in agreeing if a.stop_loss_pct    is not None]
+        take_profits   = [a.take_profit_pct  for a in agreeing if a.take_profit_pct  is not None]
+        best_action    = max(agreeing, key=lambda a: a.confidence)
+
+        consensus_actions.append(Action(
+            ticker=ticker,
+            side=best_side,
+            target_weight_pct=round(sum(a.target_weight_pct for a in agreeing) / len(agreeing), 1),
+            sek_estimate=round(sum(a.sek_estimate for a in agreeing) / len(agreeing), 0),
+            confidence=round(sum(a.confidence for a in agreeing) / len(agreeing), 3),
+            thesis=best_action.thesis,
+            stop_loss_pct=round(sum(stop_losses) / len(stop_losses), 1) if stop_losses else None,
+            take_profit_pct=round(sum(take_profits) / len(take_profits), 1) if take_profits else None,
+        ))
+        vote_counts[ticker] = best_n
+
+    seen_notes: list[str] = []
+    for r in runs:
+        if r.notes and r.notes not in seen_notes:
+            seen_notes.append(r.notes)
+
+    consensus = DecisionRun(
+        run_id=runs[0].run_id,
+        market_summary=runs[0].market_summary,
+        actions=consensus_actions,
+        cash_target_pct=round(sum(r.cash_target_pct for r in runs) / len(runs), 1),
+        notes=" | ".join(seen_notes)[:1000],
+    )
+    return consensus, vote_counts
+
+
+def call_llm_consensus(
+    system: str,
+    user: str,
+    cfg: AppConfig,
+) -> tuple[DecisionRun, str, dict[str, int] | None]:
+    """
+    Call the LLM cfg.llm.n_samples times in parallel and return a majority-vote
+    consensus DecisionRun.
+
+    Returns (decision, raw_for_db, vote_counts) where:
+      - vote_counts is None when n_samples <= 1 (passthrough mode)
+      - vote_counts is {ticker: n_agreeing_runs} when consensus was used
+    """
+    n = cfg.llm.n_samples
+    if n <= 1:
+        decision, raw = call_llm(system, user, cfg)
+        return decision, raw, None
+
+    results:       list[DecisionRun] = []
+    raw_responses: list[str]         = []
+    errors:        list[str]         = []
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        futures = [pool.submit(call_llm, system, user, cfg) for _ in range(n)]
+        for fut in as_completed(futures):
+            try:
+                decision, raw = fut.result()
+                results.append(decision)
+                raw_responses.append(raw)
+            except LLMError as e:
+                errors.append(str(e))
+
+    if not results:
+        raise LLMError(f"All {n} LLM calls failed: {'; '.join(errors)}")
+
+    if errors:
+        # Partial failure — note it but continue with what we have
+        print(f"  ⚠ {len(errors)}/{n} LLM call(s) failed; building consensus from {len(results)} run(s).")
+
+    if len(results) == 1:
+        return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}
+
+    consensus, vote_counts = _aggregate_decisions(results)
+    return consensus, consensus.model_dump_json(), vote_counts

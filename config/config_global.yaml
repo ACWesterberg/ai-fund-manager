@@ -11,6 +11,7 @@ llm:
   model_id: "gpt-5.5"
   max_tokens: 16000
   reasoning_effort: "high"
+  n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled
 
 risk:
   max_position_pct: 18

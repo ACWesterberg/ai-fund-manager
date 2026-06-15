@@ -670,7 +670,7 @@ def check_stops(quiet: bool):
             profits_hit.append((p.ticker, chg, tp_pct, live_price))
         elif chg < -5:
             status = "⚠ watch"
-            warnings.append((p.ticker, chg, live_price))
+            warnings.append((p.ticker, chg, live_price, stop_pct))
         else:
             status = "✓ ok"
 
@@ -724,8 +724,15 @@ def check_stops(quiet: bool):
         for ticker, chg, tp_pct, price in profits_hit:
             note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — consider trimming"
             lines.append(f"🎯 <b>{ticker}</b> {chg:+.1f}% — TARGET HIT (+{tp_pct:.0f}%)  live {price:.2f}{note}")
-        for ticker, chg, price in warnings:
-            lines.append(f"⚠ <b>{ticker}</b> {chg:+.1f}% — down &gt;5%  live {price:.2f}")
+        for ticker, chg, price, stop_pct in warnings:
+            if stop_pct:
+                remaining = stop_pct + chg  # e.g. stop=-15, chg=-10.6 → 4.4pp left
+                lines.append(
+                    f"⚠ <b>{ticker}</b> {chg:+.1f}% since entry  "
+                    f"stop -{stop_pct:.0f}% ({remaining:.1f}pp away)  live {price:.2f}"
+                )
+            else:
+                lines.append(f"⚠ <b>{ticker}</b> {chg:+.1f}% since entry  live {price:.2f}")
         if (stops_hit or profits_hit) and not auto_sold:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)

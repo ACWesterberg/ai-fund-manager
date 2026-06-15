@@ -17,8 +17,9 @@
 # Covers morning open, mid-session, early and late afternoon
 0 9,11,14,16 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
 
-# Stop-loss check — weekdays 17:15 CET (15 min before OMX closes at 17:30)
-15 17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
+# Stop-loss checks — every 15 min during OMX trading hours (09:00–17:30 CET)
+# Matches yfinance's 15-min data delay — checking more often gives no benefit
+*/15 9-17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
 # ═══ GLOBAL SIMULATION FUND — NYSE/NASDAQ + European overlap ═════════════════
@@ -37,5 +38,5 @@
 # 14:00: pre-market US sentiment; 18:00: mid NYSE session; 21:00: late NYSE / earnings window
 0 14,18,21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-news >> data/logs/news_global.log 2>&1
 
-# Stop/take-profit check — weekdays 21:45 CET (15 min before NYSE closes at ~22:00 CET)
-45 21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1
+# Stop-loss checks — every 15 min during NYSE trading hours (15:30–22:00 CET)
+*/15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1

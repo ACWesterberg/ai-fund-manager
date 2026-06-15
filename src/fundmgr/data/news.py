@@ -59,8 +59,14 @@ def _build_keyword_map(tickers: list[UniverseTicker]) -> dict[str, list[str]]:
         kws = []
         # Strip exchange suffix for stem matching (e.g. VOLV-B.ST -> VOLV-B, VOLV)
         stem = t.yahoo_ticker.rsplit(".", 1)[0]
-        kws.append(stem.lower())
-        kws.append(stem.split("-")[0].lower())
+        base = stem.split("-")[0].lower()
+        stem_lower = stem.lower()
+        # Only use ticker stems ≥4 chars — shorter stems (F, V, FI …) match too many
+        # common words and generate noise; rely on company name matching instead
+        if len(base) >= 4:
+            kws.append(stem_lower)
+            if base != stem_lower:
+                kws.append(base)
         # Add significant name words (≥5 chars)
         for word in t.name.split():
             word = re.sub(r"[^a-z0-9]", "", word.lower())
@@ -71,11 +77,11 @@ def _build_keyword_map(tickers: list[UniverseTicker]) -> dict[str, list[str]]:
 
 
 def _match_ticker(text: str, keyword_map: dict[str, list[str]]) -> list[str]:
-    """Return list of tickers whose keywords appear in the text."""
+    """Return list of tickers whose keywords appear as whole words in the text."""
     text_lower = text.lower()
     matched = []
     for ticker, kws in keyword_map.items():
-        if any(kw in text_lower for kw in kws):
+        if any(re.search(r'\b' + re.escape(kw) + r'\b', text_lower) for kw in kws):
             matched.append(ticker)
     return matched
 

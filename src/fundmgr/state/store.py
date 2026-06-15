@@ -140,6 +140,11 @@ CREATE TABLE IF NOT EXISTS news_triggers (
     article_hash    TEXT NOT NULL UNIQUE  -- SHA1(ticker+headline) — deduplicates across polls
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_ticker ON news_triggers (ticker, triggered_at);
+CREATE TABLE IF NOT EXISTS daily_price_alerts (
+    ticker      TEXT NOT NULL,
+    alert_date  TEXT NOT NULL,
+    PRIMARY KEY (ticker, alert_date)
+);
 """
 
 
@@ -354,6 +359,21 @@ class Store:
             conn.execute("DELETE FROM transactions WHERE id = ?", (txn.id,))
 
         return txn
+
+    def has_sent_daily_drop_alert(self, ticker: str, date: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM daily_price_alerts WHERE ticker = ? AND alert_date = ?",
+                (ticker, date),
+            ).fetchone()
+            return row is not None
+
+    def record_daily_drop_alert(self, ticker: str, date: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO daily_price_alerts (ticker, alert_date) VALUES (?, ?)",
+                (ticker, date),
+            )
 
     def total_fees_paid(self) -> float:
         with self._conn() as conn:

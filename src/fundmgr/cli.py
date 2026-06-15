@@ -639,11 +639,16 @@ def check_stops(quiet: bool):
     profits_hit: list[tuple] = []
     warnings: list[tuple] = []
 
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
     for p in positions:
         try:
-            live_price = yf.Ticker(p.ticker).fast_info.last_price
+            fi = yf.Ticker(p.ticker).fast_info
+            live_price = fi.last_price
+            prev_close = fi.previous_close
         except Exception:
             live_price = None
+            prev_close = None
 
         if not live_price:
             if not quiet:
@@ -651,6 +656,7 @@ def check_stops(quiet: bool):
             continue
 
         chg = (live_price / p.avg_cost_sek - 1) * 100
+        daily_chg = (live_price / prev_close - 1) * 100 if prev_close else None
         levels = stop_map.get(p.ticker, {})
         stop_pct = levels.get("stop_pct")
         tp_pct = levels.get("take_profit_pct")
@@ -668,16 +674,18 @@ def check_stops(quiet: bool):
         elif tp_pct and chg >= tp_pct:
             status = "🎯 TARGET HIT"
             profits_hit.append((p.ticker, chg, tp_pct, live_price))
-        elif chg < -5:
+        elif daily_chg is not None and daily_chg < -5 and not store.has_sent_daily_drop_alert(p.ticker, today):
             status = "⚠ watch"
-            warnings.append((p.ticker, chg, live_price, stop_pct))
+            warnings.append((p.ticker, chg, daily_chg, live_price, stop_pct))
+            store.record_daily_drop_alert(p.ticker, today)
         else:
             status = "✓ ok"
 
         if not quiet:
+            daily_str = f" ({daily_chg:+.1f}% today)" if daily_chg is not None else ""
             click.echo(
                 f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {live_price:>8.2f} "
-                f"{chg:>+7.1f}% {levels_str:>14} {status}"
+                f"{chg:>+7.1f}%{daily_str} {levels_str:>14} {status}"
             )
 
     if not quiet:
@@ -724,15 +732,17 @@ def check_stops(quiet: bool):
         for ticker, chg, tp_pct, price in profits_hit:
             note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — consider trimming"
             lines.append(f"🎯 <b>{ticker}</b> {chg:+.1f}% — TARGET HIT (+{tp_pct:.0f}%)  live {price:.2f}{note}")
-        for ticker, chg, price, stop_pct in warnings:
+        for ticker, chg, daily_chg, price, stop_pct in warnings:
             if stop_pct:
                 remaining = stop_pct + chg  # e.g. stop=-15, chg=-10.6 → 4.4pp left
                 lines.append(
-                    f"⚠ <b>{ticker}</b> {chg:+.1f}% since entry  "
+                    f"⚠ <b>{ticker}</b> {daily_chg:+.1f}% today  ({chg:+.1f}% since entry)  "
                     f"stop -{stop_pct:.0f}% ({remaining:.1f}pp away)  live {price:.2f}"
                 )
             else:
-                lines.append(f"⚠ <b>{ticker}</b> {chg:+.1f}% since entry  live {price:.2f}")
+                lines.append(
+                    f"⚠ <b>{ticker}</b> {daily_chg:+.1f}% today  ({chg:+.1f}% since entry)  live {price:.2f}"
+                )
         if (stops_hit or profits_hit) and not auto_sold:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)

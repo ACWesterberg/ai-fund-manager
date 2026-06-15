@@ -17,8 +17,8 @@
 # Covers morning open, mid-session, early and late afternoon
 0 9,11,14,16 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
 
-# Stop-loss check — weekdays 17:45 CET (15 min after OMX closes at 17:30)
-45 17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
+# Stop-loss check — weekdays 17:15 CET (15 min before OMX closes at 17:30)
+15 17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
 # ═══ GLOBAL SIMULATION FUND — NYSE/NASDAQ + European overlap ═════════════════

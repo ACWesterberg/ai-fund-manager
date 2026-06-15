@@ -450,6 +450,20 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         pass
 
 
+@cli.command("undo-fill")
+def undo_fill():
+    """Reverse the most recent fill (position + cash restored, transaction deleted)."""
+    cfg, store = _get_store()
+    txn = store.undo_last_fill()
+    if txn is None:
+        click.echo("No transactions to undo.")
+        return
+    direction = "BUY" if txn.side == "buy" else "SELL"
+    click.echo(f"✓ Undone: {direction} {txn.shares} × {txn.ticker} @ {txn.price_sek:.2f} SEK  "
+               f"(fee {txn.fee_sek:.2f} SEK, recorded {txn.timestamp.strftime('%Y-%m-%d %H:%M')})")
+    click.echo(f"  Cash now: {store.get_cash():,.0f} SEK")
+
+
 @cli.command("backfill-nav")
 def backfill_nav():
     """Reconstruct NAV history from transaction log (one point per trading day)."""

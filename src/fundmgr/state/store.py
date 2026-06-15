@@ -292,6 +292,69 @@ class Store:
             for r in rows
         ]
 
+    def undo_last_fill(self) -> Transaction | None:
+        """
+        Atomically reverse the most recent transaction and return it, or None if none exists.
+        Restores position shares/avg_cost and cash to their pre-fill state.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM transactions ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+
+            txn = Transaction(
+                id=row["id"],
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                ticker=row["ticker"],
+                side=row["side"],
+                shares=float(row["shares"]),
+                price_sek=float(row["price_sek"]),
+                fee_sek=float(row["fee_sek"]),
+                source=row["source"],
+            )
+
+            pos = conn.execute(
+                "SELECT shares, avg_cost_sek FROM positions WHERE ticker = ?", (txn.ticker,)
+            ).fetchone()
+            cur_shares = float(pos["shares"]) if pos else 0.0
+            cur_avg    = float(pos["avg_cost_sek"]) if pos else 0.0
+
+            if txn.side == "buy":
+                # Reverse weighted average: recover old_shares and old_cost
+                old_shares = cur_shares - txn.shares
+                if old_shares <= 0:
+                    # Position didn't exist before this fill — remove it entirely
+                    conn.execute("DELETE FROM positions WHERE ticker = ?", (txn.ticker,))
+                else:
+                    old_avg = (cur_avg * cur_shares - txn.shares * txn.price_sek) / old_shares
+                    conn.execute(
+                        "UPDATE positions SET shares = ?, avg_cost_sek = ? WHERE ticker = ?",
+                        (old_shares, old_avg, txn.ticker),
+                    )
+                # Return cash that was spent
+                conn.execute(
+                    "UPDATE cash SET balance_sek = balance_sek + ? WHERE id = 1",
+                    (txn.gross_sek + txn.fee_sek,),
+                )
+            else:  # sell
+                # Restore shares; avg_cost unchanged on sells
+                old_shares = cur_shares + txn.shares
+                conn.execute(
+                    "UPDATE positions SET shares = ? WHERE ticker = ?",
+                    (old_shares, txn.ticker),
+                )
+                # Deduct proceeds that were credited
+                conn.execute(
+                    "UPDATE cash SET balance_sek = balance_sek - ? WHERE id = 1",
+                    (txn.gross_sek - txn.fee_sek,),
+                )
+
+            conn.execute("DELETE FROM transactions WHERE id = ?", (txn.id,))
+
+        return txn
+
     def total_fees_paid(self) -> float:
         with self._conn() as conn:
             row = conn.execute("SELECT COALESCE(SUM(fee_sek), 0) as total FROM transactions").fetchone()

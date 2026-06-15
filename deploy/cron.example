@@ -37,5 +37,5 @@
 # 14:00: pre-market US sentiment; 18:00: mid NYSE session; 21:00: late NYSE / earnings window
 0 14,18,21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-news >> data/logs/news_global.log 2>&1
 
-# Stop/take-profit check — weekdays 22:15 CET (15 min after NYSE closes at ~22:00 CET)
-15 22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1
+# Stop/take-profit check — weekdays 21:45 CET (15 min before NYSE closes at ~22:00 CET)
+45 21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1

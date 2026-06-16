@@ -812,17 +812,16 @@ def check_news(auto_run: bool, max_age_hours: int):
         click.echo(f"  {flag} {t['ticker']}  [{t['sentiment_label'].upper()} {t['sentiment_score']:.2f}]")
         click.echo(f"       {t['headline'][:100]}")
 
-    # Send Telegram notification
+    # Send Telegram notification — held positions only
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if bot_token and chat_id:
-        lines = ["<b>⚡ News Trigger</b>"]
-        for t in triggers:
-            flag = "🔴" if t["is_held"] else "🟡"
+    if held_triggers and bot_token and chat_id:
+        lines = ["<b>⚡ News Trigger — held position</b>"]
+        for t in held_triggers:
             label = t["sentiment_label"].upper()
-            lines.append(f"{flag} <b>{t['ticker']}</b> [{label} {t['sentiment_score']:.2f}]")
+            lines.append(f"🔴 <b>{t['ticker']}</b> [{label} {t['sentiment_score']:.2f}]")
             lines.append(f"  {t['headline'][:120]}")
-        if auto_run and held_triggers:
+        if auto_run:
             lines.append("\n▶ Triggering early decision run…")
         msg = "\n".join(lines)
         try:

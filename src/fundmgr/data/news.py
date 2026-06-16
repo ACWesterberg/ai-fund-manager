@@ -52,6 +52,22 @@ def _score_sentiment(texts: list[str], model: str, device: str) -> list[dict]:
         return [{"label": "neutral", "score": 0.5}] * len(texts)
 
 
+# Generic industry/descriptor words that appear in company names but match
+# far too broadly in headlines — excluded from keyword matching
+_GENERIC_NAME_WORDS = {
+    "water", "group", "power", "solar", "media", "steel", "foods", "paper",
+    "drugs", "stone", "cable", "fiber", "clean", "smart", "micro", "north",
+    "south", "east", "west", "global", "digital", "capital", "holding",
+    "holdings", "international", "services", "solutions", "technologies",
+    "systems", "energy", "finance", "financial", "properties", "realty",
+    "partners", "ventures", "industries", "resources", "networks",
+    "communications", "healthcare", "pharma", "biotech", "management",
+    "investment", "investments", "corporation", "company", "limited",
+    "bancorp", "bancshares", "equities", "markets", "assets", "trust",
+    "funds", "technology", "technologies", "innovation", "innovations",
+}
+
+
 def _build_keyword_map(tickers: list[UniverseTicker]) -> dict[str, list[str]]:
     """Map yahoo_ticker -> list of keywords (name parts and ticker stem) to match in headlines."""
     kmap: dict[str, list[str]] = {}
@@ -67,10 +83,10 @@ def _build_keyword_map(tickers: list[UniverseTicker]) -> dict[str, list[str]]:
             kws.append(stem_lower)
             if base != stem_lower:
                 kws.append(base)
-        # Add significant name words (≥5 chars)
+        # Add significant name words (≥5 chars), excluding generic industry terms
         for word in t.name.split():
             word = re.sub(r"[^a-z0-9]", "", word.lower())
-            if len(word) >= 5:
+            if len(word) >= 5 and word not in _GENERIC_NAME_WORDS:
                 kws.append(word)
         kmap[t.yahoo_ticker] = list(set(kws))
     return kmap

@@ -640,23 +640,30 @@ def check_stops(quiet: bool):
     warnings: list[tuple] = []
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
+    today_date = datetime.utcnow().date()
 
     for p in positions:
         try:
-            fi = yf.Ticker(p.ticker).fast_info
-            live_price = fi.last_price
-            prev_close = fi.previous_close
+            hist = yf.Ticker(p.ticker).history(period="2d")
         except Exception:
-            live_price = None
-            prev_close = None
+            hist = None
 
-        if not live_price:
+        if hist is None or hist.empty:
             if not quiet:
                 click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}")
             continue
 
-        chg = (live_price / p.avg_cost_sek - 1) * 100
-        daily_chg = (live_price / prev_close - 1) * 100 if prev_close else None
+        live_price = float(hist["Close"].iloc[-1])
+
+        # Only compute daily change if today's bar is actually present —
+        # at market open yfinance still shows yesterday's close as last_price,
+        # which would make the "daily" change show yesterday's move instead
+        daily_chg = None
+        if len(hist) >= 2:
+            last_bar_date = hist.index[-1].date()
+            if last_bar_date == today_date:
+                prev_day_close = float(hist["Close"].iloc[-2])
+                daily_chg = (live_price / prev_day_close - 1) * 100
         levels = stop_map.get(p.ticker, {})
         stop_pct = levels.get("stop_pct")
         tp_pct = levels.get("take_profit_pct")

@@ -24,6 +24,11 @@ from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog,
 from fundmgr.state.store import Store
 
 
+# After this many logged runs (≈ weeks at weekly cadence) the post-run Telegram
+# notification nudges once to check the Refine gate. Re-arms after `fund reset`.
+REFINE_REMINDER_AFTER_RUNS = 4
+
+
 def _get_store(cfg=None) -> tuple:
     if cfg is None:
         cfg = load_config()
@@ -353,6 +358,23 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
                 lines.append("No trades this run — holding cash.")
             if decision.notes:
                 lines.append(f"\n<i>{decision.notes}</i>")
+            # One-shot reminder: once enough weeks of runs have accumulated,
+            # nudge to check the Refine gate. Fires once, re-arms after reset.
+            show_refine_reminder = False
+            try:
+                rec_count = store.count_recommendations()
+                if rec_count >= REFINE_REMINDER_AFTER_RUNS and not store.get_meta("refine_gate_reminded"):
+                    rs = store.get_rejection_stats()
+                    show_refine_reminder = True
+                    lines.append(
+                        f"\n<b>🔬 Refine-gate check</b>\n"
+                        f"{rec_count} runs logged — enough data to decide on Refine.\n"
+                        f"  malformed samples: {rs['sample_failure_pct']}%\n"
+                        f"  guardrail rejected: {rs['guardrail_reject_pct']}%  clipped: {rs['guardrail_clip_pct']}%\n"
+                        f"Run /reject_rates for detail. Build Refine only if a rate is materially non-zero."
+                    )
+            except Exception:
+                pass
             # Split into ≤4096-char chunks at line boundaries
             full_msg = "\n".join(lines)
             chunks, current = [], ""
@@ -375,6 +397,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
                         data, timeout=10,
                     )
                 click.echo(f"  Telegram notification sent ({len(chunks)} message(s)).")
+                if show_refine_reminder:
+                    store.set_meta("refine_gate_reminded", datetime.utcnow().isoformat())
             except Exception as e:
                 click.echo(f"  ⚠ Telegram notification failed: {e}", err=True)
 

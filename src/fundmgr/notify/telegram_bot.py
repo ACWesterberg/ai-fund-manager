@@ -9,6 +9,7 @@ Commands:
   /report        — performance report
   /stops         — check stop-loss thresholds
   /universe      — list enabled tickers
+  /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
   /help          — show this message
 
 Photo messages:
@@ -229,6 +230,11 @@ async def cmd_universe(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     await _send(update, output)
 
 
+async def cmd_reject_rates(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    output = _run_cli("reject-rates", timeout=30)
+    await _send(update, output)
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -240,6 +246,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/report — performance vs OMXSPI\n"
         "/stops — check stop-loss alerts\n"
         "/universe — list all enabled tickers\n"
+        "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill."
     )
@@ -535,6 +542,7 @@ def main() -> None:
     app.add_handler(CommandHandler("report",   cmd_report))
     app.add_handler(CommandHandler("stops",    cmd_stops))
     app.add_handler(CommandHandler("universe", cmd_universe))
+    app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

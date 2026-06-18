@@ -145,6 +145,12 @@ CREATE TABLE IF NOT EXISTS daily_price_alerts (
     alert_date  TEXT NOT NULL,
     PRIMARY KEY (ticker, alert_date)
 );
+
+-- Small key-value store for fund-level flags (e.g. one-shot reminders).
+CREATE TABLE IF NOT EXISTS app_meta (
+    key     TEXT PRIMARY KEY,
+    value   TEXT NOT NULL
+);
 """
 
 
@@ -200,6 +206,25 @@ class Store:
         new_balance = self.get_cash() + delta_sek
         self.set_cash(new_balance)
         return new_balance
+
+    # ── Meta flags ────────────────────────────────────────────────────────────
+
+    def get_meta(self, key: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def count_recommendations(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) AS n FROM recommendations").fetchone()["n"]
 
     # ── Positions ─────────────────────────────────────────────────────────────
 
@@ -958,6 +983,7 @@ class Store:
         "position_stops",
         "news_triggers",
         "daily_price_alerts",
+        "app_meta",
     )
     _CACHE_TABLES = (
         "price_cache",

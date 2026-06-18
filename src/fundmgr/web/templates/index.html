@@ -5,10 +5,17 @@
 {% block content %}
 
 {% if is_simulation %}
+{% if sim_accent == 'violet' %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border border-violet-500/20 bg-violet-500/5 flex items-center gap-2 text-violet-400 text-xs font-semibold">
+  <span class="material-symbols-outlined" style="font-size:15px">psychology</span>
+  SIMULATION — {{ sim_label }} · Auto-executed trades · Not real money
+</div>
+{% else %}
 <div class="mb-4 px-4 py-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-center gap-2 text-amber-400 text-xs font-semibold">
   <span class="material-symbols-outlined" style="font-size:15px">science</span>
-  SIMULATION — Global Paper Trading Fund · Auto-executed trades · Not real money
+  SIMULATION — {{ sim_label }} · Auto-executed trades · Not real money
 </div>
+{% endif %}
 {% endif %}
 
 <!-- ── KPI strip ── -->

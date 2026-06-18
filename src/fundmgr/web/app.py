@@ -37,9 +37,14 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app = FastAPI(title="AI Fund Manager", docs_url=None, redoc_url=None)
 
-# Global simulation sub-routes at /sim/*
-from fundmgr.web.sim import router as sim_router  # noqa: E402
-app.include_router(sim_router)
+# Simulation sub-routes — one per model provider
+from fundmgr.web.sim import make_sim_router  # noqa: E402
+app.include_router(make_sim_router(
+    "config/config_global.yaml", "/sim", "GPT-5.5 Global Fund", sim_accent="amber"
+))
+app.include_router(make_sim_router(
+    "config/config_claude.yaml", "/sim-claude", "Claude Opus Global Fund", sim_accent="violet"
+))
 
 # Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)

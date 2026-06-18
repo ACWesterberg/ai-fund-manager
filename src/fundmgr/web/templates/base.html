@@ -162,13 +162,25 @@
 
       <div class="my-3 border-t border-slate-800/50"></div>
       <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Simulation</p>
-      <a href="/sim" class="nav-link {% if sim_prefix is defined and active_page == 'portfolio' %}active{% endif %}"
+
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium text-slate-600">GPT-5.5</p>
+      <a href="/sim" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'portfolio' %}active{% endif %}"
          style="color:#78716c">
-        <span class="material-symbols-outlined" style="color:#78716c">science</span>Global Fund
+        <span class="material-symbols-outlined" style="color:#78716c">science</span>Portfolio
       </a>
-      <a href="/sim/history" class="nav-link {% if sim_prefix is defined and active_page == 'history' %}active{% endif %}"
+      <a href="/sim/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'history' %}active{% endif %}"
          style="color:#78716c">
-        <span class="material-symbols-outlined" style="color:#78716c">history</span>Sim Decisions
+        <span class="material-symbols-outlined" style="color:#78716c">history</span>Decisions
+      </a>
+
+      <p class="px-2 mt-2 mb-0.5 text-[10px] font-medium" style="color:#6d28d9">Claude Opus</p>
+      <a href="/sim-claude" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'portfolio' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">psychology</span>Portfolio
+      </a>
+      <a href="/sim-claude/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'history' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">history</span>Decisions
       </a>
     </nav>
 

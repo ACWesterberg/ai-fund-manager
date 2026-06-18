@@ -1,0 +1,61 @@
+capital_sek: 50000
+cadence: weekly
+benchmark: "URTH"
+
+db_path: "data/fund_claude.db"
+mandate_path: "config/mandate_global.md"
+universe_path: "config/universe_global.csv"
+
+llm:
+  provider: anthropic
+  model_id: "claude-opus-4-8"
+  max_tokens: 16000
+  n_samples: 3
+
+risk:
+  max_position_pct: 18
+  max_positions: 10
+  max_sector_pct: 35
+  min_cash_pct: 5
+  max_cash_pct: 10
+  min_trade_sek: 2500
+  max_turnover_pct: 25
+  stale_after_days: 5
+  cold_start_cash_threshold: 80
+  cold_start_turnover_pct: 50
+
+fees:
+  rate: 0.001
+  min_sek: 1.0
+  max_sek: 99.0
+
+data:
+  price_provider: yfinance
+  lookback_days: 252
+  news_feeds:
+    - "https://feeds.bbci.co.uk/news/business/rss.xml"
+    - "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    - "https://feeds.a.wsj.com/rss/RSSWorldNews.xml"
+    - "https://www.di.se/rss"
+    - "https://mfn.se/a/all.rss"
+  macro_feeds:
+    - "https://feeds.bbci.co.uk/news/business/rss.xml"
+    - "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    - "https://www.cnbc.com/id/100727362/device/rss/rss.html"
+    - "https://feeds.a.wsj.com/rss/RSSWorldNews.xml"
+  sentiment:
+    enabled: true
+    model: "ProsusAI/finbert"
+    device: "cpu"
+    trigger_threshold_negative: 0.80
+    trigger_threshold_positive: 0.85
+    trigger_cooldown_hours: 6
+
+auto_fill: true
+
+screener:
+  top_n: 75
+
+reporting:
+  currency: SEK
+  output_dir: "data/reports_claude"

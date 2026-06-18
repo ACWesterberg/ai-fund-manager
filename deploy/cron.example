@@ -22,17 +22,15 @@
 */15 9-17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
-# ═══ GLOBAL SIMULATION FUND — NYSE/NASDAQ + European overlap ═════════════════
+# ═══ GLOBAL SIMULATION FUND (OpenAI GPT-5.5) — NYSE/NASDAQ + European overlap ══
 #
 # Best execution window: 16:00 CET
 #   - NYSE/NASDAQ open at 15:30 CET → 30 min in, opening noise settled
 #   - European markets (XETRA, Euronext, LSE) still open until 17:30 CET
 #   - Only window where both hemispheres are live simultaneously
-#
-# --skip-news: Nordic RSS feeds don't cover US/global stocks
 
 # Weekly decision run — Monday 16:00 CET
-0 16 * * 1 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund run --skip-news >> data/logs/weekly_global.log 2>&1
+0 16 * * 1 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund run >> data/logs/weekly_global.log 2>&1
 
 # News trigger checks — weekdays during US trading hours
 # 14:00: pre-market US sentiment; 18:00: mid NYSE session; 21:00: late NYSE / earnings window
@@ -40,3 +38,17 @@
 
 # Stop-loss checks — every 15 min during NYSE trading hours (15:30–22:00 CET)
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund check-stops >> data/logs/stops_global.log 2>&1
+
+
+# ═══ CLAUDE SIMULATION FUND (Anthropic Claude Opus) — same universe as Global ══
+#
+# Runs 30 min after GPT-5.5 so both get same market conditions but decide independently
+
+# Weekly decision run — Monday 16:30 CET
+30 16 * * 1 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund run >> data/logs/weekly_claude.log 2>&1
+
+# News trigger checks — same windows as Global (same universe, same news sources)
+0 14,18,21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund check-news >> data/logs/news_claude.log 2>&1
+
+# Stop-loss checks — every 15 min during NYSE trading hours (15:30–22:00 CET)
+*/15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_claude.log 2>&1

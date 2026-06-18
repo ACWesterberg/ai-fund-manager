@@ -111,14 +111,20 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun
         + DecisionRun.model_json_schema().__repr__()
     )
 
+    # Claude 4+ models (opus-4-x, sonnet-4-x, haiku-4-x) do not accept temperature
+    _TEMPERATURE_FREE = ("claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")
+    use_temperature = not any(cfg.llm.model_id.startswith(p) for p in _TEMPERATURE_FREE)
+
     try:
-        response = client.messages.create(
+        kwargs = dict(
             model=cfg.llm.model_id,
             max_tokens=cfg.llm.max_tokens,
             system=system + schema_hint,
             messages=[{"role": "user", "content": user}],
-            temperature=cfg.llm.temperature,
         )
+        if use_temperature:
+            kwargs["temperature"] = cfg.llm.temperature
+        response = client.messages.create(**kwargs)
     except Exception as e:
         raise LLMError(f"Anthropic API call failed: {e}") from e
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import yaml
@@ -92,6 +94,24 @@ class AppConfig:
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
     auto_fill: bool = False  # if True, paper-execute fills automatically after each run
+
+    def config_hash(self) -> str:
+        """Short hash of the decision-shaping config, for within-repo regime drift.
+
+        Scope: risk + llm + fees — the parameters that change the model's
+        decision surface. Deliberately excludes universe (churns weekly; the
+        actual tickers shown are captured per-run in the snapshot's `universe`
+        field) and data-source / non-semantic config (feeds, paths, web, etc.).
+        Cross-repo hashes are NOT expected to match — this only flags drift
+        within one repo (e.g. when capital or risk limits change).
+        """
+        payload = {
+            "risk": asdict(self.risk),
+            "llm": asdict(self.llm),
+            "fees": asdict(self.fees),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
 _EXCHANGE_CURRENCY: dict[str, str] = {

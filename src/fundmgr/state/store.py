@@ -557,12 +557,17 @@ class Store:
                 except Exception:
                     continue
                 example = {
-                    "run_id":         r["run_id"],
-                    "timestamp":      r["timestamp"],
-                    "score":          r["score"],
-                    "system_message": snap.get("system_message", ""),
-                    "user_message":   snap.get("user_message", ""),
-                    "llm_response":   r["llm_response"],
+                    "run_id":           r["run_id"],
+                    "timestamp":        r["timestamp"],
+                    "score":            r["score"],
+                    "snapshot_version": snap.get("snapshot_version", 1),
+                    # Flat — exact replay / audit (always present)
+                    "system_message":   snap.get("system_message", ""),
+                    "user_message":     snap.get("user_message", ""),
+                    # Fielded + regime — present for v2+, null for legacy v1 rows
+                    "fields":           snap.get("fields"),
+                    "regime":           snap.get("regime"),
+                    "llm_response":     r["llm_response"],
                 }
                 f.write(_json.dumps(example) + "\n")
                 count += 1

@@ -173,12 +173,15 @@ def build_lm(cfg: "AppConfig"):
 # fewer malformed/illegal outputs), then layer 4 on as data arrives.
 
 
-def to_example(system: str, user: str):
-    """Illustrative: how a logged run maps to a dspy.Example for later optimization.
+def to_example(fields: dict, score: float):
+    """Map a logged run's fielded snapshot to a dspy.Example for optimization.
 
-    In practice we'd reconstruct the fielded inputs from prompt_snapshot rather
-    than the flattened (system, user) strings, so the Signature fields line up.
+    As of snapshot_version 2 the corpus stores `fields` directly (see
+    prompt.snapshot_to_dict), so this lines up 1:1 with WeeklyDecision's inputs
+    — no reconstruction from the flattened strings needed.
     """
     if dspy is None:
         raise RuntimeError("dspy not installed — this is a sketch")
-    return dspy.Example(mandate=system, universe=user).with_inputs("mandate", "universe")
+    return dspy.Example(score=score, **fields).with_inputs(
+        "mandate", "macro", "portfolio_state", "risk_limits", "universe", "learnings"
+    )

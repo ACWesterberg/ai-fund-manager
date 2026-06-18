@@ -186,10 +186,18 @@ def build_prompt(
     store: Store,
     run_id: str,
     macro_block: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, str]]:
     """
-    Returns (system_message, user_message).
+    Returns (system_message, user_message, fields).
+
     The system message is the mandate; the user message is the full context.
+    `fields` is the same context broken out into the shared, retrieval-ready
+    keys {mandate, macro, portfolio_state, risk_limits, universe, learnings}
+    so the training corpus is KNN/optimizer-ready at write time rather than
+    reconstructed from the flattened string later.
+
+    Note: `risk_limits` is the block *as rendered* — it embeds live sector
+    exposure derived from current positions, not just static config caps.
     """
     mandate = _load_mandate(cfg.mandate_path)
 
@@ -211,6 +219,22 @@ def build_prompt(
     current_tickers = {p.ticker for p in snap.positions}
     learnings = store.get_active_learnings()
 
+    # Discrete blocks — captured once, used both for the flat prompt and the
+    # fielded snapshot so the two can never drift.
+    portfolio_state = _portfolio_block(snap, bench_return)
+    risk_limits     = _risk_limits_block(cfg, snap, features)
+    learnings_block = _learnings_block(learnings)
+    universe        = _features_block(features, current_tickers)
+
+    fields = {
+        "mandate":         mandate,
+        "macro":           macro_block,
+        "portfolio_state": portfolio_state,
+        "risk_limits":     risk_limits,
+        "universe":        universe,
+        "learnings":       learnings_block,
+    }
+
     sections = [
         f"# Weekly Decision Run\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
     ]
@@ -220,17 +244,17 @@ def build_prompt(
         sections.append("")
 
     sections += [
-        _portfolio_block(snap, bench_return),
+        portfolio_state,
         "",
-        _risk_limits_block(cfg, snap, features),
+        risk_limits,
         "",
     ]
 
     if learnings:
-        sections.append(_learnings_block(learnings))
+        sections.append(learnings_block)
         sections.append("")
 
-    sections.append(_features_block(features, current_tickers))
+    sections.append(universe)
 
     sections.append(
         f"## Your Task\n"
@@ -239,12 +263,27 @@ def build_prompt(
     )
 
     user = "\n".join(sections)
-    return system, user
+    return system, user, fields
 
 
-def snapshot_to_dict(snap: PortfolioSnapshot, system: str, user: str) -> str:
-    """Serialise full prompt context for the recommendation log."""
-    return json.dumps({
+SNAPSHOT_VERSION = 2  # v1 = flat system/user only; v2 = + fields + regime
+
+
+def snapshot_to_dict(
+    snap: PortfolioSnapshot,
+    system: str,
+    user: str,
+    fields: dict[str, str] | None = None,
+    cfg: "AppConfig | None" = None,
+) -> str:
+    """Serialise full prompt context for the recommendation log.
+
+    v2 augments the flat system/user strings (kept for exact replay/audit) with
+    the fielded context and the run regime. The regime carries a nullable
+    `session` key so a single loader can serve both this repo and swing-trader.
+    """
+    out: dict = {
+        "snapshot_version": SNAPSHOT_VERSION,
         "nav_sek": snap.nav_sek,
         "cash_sek": snap.cash_sek,
         "positions": [
@@ -256,6 +295,19 @@ def snapshot_to_dict(snap: PortfolioSnapshot, system: str, user: str) -> str:
             }
             for p in snap.positions
         ],
+        # Flat — exact replay / audit
         "system_message": system,
         "user_message": user,
-    })
+        # Fielded — retrieval / optimizer ready
+        "fields": fields,
+    }
+    if cfg is not None:
+        out["regime"] = {
+            "capital_sek":  cfg.capital_sek,
+            "provider":     cfg.llm.provider,
+            "model_id":     cfg.llm.model_id,
+            "n_samples":    cfg.llm.n_samples,
+            "session":      None,  # nullable shared key (swing-trader sets us/european)
+            "config_hash":  cfg.config_hash(),
+        }
+    return json.dumps(out)

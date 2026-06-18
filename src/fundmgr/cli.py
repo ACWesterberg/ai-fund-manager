@@ -184,7 +184,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         click.echo(f"\n      Cold start detected (cash {snap.cash_pct:.0f}%): "
                    f"turnover cap → {cfg.risk.cold_start_turnover_pct:.0f}%")
 
-    system_msg, user_msg = build_prompt(effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block)
+    system_msg, user_msg, prompt_fields = build_prompt(effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block)
 
     # ── Call LLM (with optional consensus sampling) ───────────────────────────
     n_samples = effective_cfg.llm.n_samples
@@ -221,7 +221,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         rec = RecommendationLog(
             run_id=run_id,
             timestamp=datetime.utcnow(),
-            prompt_snapshot=snapshot_to_dict(snap, system_msg, user_msg),
+            prompt_snapshot=snapshot_to_dict(snap, system_msg, user_msg, prompt_fields, effective_cfg),
             llm_response=raw_response,
             guardrail_log=json.dumps(guardrail_result.to_log()),
             actions_json=json.dumps([a.model_dump() for a in guardrail_result.approved_actions]),

@@ -870,5 +870,45 @@ def universe():
     click.echo()
 
 
+@cli.command("score-runs")
+def score_runs():
+    """Score completed weekly runs by excess return vs benchmark (for DSPy training data)."""
+    scored = store.score_runs()
+    if not scored:
+        click.echo("No new runs to score (either too recent or already scored).")
+        return
+    click.echo(f"\n  Scored {len(scored)} run(s):\n")
+    click.echo(f"  {'Run ID':<30} {'Date':<12} {'Score':>10}  {'NAV start':>12} {'NAV end':>12}")
+    click.echo(f"  {'─'*30} {'─'*12} {'─'*10}  {'─'*12} {'─'*12}")
+    for r in scored:
+        sign = "+" if r["score"] >= 0 else ""
+        click.echo(
+            f"  {r['run_id']:<30} {r['timestamp'][:10]:<12} "
+            f"{sign}{r['score']*100:>8.3f}%  "
+            f"{r['nav_start']:>12,.0f} {r['nav_end']:>12,.0f}"
+        )
+    click.echo()
+
+
+@cli.command("export-dspy")
+@click.option("--output", default="data/dspy_dataset.jsonl", show_default=True,
+              help="Output path for the JSONL dataset")
+@click.option("--score-first", is_flag=True, default=True, show_default=True,
+              help="Run score-runs before exporting")
+def export_dspy(output: str, score_first: bool):
+    """Export scored runs to JSONL for DSPy/MIPRO prompt optimisation."""
+    import os
+    if score_first:
+        newly_scored = store.score_runs()
+        if newly_scored:
+            click.echo(f"  Scored {len(newly_scored)} new run(s) before export.")
+    os.makedirs(os.path.dirname(output) if os.path.dirname(output) else ".", exist_ok=True)
+    count = store.export_dspy(output)
+    if count == 0:
+        click.echo("No scored runs available yet — run 'fund score-runs' after at least one full week.")
+    else:
+        click.echo(f"  Exported {count} example(s) → {output}")
+
+
 if __name__ == "__main__":
     cli()

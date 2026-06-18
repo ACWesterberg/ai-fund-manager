@@ -170,11 +170,15 @@ class Store:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
         # Migrations: add columns to existing tables that predate schema changes
-        with self._conn() as conn:
-            try:
-                conn.execute("ALTER TABLE position_stops ADD COLUMN take_profit_pct REAL")
-            except Exception:
-                pass  # column already exists
+        for stmt in [
+            "ALTER TABLE position_stops ADD COLUMN take_profit_pct REAL",
+            "ALTER TABLE recommendations ADD COLUMN score REAL",
+        ]:
+            with self._conn() as conn:
+                try:
+                    conn.execute(stmt)
+                except Exception:
+                    pass  # column already exists
 
     # ── Cash ──────────────────────────────────────────────────────────────────
 
@@ -458,6 +462,111 @@ class Store:
             )
             for r in rows
         ]
+
+    # ── DSPy / MIPRO scoring and export ───────────────────────────────────────
+
+    def score_runs(self, min_days: int = 7) -> list[dict]:
+        """
+        Score completed weekly runs by excess return vs benchmark over the
+        following week.  Only scores runs that are at least min_days old and
+        have no score yet.
+
+        Returns a list of dicts: {run_id, timestamp, score, nav_start, nav_end}.
+        """
+        import json as _json
+        from datetime import datetime, timedelta
+
+        cutoff = (datetime.utcnow() - timedelta(days=min_days)).strftime("%Y-%m-%d")
+
+        with self._conn() as conn:
+            runs = conn.execute(
+                "SELECT run_id, timestamp FROM recommendations "
+                "WHERE score IS NULL AND substr(timestamp, 1, 10) <= ? "
+                "ORDER BY timestamp ASC",
+                (cutoff,),
+            ).fetchall()
+            nav_rows = conn.execute(
+                "SELECT date, portfolio_nav_sek, benchmark_value FROM nav_history ORDER BY date ASC"
+            ).fetchall()
+
+        if not nav_rows:
+            return []
+
+        nav_by_date = {r["date"]: r for r in nav_rows}
+        nav_dates = sorted(nav_by_date.keys())
+
+        def nearest_nav(target_date: str) -> dict | None:
+            """Return the NAV row closest to target_date (within ±3 days)."""
+            best, best_delta = None, 999
+            for d in nav_dates:
+                delta = abs((datetime.strptime(d, "%Y-%m-%d") - datetime.strptime(target_date, "%Y-%m-%d")).days)
+                if delta < best_delta:
+                    best, best_delta = nav_by_date[d], delta
+            return best if best_delta <= 3 else None
+
+        scored = []
+        for run in runs:
+            run_date = run["timestamp"][:10]
+            run_dt = datetime.strptime(run_date, "%Y-%m-%d")
+            end_date = (run_dt + timedelta(days=7)).strftime("%Y-%m-%d")
+
+            nav_start = nearest_nav(run_date)
+            nav_end   = nearest_nav(end_date)
+            if nav_start is None or nav_end is None:
+                continue
+
+            nav_ret   = nav_end["portfolio_nav_sek"] / nav_start["portfolio_nav_sek"] - 1
+            bench_ret = nav_end["benchmark_value"]   / nav_start["benchmark_value"]   - 1
+            score     = round(nav_ret - bench_ret, 6)
+
+            with self._conn() as conn:
+                conn.execute(
+                    "UPDATE recommendations SET score = ? WHERE run_id = ?",
+                    (score, run["run_id"]),
+                )
+            scored.append({
+                "run_id":    run["run_id"],
+                "timestamp": run["timestamp"],
+                "nav_start": nav_start["portfolio_nav_sek"],
+                "nav_end":   nav_end["portfolio_nav_sek"],
+                "score":     score,
+            })
+        return scored
+
+    def export_dspy(self, output_path: str) -> int:
+        """
+        Export all scored recommendations to a JSONL file for DSPy/MIPRO.
+
+        Each line: {run_id, timestamp, score, system_message, user_message, llm_response}
+
+        Returns the number of examples written.
+        """
+        import json as _json
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT run_id, timestamp, prompt_snapshot, llm_response, score "
+                "FROM recommendations WHERE score IS NOT NULL ORDER BY timestamp ASC"
+            ).fetchall()
+
+        count = 0
+        with open(output_path, "w") as f:
+            for r in rows:
+                try:
+                    snap = _json.loads(r["prompt_snapshot"])
+                except Exception:
+                    continue
+                example = {
+                    "run_id":         r["run_id"],
+                    "timestamp":      r["timestamp"],
+                    "score":          r["score"],
+                    "system_message": snap.get("system_message", ""),
+                    "user_message":   snap.get("user_message", ""),
+                    "llm_response":   r["llm_response"],
+                }
+                f.write(_json.dumps(example) + "\n")
+                count += 1
+        return count
 
     # ── Decision outcomes ─────────────────────────────────────────────────────
 

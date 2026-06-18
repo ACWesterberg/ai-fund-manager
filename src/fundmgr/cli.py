@@ -55,6 +55,41 @@ def init(capital: float | None):
 
 
 @cli.command()
+@click.option("--capital", type=float, default=None,
+              help="Fresh starting capital (SEK). Defaults to the config's capital_sek.")
+@click.option("--purge-cache", is_flag=True,
+              help="Also clear market-data caches (prices, benchmark, fundamentals, news).")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt (for scripted use).")
+def reset(capital: float | None, purge_cache: bool, yes: bool):
+    """Wipe ALL portfolio state + decision history and start fresh.
+
+    Destructive: clears positions, transactions, recommendations, NAV history,
+    decision outcomes, learnings and stops for the fund selected by FUND_CONFIG,
+    then re-initialises cash to a fresh balance. Market-data caches are kept
+    unless --purge-cache is given.
+    """
+    cfg, store = _get_store()
+    starting_capital = capital or cfg.capital_sek
+
+    click.echo("⚠ This will PERMANENTLY erase this fund's portfolio and history:")
+    click.echo(f"    Database: {cfg.db_path}")
+    click.echo(f"    Fresh capital: {starting_capital:,.0f} SEK")
+    click.echo(f"    Market-data caches: {'CLEARED' if purge_cache else 'kept'}")
+    if not yes and not click.confirm("Proceed?", default=False):
+        click.echo("Aborted — nothing changed.")
+        return
+
+    deleted = store.reset(starting_capital, purge_cache=purge_cache)
+    total = sum(deleted.values())
+    click.echo(f"✓ Reset complete — {total} row(s) cleared across {len(deleted)} table(s).")
+    for table, n in deleted.items():
+        if n:
+            click.echo(f"    {table:<20} {n:>6} row(s)")
+    click.echo(f"✓ Portfolio re-initialised with {starting_capital:,.0f} SEK")
+    click.echo("\nNext step: run 'fund run' to generate the first decision of the fresh sim.")
+
+
+@cli.command()
 @click.option("--dry-run", is_flag=True, help="Run pipeline but skip saving recommendation")
 @click.option("--force-refresh", is_flag=True, help="Re-fetch all prices even if cached")
 @click.option("--skip-news", is_flag=True, help="Skip Nordic RSS + FinBERT sentiment step (faster)")

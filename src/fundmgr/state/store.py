@@ -880,3 +880,47 @@ class Store:
         if self.is_initialised():
             raise RuntimeError("Portfolio already initialised — use 'fund status' to inspect.")
         self.set_cash(capital_sek)
+
+    # Fund state + history — wiped on reset. Market-data caches are NOT in this
+    # list (they're regime-neutral and expensive to refetch).
+    _STATE_TABLES = (
+        "positions",
+        "transactions",
+        "recommendations",
+        "nav_history",
+        "decision_outcomes",
+        "learnings",
+        "position_stops",
+        "news_triggers",
+        "daily_price_alerts",
+    )
+    _CACHE_TABLES = (
+        "price_cache",
+        "benchmark_cache",
+        "fundamentals_cache",
+        "news_cache",
+    )
+
+    def reset(self, capital_sek: float, purge_cache: bool = False) -> dict[str, int]:
+        """Wipe all portfolio state + decision history and re-initialise to a
+        fresh `capital_sek` balance, as if the fund just started.
+
+        Market-data caches (prices, benchmark, fundamentals, news) are preserved
+        by default since they're regime-neutral and costly to refetch; pass
+        purge_cache=True to clear those too.
+
+        Returns {table: rows_deleted} for reporting.
+        """
+        tables = list(self._STATE_TABLES)
+        if purge_cache:
+            tables += list(self._CACHE_TABLES)
+
+        deleted: dict[str, int] = {}
+        with self._conn() as conn:
+            for t in tables:
+                cur = conn.execute(f"DELETE FROM {t}")
+                deleted[t] = cur.rowcount
+            # Reset cash to the fresh baseline (single-row table).
+            conn.execute("DELETE FROM cash")
+            conn.execute("INSERT INTO cash (id, balance_sek) VALUES (1, ?)", (capital_sek,))
+        return deleted

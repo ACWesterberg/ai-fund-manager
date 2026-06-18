@@ -173,6 +173,7 @@ class Store:
         for stmt in [
             "ALTER TABLE position_stops ADD COLUMN take_profit_pct REAL",
             "ALTER TABLE recommendations ADD COLUMN score REAL",
+            "ALTER TABLE recommendations ADD COLUMN sampling_log TEXT",
         ]:
             with self._conn() as conn:
                 try:
@@ -389,8 +390,8 @@ class Store:
     def save_recommendation(self, rec: RecommendationLog) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO recommendations (run_id, timestamp, prompt_snapshot, llm_response, guardrail_log, actions_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO recommendations (run_id, timestamp, prompt_snapshot, llm_response, guardrail_log, actions_json, sampling_log) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     rec.run_id,
                     rec.timestamp.isoformat(),
@@ -398,6 +399,7 @@ class Store:
                     rec.llm_response,
                     rec.guardrail_log,
                     rec.actions_json,
+                    rec.sampling_log,
                 ),
             )
 
@@ -416,6 +418,7 @@ class Store:
             llm_response=row["llm_response"],
             guardrail_log=row["guardrail_log"],
             actions_json=row["actions_json"],
+            sampling_log=row["sampling_log"] or "",
         )
 
     def get_recommendation_by_run_id(self, run_id: str) -> RecommendationLog | None:
@@ -433,6 +436,7 @@ class Store:
             llm_response=row["llm_response"],
             guardrail_log=row["guardrail_log"],
             actions_json=row["actions_json"],
+            sampling_log=row["sampling_log"] or "",
         )
 
     # ── NAV history ───────────────────────────────────────────────────────────
@@ -572,6 +576,67 @@ class Store:
                 f.write(_json.dumps(example) + "\n")
                 count += 1
         return count
+
+    def get_rejection_stats(self) -> dict:
+        """Aggregate the two rates the Refine gate depends on, across all runs:
+
+          - malformed-sample rate (from sampling_log): how often individual
+            consensus samples fail to parse — the case Refine would retry.
+          - guardrail drop/clip rate (from guardrail_log): how often the model
+            proposes actions that violate hard limits — the case Refine could
+            pre-empt before guardrails clip/reject them.
+
+        High either rate ⇒ Refine may pay for its call-volume cost; low ⇒ not
+        worth it. Pure measurement, no decision baked in.
+        """
+        import json as _json
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT sampling_log, guardrail_log FROM recommendations"
+            ).fetchall()
+
+        runs = runs_with_failure = 0
+        samples_requested = samples_failed = 0
+        verdicts_total = verdicts_rejected = verdicts_clipped = 0
+
+        for r in rows:
+            runs += 1
+            if r["sampling_log"]:
+                try:
+                    s = _json.loads(r["sampling_log"])
+                    samples_requested += s.get("requested", 0)
+                    samples_failed += s.get("failed", 0)
+                    if s.get("failed", 0):
+                        runs_with_failure += 1
+                except Exception:
+                    pass
+            if r["guardrail_log"]:
+                try:
+                    for v in _json.loads(r["guardrail_log"]):
+                        verdicts_total += 1
+                        if v.get("status") == "REJECTED":
+                            verdicts_rejected += 1
+                        elif v.get("status") == "CLIPPED":
+                            verdicts_clipped += 1
+                except Exception:
+                    pass
+
+        def pct(num: int, den: int) -> float:
+            return round(100 * num / den, 2) if den else 0.0
+
+        return {
+            "runs": runs,
+            "samples_requested": samples_requested,
+            "samples_failed": samples_failed,
+            "sample_failure_pct": pct(samples_failed, samples_requested),
+            "runs_with_any_failure": runs_with_failure,
+            "guardrail_verdicts": verdicts_total,
+            "guardrail_rejected": verdicts_rejected,
+            "guardrail_clipped": verdicts_clipped,
+            "guardrail_reject_pct": pct(verdicts_rejected, verdicts_total),
+            "guardrail_clip_pct": pct(verdicts_clipped, verdicts_total),
+        }
 
     # ── Decision outcomes ─────────────────────────────────────────────────────
 

@@ -228,10 +228,12 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     else:
         click.echo(f"\n[→] Calling {cfg.llm.provider}/{cfg.llm.model_id}…")
     try:
-        decision, raw_response, vote_counts = call_llm_consensus(system_msg, user_msg, effective_cfg)
+        decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, effective_cfg)
     except LLMError as e:
         click.echo(f"  ✗ LLM call failed: {e}", err=True)
         sys.exit(1)
+    if sampling["failed"]:
+        click.echo(f"      ⚠ {sampling['failed']}/{sampling['requested']} sample(s) failed to parse")
     if vote_counts is not None and n_samples > 1:
         unanimous = sum(1 for v in vote_counts.values() if v == n_samples)
         majority  = len(vote_counts) - unanimous
@@ -260,6 +262,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
             llm_response=raw_response,
             guardrail_log=json.dumps(guardrail_result.to_log()),
             actions_json=json.dumps([a.model_dump() for a in guardrail_result.approved_actions]),
+            sampling_log=json.dumps(sampling),
         )
         store.save_recommendation(rec)
         store.seed_outcomes_for_run(
@@ -908,6 +911,7 @@ def universe():
 @cli.command("score-runs")
 def score_runs():
     """Score completed weekly runs by excess return vs benchmark (for DSPy training data)."""
+    cfg, store = _get_store()
     scored = store.score_runs()
     if not scored:
         click.echo("No new runs to score (either too recent or already scored).")
@@ -933,6 +937,7 @@ def score_runs():
 def export_dspy(output: str, score_first: bool):
     """Export scored runs to JSONL for DSPy/MIPRO prompt optimisation."""
     import os
+    cfg, store = _get_store()
     if score_first:
         newly_scored = store.score_runs()
         if newly_scored:
@@ -943,6 +948,29 @@ def export_dspy(output: str, score_first: bool):
         click.echo("No scored runs available yet — run 'fund score-runs' after at least one full week.")
     else:
         click.echo(f"  Exported {count} example(s) → {output}")
+
+
+@cli.command("reject-rates")
+def reject_rates():
+    """Report malformed-sample and guardrail drop/clip rates (Refine-gate data)."""
+    cfg, store = _get_store()
+    s = store.get_rejection_stats()
+    if s["runs"] == 0:
+        click.echo("No runs logged yet — nothing to measure.")
+        return
+
+    click.echo(f"\n  Rejection rates across {s['runs']} run(s):\n")
+    click.echo("  Malformed samples (the case Refine would retry)")
+    click.echo(f"    samples: {s['samples_failed']}/{s['samples_requested']} failed "
+               f"= {s['sample_failure_pct']}%")
+    click.echo(f"    runs with ≥1 failed sample: {s['runs_with_any_failure']}/{s['runs']}")
+    click.echo("\n  Guardrail verdicts (the case Refine could pre-empt)")
+    click.echo(f"    rejected: {s['guardrail_rejected']}/{s['guardrail_verdicts']} "
+               f"= {s['guardrail_reject_pct']}%")
+    click.echo(f"    clipped:  {s['guardrail_clipped']}/{s['guardrail_verdicts']} "
+               f"= {s['guardrail_clip_pct']}%")
+    click.echo("\n  Gate: Refine earns its call-volume cost only if one of these "
+               "rates is materially non-zero.\n")
 
 
 if __name__ == "__main__":

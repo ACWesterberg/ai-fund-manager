@@ -99,6 +99,7 @@ class RecommendationLog:
     llm_response: str      # raw LLM text response
     guardrail_log: str     # JSON log of guardrail decisions
     actions_json: str      # final actions after guardrails applied
+    sampling_log: str = "" # JSON: {requested, succeeded, failed, errors} per-run sample health
     id: int | None = None
 
 

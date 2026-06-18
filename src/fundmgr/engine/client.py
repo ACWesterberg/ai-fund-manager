@@ -211,19 +211,22 @@ def call_llm_consensus(
     system: str,
     user: str,
     cfg: AppConfig,
-) -> tuple[DecisionRun, str, dict[str, int] | None]:
+) -> tuple[DecisionRun, str, dict[str, int] | None, dict]:
     """
     Call the LLM cfg.llm.n_samples times in parallel and return a majority-vote
     consensus DecisionRun.
 
-    Returns (decision, raw_for_db, vote_counts) where:
+    Returns (decision, raw_for_db, vote_counts, sampling) where:
       - vote_counts is None when n_samples <= 1 (passthrough mode)
       - vote_counts is {ticker: n_agreeing_runs} when consensus was used
+      - sampling is {requested, succeeded, failed, errors} — per-run sample
+        health, persisted so the malformed-output rate can be measured (the
+        data the Refine gate is waiting on).
     """
     n = cfg.llm.n_samples
     if n <= 1:
         decision, raw = call_llm(system, user, cfg)
-        return decision, raw, None
+        return decision, raw, None, {"requested": 1, "succeeded": 1, "failed": 0, "errors": []}
 
     results:       list[DecisionRun] = []
     raw_responses: list[str]         = []
@@ -246,8 +249,15 @@ def call_llm_consensus(
         # Partial failure — note it but continue with what we have
         print(f"  ⚠ {len(errors)}/{n} LLM call(s) failed; building consensus from {len(results)} run(s).")
 
+    sampling = {
+        "requested": n,
+        "succeeded": len(results),
+        "failed":    len(errors),
+        "errors":    [e[:200] for e in errors],  # truncated for storage
+    }
+
     if len(results) == 1:
-        return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}
+        return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}, sampling
 
     consensus, vote_counts = _aggregate_decisions(results)
-    return consensus, consensus.model_dump_json(), vote_counts
+    return consensus, consensus.model_dump_json(), vote_counts, sampling

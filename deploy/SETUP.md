@@ -58,7 +58,8 @@ nano .env
 Fill in at minimum:
 
 ```
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=sk-...           # GPT-5.5 simulation fund
+ANTHROPIC_API_KEY=sk-ant-...    # Claude Opus simulation fund
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```

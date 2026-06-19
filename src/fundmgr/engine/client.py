@@ -16,6 +16,22 @@ class LLMError(Exception):
     pass
 
 
+def _schema_hint() -> str:
+    """Schema instruction appended to the system message for BOTH providers.
+
+    Keeping this identical across providers is what makes the model head-to-head
+    fair: each model sees the same schema text — and the instructions embedded in
+    its field descriptions (conviction floor, sizing rules, etc.) — through the
+    same in-context channel. For OpenAI, native structured outputs additionally
+    enforce conformance, but only as a parse safety net on top of this text, not
+    as a substitute for it.
+    """
+    return (
+        "\n\nRespond with a single JSON object matching this schema:\n"
+        + DecisionRun.model_json_schema().__repr__()
+    )
+
+
 def call_llm(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, str]:
     """
     Call the configured LLM and return (parsed DecisionRun, raw response text).
@@ -60,11 +76,12 @@ def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, s
     )
 
     try:
-        # Use structured outputs — guarantees schema conformance
+        # Same in-context schema text as the Anthropic path (fair head-to-head);
+        # response_format additionally enforces conformance as a parse safety net.
         response = client.beta.chat.completions.parse(
             model=cfg.llm.model_id,
             messages=[
-                {"role": "system", "content": system},
+                {"role": "system", "content": system + _schema_hint()},
                 {"role": "user", "content": user},
             ],
             response_format=DecisionRun,
@@ -104,12 +121,8 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    # Append explicit JSON schema instruction since Anthropic doesn't yet support
-    # OpenAI-style structured outputs natively
-    schema_hint = (
-        "\n\nRespond with a single JSON object matching this schema:\n"
-        + DecisionRun.model_json_schema().__repr__()
-    )
+    # Same in-context schema text as the OpenAI path (fair head-to-head).
+    schema_hint = _schema_hint()
 
     # Claude 4+ models (opus-4-x, sonnet-4-x, haiku-4-x) do not accept temperature
     _TEMPERATURE_FREE = ("claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")

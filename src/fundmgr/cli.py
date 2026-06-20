@@ -783,7 +783,9 @@ def check_stops(quiet: bool):
             {"ticker": t, "side": "sell", "target_weight_pct": 0, "sek_estimate": price}
             for t, _chg, _pct, price in triggered
         ]
-        fill_log = execute_paper_fills(sell_actions, store, cfg)
+        # notify_skips=False: check-stops runs every 15 min, so a closed-market
+        # skip here must not spam Telegram (the weekly run path handles reminders).
+        fill_log = execute_paper_fills(sell_actions, store, cfg, notify_skips=False)
         for line in fill_log:
             click.echo(f"  {line}")
         for ticker, *_ in triggered:

@@ -2,8 +2,9 @@
 Auto-fill engine for the paper trading simulation.
 
 After each fund run, if auto_fill=True (global fund config), this module:
-1. Waits until all relevant markets are open (or uses latest available price)
-2. Fetches the open/current price for each approved action
+1. Skips any action whose exchange is closed (weekend/holiday/off-hours) so
+   fills are never booked at stale prices — and sends a Telegram reminder
+2. Fetches the current price for each remaining approved action
 3. Records fills via store.apply_fill() — same path as manual fills
 4. Records a NAV snapshot
 """
@@ -42,12 +43,15 @@ def execute_paper_fills(
     cfg: AppConfig,
     *,
     max_wait_secs: int = 0,
+    notify_skips: bool = True,
 ) -> list[str]:
     """
     Execute paper fills for all approved buy/sell actions.
 
     actions: list of action dicts from guardrail_result.approved_actions
     max_wait_secs: if > 0, poll until price is available (for use at market open)
+    notify_skips: if True, send a Telegram reminder when fills are skipped
+                  because their exchange is closed (holiday/off-hours)
 
     Returns list of log lines describing what was executed.
     """
@@ -56,12 +60,26 @@ def execute_paper_fills(
     pos_map = {p.ticker: p for p in positions}
     nav = sum(p.shares * (p.current_price_sek or p.avg_cost_sek) for p in positions) + store.get_cash()
 
+    # Ticker -> exchange code, so we can check each venue's trading calendar.
+    from fundmgr.config import load_universe
+    from fundmgr.data.market_hours import is_exchange_open
+    exch_by_ticker = {t.yahoo_ticker: t.exchange for t in load_universe(cfg.universe_path)}
+    skipped_closed: list[tuple[str, str, str]] = []  # (ticker, side, exchange)
+
     for action in actions:
         ticker = action.get("ticker", "")
         side = action.get("side", "")
         target_weight_pct = action.get("target_weight_pct", 0.0)
 
         if side not in ("buy", "sell"):
+            continue
+
+        # Skip fills when the stock's exchange is closed (weekend/holiday/off-hours)
+        # so we never book a trade at a stale price. None = unknown venue → fail open.
+        exchange = exch_by_ticker.get(ticker, "")
+        if is_exchange_open(exchange) is False:
+            skipped_closed.append((ticker, side, exchange or "?"))
+            log.append(f"  ⏸ {ticker}: {exchange or '?'} closed — fill skipped")
             continue
 
         # Fetch price with optional wait
@@ -125,6 +143,18 @@ def execute_paper_fills(
             f"  ✓ {'Bought' if side == 'buy' else 'Sold'} {shares:.2f} × {ticker} "
             f"@ {price:.2f} SEK (fee {fee:.2f})"
         )
+
+    # Reminder: orders that didn't execute because their market was closed.
+    if skipped_closed and notify_skips:
+        from fundmgr.notify.send import send_telegram
+        fund = cfg.llm.model_id or cfg.llm.provider
+        lines = [
+            f"<b>⏸ Fills skipped — market closed</b>  <i>({fund})</i>",
+            f"{len(skipped_closed)} order(s) not executed (holiday/off-hours):",
+        ]
+        lines += [f"  {tk}  {sd.upper()}  [{ex}]" for tk, sd, ex in skipped_closed]
+        lines.append("They'll be reconsidered on the next run.")
+        send_telegram("\n".join(lines))
 
     # Record NAV snapshot after all fills
     try:

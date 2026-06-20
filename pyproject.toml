@@ -36,6 +36,7 @@ dependencies = [
     # Sentiment (FinBERT) — CPU-only; install torch separately on Pi
     "transformers>=4.40",
     "scipy>=1.13",
+    "exchange-calendars>=4.13.2",
 ]
 
 [project.optional-dependencies]

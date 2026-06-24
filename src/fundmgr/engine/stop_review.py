@@ -22,6 +22,33 @@ from fundmgr.engine.schema import StopReview
 from fundmgr.state.store import Store
 
 
+def find_stop_breaches(store: Store) -> list[dict]:
+    """Positions currently trading at or below their stop level.
+
+    Returns dicts {ticker, chg, stop_pct, live} (newest live price via yfinance),
+    only for holdings that have a stop set and are breaching it.
+    """
+    import yfinance as yf
+
+    stop_map = store.get_position_stops()
+    breaches: list[dict] = []
+    for p in store.get_positions():
+        stop_pct = stop_map.get(p.ticker, {}).get("stop_pct")
+        if not stop_pct or not p.avg_cost_sek:
+            continue
+        try:
+            hist = yf.Ticker(p.ticker).history(period="2d")
+            live = float(hist["Close"].iloc[-1]) if hist is not None and not hist.empty else None
+        except Exception:
+            live = None
+        if live is None:
+            continue
+        chg = (live / p.avg_cost_sek - 1) * 100
+        if chg <= -stop_pct:
+            breaches.append({"ticker": p.ticker, "chg": chg, "stop_pct": stop_pct, "live": live})
+    return breaches
+
+
 def _technicals_block(ticker: str) -> tuple[str, float | None]:
     """Compact technicals summary from yfinance history. Returns (text, live_price)."""
     try:

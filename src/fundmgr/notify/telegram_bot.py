@@ -10,7 +10,7 @@ Commands:
   /stops         — check stop-loss thresholds
   /universe      — list enabled tickers
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
-  /review TICKER — advisory stop-loss review (EXIT/TRIM/HOLD/ADD)
+  /review [TICKER] — stop-loss review (no ticker = scan all breaches)
   /help          — show this message
 
 Photo messages:
@@ -237,13 +237,18 @@ async def cmd_reject_rates(update: "Update", context: "ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    """Usage: /review TICKER — advisory stop-loss review for a held position."""
+    """/review [TICKER] — advisory stop-loss review.
+
+    With a ticker: review that position. With no ticker: scan all holdings and
+    review every position currently below its stop-loss.
+    """
     args = context.args or []
-    if not args:
-        await update.message.reply_text("Usage: /review TICKER\nExample: /review VOLV-B.ST")
-        return
-    await update.message.reply_text(f"⏳ Reviewing {args[0].upper()} (consensus)… ~1 min")
-    output = _run_cli("review-stop", args[0], timeout=180)
+    if args:
+        await update.message.reply_text(f"⏳ Reviewing {args[0].upper()} (consensus)… ~1 min")
+        output = _run_cli("review-stop", args[0], timeout=180)
+    else:
+        await update.message.reply_text("⏳ Scanning holdings for stop-loss breaches and reviewing… may take a few min")
+        output = _run_cli("review-stop", timeout=600)
     await _send(update, output)
 
 
@@ -259,7 +264,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/stops — check stop-loss alerts\n"
         "/universe — list all enabled tickers\n"
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
-        "/review TICKER — advisory stop-loss review (EXIT/TRIM/HOLD/ADD)\n"
+        "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill."
     )

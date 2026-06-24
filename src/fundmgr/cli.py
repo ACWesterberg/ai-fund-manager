@@ -863,34 +863,57 @@ def check_stops(quiet: bool):
 
 
 @cli.command("review-stop")
-@click.argument("ticker")
-def review_stop(ticker: str):
-    """Advisory stop-loss review (EXIT/TRIM/HOLD/ADD) for one held position."""
+@click.argument("ticker", required=False)
+def review_stop(ticker: str | None):
+    """Advisory stop-loss review (EXIT/TRIM/HOLD/ADD).
+
+    With a TICKER: review that held position. With no argument: scan all
+    holdings and review every position currently below its stop-loss.
+    """
     from fundmgr.engine.client import LLMError
-    from fundmgr.engine.stop_review import review_position, format_review_text, format_review_html
+    from fundmgr.engine.stop_review import (
+        review_position, find_stop_breaches, format_review_text, format_review_html,
+    )
     from fundmgr.notify.send import send_telegram
 
     cfg, store = _get_store()
-    ticker = ticker.upper()
-    if not any(p.ticker == ticker for p in store.get_positions()):
-        click.echo(f"{ticker} is not a current holding.", err=True)
-        sys.exit(1)
-
     n = max(1, cfg.llm.n_samples)
-    click.echo(f"Reviewing {ticker} ({n}-sample consensus)…")
-    try:
-        result = review_position(ticker, store, cfg)
-    except LLMError as e:
-        click.echo(f"Review failed: {e}", err=True)
-        sys.exit(1)
-    if result is None:
-        click.echo(f"{ticker} is not a current holding.", err=True)
-        sys.exit(1)
 
-    consensus, votes = result
-    click.echo("\n" + format_review_text(consensus, votes, n))
-    if send_telegram("<b>📉 Stop Review (manual)</b>\n" + format_review_html(consensus, votes, n)):
-        click.echo("\n  (sent to Telegram)")
+    # Decide which tickers to review.
+    if ticker:
+        ticker = ticker.upper()
+        if not any(p.ticker == ticker for p in store.get_positions()):
+            click.echo(f"{ticker} is not a current holding.", err=True)
+            sys.exit(1)
+        targets = [{"ticker": ticker, "live": None}]
+    else:
+        click.echo("Scanning holdings for stop-loss breaches…")
+        breaches = find_stop_breaches(store)
+        if not breaches:
+            click.echo("No positions are currently below their stop-loss.")
+            return
+        click.echo(f"  {len(breaches)} below stop: {', '.join(b['ticker'] for b in breaches)}")
+        targets = breaches
+
+    html_blocks: list[str] = []
+    for t in targets:
+        tk = t["ticker"]
+        click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
+        try:
+            result = review_position(tk, store, cfg, live_price=t.get("live"))
+        except LLMError as e:
+            click.echo(f"  Review failed for {tk}: {e}", err=True)
+            continue
+        if result is None:
+            continue
+        consensus, votes = result
+        click.echo(format_review_text(consensus, votes, n))
+        html_blocks.append(format_review_html(consensus, votes, n))
+
+    if html_blocks:
+        body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
+        if send_telegram(body):
+            click.echo("\n  (sent to Telegram)")
 
 
 @cli.command("check-news")

@@ -22,19 +22,26 @@ from fundmgr.engine.schema import StopReview
 from fundmgr.state.store import Store
 
 
-def find_stop_breaches(store: Store) -> list[dict]:
-    """Positions currently trading at or below their stop level.
+def find_stop_breaches(store: Store) -> dict:
+    """Scan holdings for stop-loss breaches.
 
-    Returns dicts {ticker, chg, stop_pct, live} (newest live price via yfinance),
-    only for holdings that have a stop set and are breaching it.
+    Returns {"breaches": [...], "skipped": [...]} where breaches are dicts
+    {ticker, chg, stop_pct, live} and skipped are {ticker, reason} for holdings
+    that couldn't be evaluated (no stop on record, or price unavailable) — so the
+    caller can surface them rather than silently report "no breaches".
+
+    Stops fall back to the level decided at buy time (get_effective_stops), so
+    positions whose stop was never persisted are still checked.
     """
     import yfinance as yf
 
-    stop_map = store.get_position_stops()
+    stop_map = store.get_effective_stops()
     breaches: list[dict] = []
+    skipped: list[dict] = []
     for p in store.get_positions():
         stop_pct = stop_map.get(p.ticker, {}).get("stop_pct")
         if not stop_pct or not p.avg_cost_sek:
+            skipped.append({"ticker": p.ticker, "reason": "no stop on record"})
             continue
         try:
             hist = yf.Ticker(p.ticker).history(period="2d")
@@ -42,11 +49,12 @@ def find_stop_breaches(store: Store) -> list[dict]:
         except Exception:
             live = None
         if live is None:
+            skipped.append({"ticker": p.ticker, "reason": "price unavailable"})
             continue
         chg = (live / p.avg_cost_sek - 1) * 100
         if chg <= -stop_pct:
             breaches.append({"ticker": p.ticker, "chg": chg, "stop_pct": stop_pct, "live": live})
-    return breaches
+    return {"breaches": breaches, "skipped": skipped}
 
 
 def _technicals_block(ticker: str) -> tuple[str, float | None]:

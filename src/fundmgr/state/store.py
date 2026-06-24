@@ -976,6 +976,45 @@ class Store:
             for r in rows
         }
 
+    def get_effective_stops(self) -> dict[str, dict]:
+        """Stops for held positions, falling back to the level the fund decided
+        at buy time when none was explicitly persisted.
+
+        Positions bought under older code never had their stop_loss_pct written
+        to position_stops. This recovers them from the most recent recommendation
+        action carrying a stop/take-profit, so stop checks aren't silently blind
+        to those holdings. Explicit position_stops always take precedence.
+        """
+        import json as _json
+
+        stops = self.get_position_stops()
+        held = {p.ticker for p in self.get_positions()}
+        missing = held - {t for t, lv in stops.items() if lv.get("stop_pct") is not None}
+        if not missing:
+            return stops
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT actions_json FROM recommendations ORDER BY timestamp DESC"
+            ).fetchall()
+        for r in rows:
+            if not missing:
+                break
+            try:
+                actions = _json.loads(r["actions_json"])
+            except Exception:
+                continue
+            for a in actions:
+                tk = (a.get("ticker") or "").upper()
+                if tk in missing and (a.get("stop_loss_pct") or a.get("take_profit_pct")):
+                    stops[tk] = {
+                        "stop_pct": a.get("stop_loss_pct"),
+                        "take_profit_pct": a.get("take_profit_pct"),
+                        "from_recommendation": True,
+                    }
+                    missing.discard(tk)
+        return stops
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def is_initialised(self) -> bool:

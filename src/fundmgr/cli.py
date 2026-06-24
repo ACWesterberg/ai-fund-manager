@@ -690,7 +690,7 @@ def check_stops(quiet: bool):
             click.echo("No open positions.")
         return
 
-    stop_map = store.get_position_stops()
+    stop_map = store.get_effective_stops()
 
     if not quiet:
         click.echo("\n─── Price Level Check ───────────────────────────────")
@@ -888,9 +888,22 @@ def review_stop(ticker: str | None):
         targets = [{"ticker": ticker, "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
-        breaches = find_stop_breaches(store)
+        scan = find_stop_breaches(store)
+        breaches, skipped = scan["breaches"], scan["skipped"]
+        if skipped:
+            click.echo("  Could not evaluate: " + ", ".join(
+                f"{s['ticker']} ({s['reason']})" for s in skipped))
         if not breaches:
-            click.echo("No positions are currently below their stop-loss.")
+            msg = "No positions are currently below their stop-loss."
+            if skipped:
+                msg += f" ({len(skipped)} could not be evaluated — see above.)"
+            click.echo(msg)
+            from fundmgr.notify.send import send_telegram
+            if skipped:
+                send_telegram(
+                    "<b>📉 Stop scan</b>\nNo breaches found, but couldn't evaluate:\n"
+                    + "\n".join(f"  {s['ticker']} — {s['reason']}" for s in skipped)
+                )
             return
         click.echo(f"  {len(breaches)} below stop: {', '.join(b['ticker'] for b in breaches)}")
         targets = breaches

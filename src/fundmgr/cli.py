@@ -717,6 +717,9 @@ def check_stops(quiet: bool):
 
         live_price = float(hist["Close"].iloc[-1])
 
+        # % change since entry — the metric stop/take-profit levels are measured against.
+        chg = (live_price / p.avg_cost_sek - 1) * 100 if p.avg_cost_sek else 0.0
+
         # Only compute daily change if today's bar is actually present —
         # at market open yfinance still shows yesterday's close as last_price,
         # which would make the "daily" change show yesterday's move instead

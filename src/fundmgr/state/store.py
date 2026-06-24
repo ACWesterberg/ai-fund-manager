@@ -663,6 +663,21 @@ class Store:
             "guardrail_clip_pct": pct(verdicts_clipped, verdicts_total),
         }
 
+    def get_decisions_for_ticker(self, ticker: str, limit: int = 3) -> list[dict]:
+        """Most recent decisions on a ticker (newest first), for stop-loss review.
+
+        Returns dicts: {timestamp, action, confidence, thesis, price_at_decision}.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT r.timestamp AS timestamp, do.action AS action, do.confidence AS confidence, "
+                "do.thesis AS thesis, do.price_at_decision AS price_at_decision "
+                "FROM decision_outcomes do JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.ticker = ? ORDER BY r.timestamp DESC LIMIT ?",
+                (ticker.upper(), limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Decision outcomes ─────────────────────────────────────────────────────
 
     def seed_outcomes_for_run(self, run_id: str, actions_json: str) -> None:

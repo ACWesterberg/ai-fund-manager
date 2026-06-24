@@ -795,6 +795,32 @@ def check_stops(quiet: bool):
             store.clear_position_stop(ticker)
             auto_sold.append(ticker)
 
+    # ── Stop-loss review (advisory) for non-auto-fill (real-money) funds ───────
+    # On a stop hit, run a focused N-sample reassessment so a recent "add" thesis
+    # gets weighed before deciding to dip out. Once per ticker per day (this
+    # command runs every 15 min) to avoid repeat LLM calls + Telegram spam.
+    review_snippets: list[str] = []
+    if stops_hit and not cfg.auto_fill:
+        from fundmgr.engine.stop_review import review_position, format_review_html
+        for ticker, _chg, _stop, live in stops_hit:
+            meta_key = f"stop_review:{ticker}:{today}"
+            if store.get_meta(meta_key):
+                continue
+            try:
+                result = review_position(ticker, store, cfg, live_price=live)
+            except Exception as e:
+                click.echo(f"  ⚠ stop review failed for {ticker}: {e}", err=True)
+                continue
+            if result is None:
+                continue
+            consensus, votes = result
+            store.set_meta(meta_key, today)
+            review_snippets.append(format_review_html(consensus, votes, max(1, cfg.llm.n_samples)))
+            click.echo(
+                f"  Stop review {ticker}: {consensus.recommendation.upper()} "
+                f"(conf {consensus.confidence:.2f})"
+            )
+
     # ── Telegram alert ────────────────────────────────────────────────────────
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -817,7 +843,10 @@ def check_stops(quiet: bool):
                 lines.append(
                     f"⚠ <b>{ticker}</b> {daily_chg:+.1f}% today  ({chg:+.1f}% since entry)  live {price:.2f}"
                 )
-        if (stops_hit or profits_hit) and not auto_sold:
+        for snip in review_snippets:
+            lines.append("")
+            lines.append(snip)
+        if (stops_hit or profits_hit) and not auto_sold and not review_snippets:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)
         try:
@@ -831,6 +860,37 @@ def check_stops(quiet: bool):
             click.echo("  Telegram alert sent.")
         except Exception as e:
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
+
+
+@cli.command("review-stop")
+@click.argument("ticker")
+def review_stop(ticker: str):
+    """Advisory stop-loss review (EXIT/TRIM/HOLD/ADD) for one held position."""
+    from fundmgr.engine.client import LLMError
+    from fundmgr.engine.stop_review import review_position, format_review_text, format_review_html
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    ticker = ticker.upper()
+    if not any(p.ticker == ticker for p in store.get_positions()):
+        click.echo(f"{ticker} is not a current holding.", err=True)
+        sys.exit(1)
+
+    n = max(1, cfg.llm.n_samples)
+    click.echo(f"Reviewing {ticker} ({n}-sample consensus)…")
+    try:
+        result = review_position(ticker, store, cfg)
+    except LLMError as e:
+        click.echo(f"Review failed: {e}", err=True)
+        sys.exit(1)
+    if result is None:
+        click.echo(f"{ticker} is not a current holding.", err=True)
+        sys.exit(1)
+
+    consensus, votes = result
+    click.echo("\n" + format_review_text(consensus, votes, n))
+    if send_telegram("<b>📉 Stop Review (manual)</b>\n" + format_review_html(consensus, votes, n)):
+        click.echo("\n  (sent to Telegram)")
 
 
 @cli.command("check-news")

@@ -16,7 +16,7 @@ class LLMError(Exception):
     pass
 
 
-def _schema_hint() -> str:
+def _schema_hint(schema: type = DecisionRun) -> str:
     """Schema instruction appended to the system message for BOTH providers.
 
     Keeping this identical across providers is what makes the model head-to-head
@@ -28,27 +28,29 @@ def _schema_hint() -> str:
     """
     return (
         "\n\nRespond with a single JSON object matching this schema:\n"
-        + DecisionRun.model_json_schema().__repr__()
+        + schema.model_json_schema().__repr__()
     )
 
 
-def call_llm(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, str]:
+def call_llm(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun) -> tuple:
     """
-    Call the configured LLM and return (parsed DecisionRun, raw response text).
+    Call the configured LLM and return (parsed `schema` instance, raw response text).
     Uses OpenAI structured outputs when provider=openai, JSON-mode for Anthropic.
+    `schema` defaults to DecisionRun (the weekly decision); pass another Pydantic
+    model for focused calls like the stop-loss review.
     Raises LLMError on failure.
     """
     if cfg.llm.provider == "openai":
-        return _call_openai(system, user, cfg)
+        return _call_openai(system, user, cfg, schema)
     elif cfg.llm.provider == "anthropic":
-        return _call_anthropic(system, user, cfg)
+        return _call_anthropic(system, user, cfg, schema)
     else:
         raise LLMError(f"Unknown LLM provider: {cfg.llm.provider!r}")
 
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 
-def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, str]:
+def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun) -> tuple:
     try:
         from openai import OpenAI
     except ImportError:
@@ -81,10 +83,10 @@ def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, s
         response = client.beta.chat.completions.parse(
             model=cfg.llm.model_id,
             messages=[
-                {"role": "system", "content": system + _schema_hint()},
+                {"role": "system", "content": system + _schema_hint(schema)},
                 {"role": "user", "content": user},
             ],
-            response_format=DecisionRun,
+            response_format=schema,
             **token_kwargs,
             **temp_kwargs,
             **reasoning_kwargs,
@@ -98,7 +100,7 @@ def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, s
     if choice.message.parsed is None:
         # Structured outputs failed — fall back to JSON parse
         try:
-            parsed = DecisionRun.model_validate_json(raw_text)
+            parsed = schema.model_validate_json(raw_text)
         except (ValidationError, json.JSONDecodeError) as e:
             raise LLMError(f"Failed to parse LLM response: {e}\n\nRaw response:\n{raw_text}") from e
     else:
@@ -109,7 +111,7 @@ def _call_openai(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, s
 
 # ── Anthropic ─────────────────────────────────────────────────────────────────
 
-def _call_anthropic(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun, str]:
+def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun) -> tuple:
     try:
         import anthropic
     except ImportError:
@@ -122,7 +124,7 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun
     client = anthropic.Anthropic(api_key=api_key)
 
     # Same in-context schema text as the OpenAI path (fair head-to-head).
-    schema_hint = _schema_hint()
+    schema_hint = _schema_hint(schema)
 
     # Claude 4+ models (opus-4-x, sonnet-4-x, haiku-4-x) do not accept temperature
     _TEMPERATURE_FREE = ("claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")
@@ -151,7 +153,7 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig) -> tuple[DecisionRun
             clean = clean[: clean.rfind("```")]
 
     try:
-        parsed = DecisionRun.model_validate_json(clean)
+        parsed = schema.model_validate_json(clean)
     except (ValidationError, json.JSONDecodeError) as e:
         raise LLMError(f"Failed to parse Anthropic response: {e}\n\nRaw response:\n{raw_text}") from e
 

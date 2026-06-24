@@ -10,6 +10,7 @@ Commands:
   /stops         — check stop-loss thresholds
   /universe      — list enabled tickers
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
+  /review TICKER — advisory stop-loss review (EXIT/TRIM/HOLD/ADD)
   /help          — show this message
 
 Photo messages:
@@ -235,6 +236,17 @@ async def cmd_reject_rates(update: "Update", context: "ContextTypes.DEFAULT_TYPE
     await _send(update, output)
 
 
+async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Usage: /review TICKER — advisory stop-loss review for a held position."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /review TICKER\nExample: /review VOLV-B.ST")
+        return
+    await update.message.reply_text(f"⏳ Reviewing {args[0].upper()} (consensus)… ~1 min")
+    output = _run_cli("review-stop", args[0], timeout=180)
+    await _send(update, output)
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -247,6 +259,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/stops — check stop-loss alerts\n"
         "/universe — list all enabled tickers\n"
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
+        "/review TICKER — advisory stop-loss review (EXIT/TRIM/HOLD/ADD)\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill."
     )
@@ -543,6 +556,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stops",    cmd_stops))
     app.add_handler(CommandHandler("universe", cmd_universe))
     app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
+    app.add_handler(CommandHandler("review",   cmd_review))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

@@ -73,3 +73,35 @@ class DecisionRun(BaseModel):
         max_length=1000,
         description="Any concerns, data quality issues, or tickers you'd like added to the universe",
     )
+
+
+class StopReview(BaseModel):
+    """Focused reassessment of a single position after its stop-loss is hit."""
+    ticker: str = Field(description="The position under review")
+    recommendation: Literal["exit", "trim", "hold", "add"] = Field(
+        description=(
+            "exit = sell the whole position; trim = reduce it; "
+            "hold = keep as-is (the stop move was noise); "
+            "add = conviction unchanged or improved, buy more."
+        ),
+    )
+    confidence: float = Field(
+        ge=0, le=1, description="Conviction in this recommendation, 0.0-1.0."
+    )
+    trim_pct: float | None = Field(
+        default=None, ge=0, le=100,
+        description="If recommendation=trim, what % of the current position to sell.",
+    )
+    what_changed: str = Field(
+        max_length=400,
+        description="What has materially changed (or not) since the most recent decision on this name.",
+    )
+    rationale: str = Field(
+        max_length=600,
+        description="1-4 sentences: why this call, weighing the recent thesis against the stop being hit.",
+    )
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper(cls, v: str) -> str:
+        return v.upper()

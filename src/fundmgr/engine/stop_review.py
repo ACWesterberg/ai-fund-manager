@@ -111,7 +111,7 @@ def _build_review_prompt(ticker: str, store: Store, cfg: AppConfig, live_price: 
 
     names = {t.yahoo_ticker: t.name for t in load_universe(cfg.universe_path)}
     name = names.get(ticker, ticker)
-    stop = store.get_position_stops().get(ticker, {})
+    stop = store.get_effective_stops().get(ticker, {})
     stop_pct = stop.get("stop_pct")
 
     technicals, tech_live = _technicals_block(ticker)

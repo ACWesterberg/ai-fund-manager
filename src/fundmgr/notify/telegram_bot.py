@@ -245,10 +245,10 @@ async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
     args = context.args or []
     if args:
         await update.message.reply_text(f"⏳ Reviewing {args[0].upper()} (consensus)… ~1 min")
-        output = _run_cli("review-stop", args[0], timeout=180)
+        output = _run_cli("review-stop", args[0], "--no-notify", timeout=180)
     else:
         await update.message.reply_text("⏳ Scanning holdings for stop-loss breaches and reviewing… may take a few min")
-        output = _run_cli("review-stop", timeout=600)
+        output = _run_cli("review-stop", "--no-notify", timeout=600)
     await _send(update, output)
 
 

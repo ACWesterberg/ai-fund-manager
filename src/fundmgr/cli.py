@@ -864,10 +864,13 @@ def check_stops(quiet: bool):
 
 @cli.command("review-stop")
 @click.argument("ticker", required=False)
-def review_stop(ticker: str | None):
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+def review_stop(ticker: str | None, notify: bool):
     """Advisory stop-loss review (EXIT/TRIM/HOLD/ADD).
 
-    With a TICKER: review that held position. With no argument: scan all
+    With a TICKER: review that held position (the Yahoo suffix is optional —
+    `evo` resolves to `EVO.ST` if unambiguous). With no argument: scan all
     holdings and review every position currently below its stop-loss.
     """
     from fundmgr.engine.client import LLMError
@@ -878,14 +881,23 @@ def review_stop(ticker: str | None):
 
     cfg, store = _get_store()
     n = max(1, cfg.llm.n_samples)
+    held = [p.ticker for p in store.get_positions()]
 
     # Decide which tickers to review.
     if ticker:
-        ticker = ticker.upper()
-        if not any(p.ticker == ticker for p in store.get_positions()):
-            click.echo(f"{ticker} is not a current holding.", err=True)
+        q = ticker.upper()
+        # Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
+        matches = [h for h in held if h == q] or \
+                  [h for h in held if h.split(".")[0] == q] or \
+                  [h for h in held if h.startswith(q + ".")]
+        matches = sorted(set(matches))
+        if not matches:
+            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
             sys.exit(1)
-        targets = [{"ticker": ticker, "live": None}]
+        if len(matches) > 1:
+            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+            sys.exit(1)
+        targets = [{"ticker": matches[0], "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
         scan = find_stop_breaches(store)
@@ -898,8 +910,7 @@ def review_stop(ticker: str | None):
             if skipped:
                 msg += f" ({len(skipped)} could not be evaluated — see above.)"
             click.echo(msg)
-            from fundmgr.notify.send import send_telegram
-            if skipped:
+            if notify and skipped:
                 send_telegram(
                     "<b>📉 Stop scan</b>\nNo breaches found, but couldn't evaluate:\n"
                     + "\n".join(f"  {s['ticker']} — {s['reason']}" for s in skipped)
@@ -923,7 +934,8 @@ def review_stop(ticker: str | None):
         click.echo(format_review_text(consensus, votes, n))
         html_blocks.append(format_review_html(consensus, votes, n))
 
-    if html_blocks:
+    # Only push to Telegram directly when no relay is forwarding our stdout.
+    if notify and html_blocks:
         body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")

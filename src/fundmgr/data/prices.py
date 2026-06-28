@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import pandas as pd
-import yfinance as yf  # still needed for batch price download
 
+from financedata import get_prices_since, rsi, pct_return, ann_vol, get_cache as get_fd_cache
 from fundmgr.config import AppConfig, UniverseTicker
 from fundmgr.state.store import Store
 
@@ -177,37 +177,6 @@ class TickerFeatures:
         return "\n".join(lines)
 
 
-def _rsi(closes: pd.Series, period: int = 14) -> float | None:
-    if len(closes) < period + 1:
-        return None
-    delta = closes.diff().dropna()
-    gains = delta.clip(lower=0).rolling(period).mean()
-    losses = (-delta).clip(lower=0).rolling(period).mean()
-    if losses.iloc[-1] == 0:
-        return 100.0
-    rs = gains.iloc[-1] / losses.iloc[-1]
-    return round(100 - (100 / (1 + rs)), 1)
-
-
-def _pct_return(closes: pd.Series, periods: int) -> float | None:
-    if len(closes) < periods + 1:
-        return None
-    val = (closes.iloc[-1] / closes.iloc[-1 - periods] - 1) * 100
-    return round(val, 2)
-
-
-def _ann_vol(closes: pd.Series, periods: int = 20) -> float | None:
-    if len(closes) < periods + 1:
-        return None
-    log_ret = (closes / closes.shift(1)).apply(lambda x: x if x > 0 else float("nan")).apply(
-        lambda x: __import__("math").log(x) if not __import__("math").isnan(x) else float("nan")
-    )
-    std = log_ret.iloc[-periods:].std()
-    if pd.isna(std):
-        return None
-    return round(std * math.sqrt(252) * 100, 1)
-
-
 def _count_trading_days_since(last_date_str: str) -> int:
     """Approximate business days between last_date and today."""
     last = datetime.strptime(last_date_str, "%Y-%m-%d").date()
@@ -229,108 +198,20 @@ def fetch_and_cache_prices(
     lookback_days: int = 252,
     force_refresh: bool = False,
 ) -> dict[str, bool]:
-    """Batch-fetch prices for all tickers; return dict ticker -> success."""
+    """Delegate price fetching to financedata; return dict ticker -> success."""
     symbols = [t.yahoo_ticker for t in tickers]
     since = (datetime.utcnow() - timedelta(days=lookback_days + 10)).strftime("%Y-%m-%d")
 
-    # Determine which need refreshing
-    to_fetch = []
-    for t in tickers:
-        if force_refresh:
-            to_fetch.append(t.yahoo_ticker)
-            continue
-        latest = store.latest_price_date(t.yahoo_ticker)
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        if latest is None or latest < today:
-            to_fetch.append(t.yahoo_ticker)
+    results = get_prices_since(symbols, since=since, force_refresh=force_refresh)
 
-    if not to_fetch:
-        return {t.yahoo_ticker: True for t in tickers}
-
-    results: dict[str, bool] = {}
-
-    # yfinance batch download
-    try:
-        raw = yf.download(
-            to_fetch,
-            start=since,
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-        )
-    except Exception as e:
-        print(f"  yfinance download error: {e}")
-        return {sym: False for sym in to_fetch}
-
-    if raw.empty:
-        return {sym: False for sym in to_fetch}
-
-    # Normalise to a (date, ticker) -> close DataFrame regardless of yfinance version.
-    # Older yfinance: MultiIndex columns (price_type, ticker) — "Close" at level 0.
-    # Newer yfinance: MultiIndex columns (ticker, price_type) OR flat for single ticker.
-    if isinstance(raw.columns, pd.MultiIndex):
-        lvl0 = raw.columns.get_level_values(0).unique().tolist()
-        if "Close" in lvl0:
-            # (price_type, ticker) layout
-            closes_df = raw["Close"]
-        else:
-            # (ticker, price_type) layout — swap levels then index by "Close"
-            closes_df = raw.swaplevel(axis=1)["Close"]
-    else:
-        # Single ticker, flat columns
-        closes_df = raw[["Close"]].rename(columns={"Close": to_fetch[0]})
-
-    for sym in to_fetch:
-        try:
-            if sym not in closes_df.columns:
-                results[sym] = False
-                continue
-            series = closes_df[sym].dropna()
-            if series.empty:
-                results[sym] = False
-                continue
-            # Build full OHLCV rows by slicing from raw for this ticker
-            try:
-                if isinstance(raw.columns, pd.MultiIndex):
-                    lvl0 = raw.columns.get_level_values(0).unique().tolist()
-                    if "Close" in lvl0:
-                        df_sym = raw.xs(sym, axis=1, level=1)
-                    else:
-                        df_sym = raw.xs(sym, axis=1, level=0)
-                else:
-                    df_sym = raw.copy()
-                if isinstance(df_sym.columns, pd.MultiIndex):
-                    df_sym.columns = df_sym.columns.get_level_values(0)
-            except Exception:
-                # Fall back to close-only rows
-                df_sym = series.to_frame("Close")
-
-            df_sym = df_sym[~df_sym["Close"].isna()] if "Close" in df_sym.columns else df_sym
-            df_sym.index = df_sym.index.strftime("%Y-%m-%d")
-            rows = [
-                {
-                    "date": str(idx),
-                    "open": float(row["Open"]) if "Open" in row and not pd.isna(row["Open"]) else None,
-                    "high": float(row["High"]) if "High" in row and not pd.isna(row["High"]) else None,
-                    "low": float(row["Low"]) if "Low" in row and not pd.isna(row["Low"]) else None,
-                    "close": float(row["Close"]) if not pd.isna(row["Close"]) else None,
-                    "volume": float(row["Volume"]) if "Volume" in row and not pd.isna(row["Volume"]) else None,
-                }
-                for idx, row in df_sym.iterrows()
-                if "Close" in row and not pd.isna(row["Close"])
-            ]
+    # Mirror from shared cache to fund's store so compute_features (which reads
+    # from store) continues to work without changes.
+    fd_cache = get_fd_cache()
+    for sym, ok in results.items():
+        if ok:
+            rows = fd_cache.get_prices(sym, since_date=since)
             if rows:
                 store.save_prices(sym, rows)
-                results[sym] = True
-            else:
-                results[sym] = False
-        except Exception:
-            results[sym] = False
-
-    # Tickers that were already cached
-    for t in tickers:
-        if t.yahoo_ticker not in results:
-            results[t.yahoo_ticker] = store.latest_price_date(t.yahoo_ticker) is not None
 
     return results
 
@@ -369,12 +250,12 @@ def compute_features(
         currency=ticker.currency,
         needs_fx=ticker.needs_fx,
         sector=ticker.sector or None,
-        return_1d_pct=_pct_return(closes, 1),
-        return_5d_pct=_pct_return(closes, 5),
-        return_20d_pct=_pct_return(closes, 20),
-        return_60d_pct=_pct_return(closes, 60),
-        vol_20d_ann_pct=_ann_vol(closes, 20),
-        rsi_14=_rsi(closes),
+        return_1d_pct=pct_return(closes, 1),
+        return_5d_pct=pct_return(closes, 5),
+        return_20d_pct=pct_return(closes, 20),
+        return_60d_pct=pct_return(closes, 60),
+        vol_20d_ann_pct=ann_vol(closes, 20),
+        rsi_14=rsi(closes),
         above_ma50=bool(last_price > closes.rolling(50).mean().iloc[-1]) if len(closes) >= 50 else None,
         above_ma200=bool(last_price > closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else None,
         rel_volume=rel_vol,

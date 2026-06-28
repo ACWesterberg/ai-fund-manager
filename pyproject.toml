@@ -37,6 +37,7 @@ dependencies = [
     "transformers>=4.40",
     "scipy>=1.13",
     "exchange-calendars>=4.13.2",
+    "financedata",
 ]
 
 [project.optional-dependencies]
@@ -66,3 +67,6 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.uv.sources]
+financedata = { path = "../../FinanceData", editable = true }

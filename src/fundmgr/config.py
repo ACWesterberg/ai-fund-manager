@@ -94,6 +94,8 @@ class AppConfig:
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
     auto_fill: bool = False  # if True, paper-execute fills automatically after each run
+    fx_to_sek: bool = False  # convert foreign-currency holdings to SEK for cash/NAV
+                             # (real fund). Sims run native-consistent; leave False.
 
     def config_hash(self) -> str:
         """Short hash of the decision-shaping config, for within-repo regime drift.
@@ -182,6 +184,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.universe_path = ROOT / universe
     if "auto_fill" in raw:
         cfg.auto_fill = bool(raw["auto_fill"])
+    if "fx_to_sek" in raw:
+        cfg.fx_to_sek = bool(raw["fx_to_sek"])
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(

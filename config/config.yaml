@@ -1,6 +1,7 @@
 capital_sek: 50000
 cadence: weekly
 benchmark: "^OMXSPI"
+fx_to_sek: true   # convert DKK/EUR/NOK/USD holdings to SEK for cash + NAV
 
 llm:
   provider: openai          # openai | anthropic

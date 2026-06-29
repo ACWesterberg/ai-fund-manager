@@ -180,6 +180,7 @@ class Store:
             "ALTER TABLE position_stops ADD COLUMN take_profit_pct REAL",
             "ALTER TABLE recommendations ADD COLUMN score REAL",
             "ALTER TABLE recommendations ADD COLUMN sampling_log TEXT",
+            "ALTER TABLE transactions ADD COLUMN currency TEXT",
         ]:
             with self._conn() as conn:
                 try:
@@ -253,12 +254,20 @@ class Store:
             )
 
     def apply_fill(self, txn: Transaction) -> None:
-        """Apply a fill to positions and cash atomically."""
+        """Apply a fill to positions and cash atomically.
+
+        Per-share prices are stored native; cash (SEK) is converted from the
+        trade's native currency. If the FX rate is unavailable we degrade to
+        1.0 (no conversion) rather than fail the fill — `fund fix-fx-cash` can
+        re-correct later.
+        """
+        from fundmgr.data.fx import rate_to_sek
+        rate = rate_to_sek(txn.currency, self) or 1.0
         with self._conn() as conn:
-            # Record the transaction
+            # Record the transaction (price/fee native, plus its currency)
             conn.execute(
-                "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source, currency) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     txn.timestamp.isoformat(),
                     txn.ticker,
@@ -267,6 +276,7 @@ class Store:
                     txn.price_sek,
                     txn.fee_sek,
                     txn.source,
+                    txn.currency,
                 ),
             )
 
@@ -287,10 +297,10 @@ class Store:
                     "shares = excluded.shares, avg_cost_sek = excluded.avg_cost_sek, updated_at = excluded.updated_at",
                     (txn.ticker, new_shares, new_avg, txn.timestamp.isoformat()),
                 )
-                # Deduct from cash
+                # Deduct from cash (converted to SEK)
                 conn.execute(
                     "UPDATE cash SET balance_sek = balance_sek - ? WHERE id = 1",
-                    (txn.gross_sek + txn.fee_sek,),
+                    ((txn.gross_sek + txn.fee_sek) * rate,),
                 )
             else:  # sell
                 cur_shares = float(row["shares"]) if row else 0.0
@@ -300,10 +310,10 @@ class Store:
                     "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",
                     (new_shares, txn.timestamp.isoformat(), txn.ticker),
                 )
-                # Add proceeds to cash (minus fee)
+                # Add proceeds to cash (converted to SEK, minus fee)
                 conn.execute(
                     "UPDATE cash SET balance_sek = balance_sek + ? WHERE id = 1",
-                    (txn.gross_sek - txn.fee_sek,),
+                    ((txn.gross_sek - txn.fee_sek) * rate,),
                 )
 
     # ── Transactions ──────────────────────────────────────────────────────────
@@ -323,6 +333,7 @@ class Store:
                 price_sek=r["price_sek"],
                 fee_sek=r["fee_sek"],
                 source=r["source"],
+                currency=(r["currency"] if "currency" in r.keys() and r["currency"] else "SEK"),
             )
             for r in rows
         ]

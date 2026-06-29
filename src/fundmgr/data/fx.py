@@ -73,3 +73,21 @@ def to_sek(amount: float, currency: str, store: "Store | None" = None) -> float 
     """Convert `amount` in `currency` to SEK. None if the rate is unavailable."""
     rate = rate_to_sek(currency, store)
     return None if rate is None else amount * rate
+
+
+def populate_fx(positions: list, store: "Store | None" = None, universe_path=None) -> list:
+    """Set .currency and .fx_rate on each Position so SEK valuation is correct.
+
+    Looks up each ticker's native currency from the universe and the daily
+    rate from the FX cache. Unknown/unavailable → SEK identity (1.0). Returns
+    the same list for convenience.
+    """
+    from fundmgr.config import load_config, load_universe
+    if universe_path is None:
+        universe_path = load_config().universe_path
+    cur_map = {t.yahoo_ticker: t.currency for t in load_universe(universe_path)}
+    for p in positions:
+        p.currency = cur_map.get(p.ticker, "SEK")
+        r = rate_to_sek(p.currency, store)
+        p.fx_rate = r if r is not None else 1.0
+    return positions

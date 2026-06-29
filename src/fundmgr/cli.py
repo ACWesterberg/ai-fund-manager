@@ -587,6 +587,19 @@ def fix_fx_cash(yes: bool):
     click.echo(f"✓ Cash balance set to {cash:,.2f} SEK")
 
 
+@cli.command("set-cash")
+@click.argument("amount", type=float)
+def set_cash_cmd(amount: float):
+    """Set the cash balance to AMOUNT (SEK). For manual corrections."""
+    cfg, store = _get_store()
+    if amount < 0:
+        click.echo("Amount must be >= 0.", err=True)
+        sys.exit(1)
+    old = store.get_cash()
+    store.set_cash(amount)
+    click.echo(f"✓ Cash set: {old:,.2f} → {amount:,.2f} SEK")
+
+
 @cli.command("undo-fill")
 def undo_fill():
     """Reverse the most recent fill (position + cash restored, transaction deleted)."""

@@ -11,6 +11,7 @@ Commands:
   /universe      — list enabled tickers
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
+  /setcash AMOUNT — correct the cash balance (SEK)
   /help          — show this message
 
 Photo messages:
@@ -236,6 +237,16 @@ async def cmd_reject_rates(update: "Update", context: "ContextTypes.DEFAULT_TYPE
     await _send(update, output)
 
 
+async def cmd_setcash(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Usage: /setcash AMOUNT — correct the cash balance (SEK)."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /setcash AMOUNT\nExample: /setcash 10382")
+        return
+    output = _run_cli("set-cash", args[0], timeout=30)
+    await _send(update, output)
+
+
 async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/review [TICKER] — advisory stop-loss review.
 
@@ -265,6 +276,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/universe — list all enabled tickers\n"
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
+        "/setcash AMOUNT — correct the cash balance (SEK)\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill."
     )
@@ -562,6 +574,7 @@ def main() -> None:
     app.add_handler(CommandHandler("universe", cmd_universe))
     app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
     app.add_handler(CommandHandler("review",   cmd_review))
+    app.add_handler(CommandHandler("setcash",  cmd_setcash))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

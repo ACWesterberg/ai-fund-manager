@@ -851,13 +851,26 @@ class Store:
         return [dict(r) for r in rows]
 
     def save_news_sentiment(self, ticker: str, items: list[dict]) -> None:
-        """items: list of {headline, source_url, published_at, sentiment_label, sentiment_score}."""
+        """items: news dicts. Tolerant of source shape — financedata rows use
+        different/absent keys (e.g. no source_url), so normalise with defaults."""
         now = datetime.utcnow().isoformat()
+        rows = [
+            {
+                "ticker": ticker,
+                "headline": item.get("headline") or item.get("title") or "",
+                "source_url": item.get("source_url") or item.get("url") or item.get("link"),
+                "published_at": item.get("published_at") or item.get("published"),
+                "sentiment_label": item.get("sentiment_label") or item.get("label"),
+                "sentiment_score": item.get("sentiment_score") if item.get("sentiment_score") is not None else item.get("score"),
+                "fetched_at": now,
+            }
+            for item in items
+        ]
         with self._conn() as conn:
             conn.executemany(
                 "INSERT INTO news_cache (ticker, headline, source_url, published_at, sentiment_label, sentiment_score, fetched_at) "
                 "VALUES (:ticker, :headline, :source_url, :published_at, :sentiment_label, :sentiment_score, :fetched_at)",
-                [{**item, "ticker": ticker, "fetched_at": now} for item in items],
+                rows,
             )
 
     def get_recent_news(self, ticker: str, since_date: str) -> list[dict]:

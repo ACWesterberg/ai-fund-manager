@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import sys
@@ -326,7 +327,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
             if tg_consensus:
                 header += f"  <i>({n_samples}-run consensus)</i>"
             lines = [header]
-            lines.append(decision.market_summary)
+            lines.append(html.escape(decision.market_summary))
             # NAV vs benchmark performance line
             from fundmgr.data.benchmark import get_benchmark_return_pct
             nav_history = store.get_nav_history()
@@ -342,22 +343,22 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
                 lines.append("<b>🟢 BUYS</b>")
                 for a in buys:
                     lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
-                    lines.append(f"  <i>{a.thesis}</i>")
+                    lines.append(f"  <i>{html.escape(a.thesis)}</i>")
             if sells:
                 lines.append("")
                 lines.append("<b>🔴 SELLS</b>")
                 for a in sells:
                     lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
-                    lines.append(f"  <i>{a.thesis}</i>")
+                    lines.append(f"  <i>{html.escape(a.thesis)}</i>")
             if holds:
                 lines.append("")
                 lines.append("<b>⏸ HOLDS</b>")
                 for a in holds:
-                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{a.thesis[:120]}</i>")
+                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis[:120])}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:
-                lines.append(f"\n<i>{decision.notes}</i>")
+                lines.append(f"\n<i>{html.escape(decision.notes)}</i>")
             # One-shot reminder: once enough weeks of runs have accumulated,
             # nudge to check the Refine gate. Fires once, re-arms after reset.
             show_refine_reminder = False
@@ -387,15 +388,26 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
                     current = candidate
             if current:
                 chunks.append(current)
+            def _send_chunk(chunk: str) -> None:
+                """Send as HTML; on a parse error (HTTP 400) retry as plain text
+                so a stray character can never swallow the whole notification."""
+                for mode in ("HTML", None):
+                    payload = {"chat_id": chat_id, "text": chunk}
+                    if mode:
+                        payload["parse_mode"] = mode
+                    try:
+                        _req.urlopen(
+                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                            urllib.parse.urlencode(payload).encode(), timeout=10,
+                        )
+                        return
+                    except Exception:
+                        if mode is None:
+                            raise  # plain text also failed — genuine send error
+
             try:
                 for chunk in chunks:
-                    data = urllib.parse.urlencode({
-                        "chat_id": chat_id, "text": chunk, "parse_mode": "HTML",
-                    }).encode()
-                    _req.urlopen(
-                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                        data, timeout=10,
-                    )
+                    _send_chunk(chunk)
                 click.echo(f"  Telegram notification sent ({len(chunks)} message(s)).")
                 if show_refine_reminder:
                     store.set_meta("refine_gate_reminded", datetime.utcnow().isoformat())

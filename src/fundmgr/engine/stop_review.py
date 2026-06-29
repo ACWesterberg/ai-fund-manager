@@ -12,6 +12,7 @@ ADD recommendation for the human to act on manually.
 """
 from __future__ import annotations
 
+import html
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -245,8 +246,8 @@ def format_review_text(r: StopReview, votes: dict[str, int], n: int) -> str:
 def format_review_html(r: StopReview, votes: dict[str, int], n: int) -> str:
     trim = f" {r.trim_pct:.0f}%" if r.recommendation == "trim" and r.trim_pct else ""
     return (
-        f"{_REC_EMOJI.get(r.recommendation,'')} <b>Stop review {r.ticker}: "
+        f"{_REC_EMOJI.get(r.recommendation,'')} <b>Stop review {html.escape(r.ticker)}: "
         f"{r.recommendation.upper()}{trim}</b>  <i>(conf {r.confidence:.2f}; {_votes_str(votes, n)})</i>\n"
-        f"<i>Changed:</i> {r.what_changed}\n"
-        f"<i>Why:</i> {r.rationale}"
+        f"<i>Changed:</i> {html.escape(r.what_changed)}\n"
+        f"<i>Why:</i> {html.escape(r.rationale)}"
     )

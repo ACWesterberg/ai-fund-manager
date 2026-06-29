@@ -1,7 +1,9 @@
 capital_sek: 50000
 cadence: weekly
 benchmark: "^OMXSPI"
-fx_to_sek: true   # convert DKK/EUR/NOK/USD holdings to SEK for cash + NAV
+fx_to_sek: false  # DISABLED: cash/cost-basis are already entered in SEK.
+                  # The real FX gap is market data (yfinance native) vs SEK
+                  # cost basis — fix that separately, not by converting cash.
 
 llm:
   provider: openai          # openai | anthropic

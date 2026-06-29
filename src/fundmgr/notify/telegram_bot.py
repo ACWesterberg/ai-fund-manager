@@ -285,23 +285,30 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
 # ── Screenshot fill extraction ────────────────────────────────────────────────
 
 _OCR_SYSTEM_PROMPT = """\
-You are extracting trade fill details from OCR text taken from a Swedish/Nordic broker \
-confirmation screen (Montrose or similar). The text may have minor OCR artifacts.
+You are extracting trade fill details from OCR text of a Swedish broker order \
+confirmation (Avanza-style). The account is in SEK (ISK), so all monetary TOTALS \
+are SEK even when the stock trades in a foreign currency (e.g. DKK). OCR may have \
+minor artifacts.
 
-IMPORTANT — price field rules for Montrose screens:
-- Use "Avslutskurs" as price_sek — this is the actual execution price.
-- Ignore "Kurs" — that is the original limit/offer price, not what was paid.
-- If Avslutskurs is missing, derive price_sek = Köpesumma / Antal (total / shares).
+CRITICAL — currency rules:
+- "Kurs" / "Avslutskurs" is the execution price in the STOCK'S NATIVE currency
+  (e.g. DKK). DO NOT use it as the SEK amount.
+- "Köpesumma" (buy) — or "Försäljningssumma" / "Likvid" (sell) — is the SEK value
+  of the shares, EXCLUDING fees. This is the cost/proceeds basis.
+- Fees are in SEK and there may be SEVERAL: sum ALL of "Prel. courtage" /
+  "Courtage" and "Prel. växlingsavgift" / "Växlingsavgift" (FX fee).
 
 Return ONLY a valid JSON object — no other text, no markdown fences:
 {
-  "isin": "12-character ISIN (e.g. SE0000115446) — most reliable identifier, or null",
+  "isin": "12-char ISIN (e.g. DK0062498333) — most reliable identifier, or null",
   "company_name": "company name as shown",
   "side": "buy" or "sell",
   "shares": integer number of shares (Antal),
-  "price_sek": actual execution price per share in SEK (Avslutskurs, NOT Kurs),
-  "fee_sek": broker commission/courtage in SEK (Prel. courtage or Courtage),
-  "trade_date": "YYYY-MM-DD from Senaste avslut or Affärsdatum field, or null",
+  "amount_sek": SEK value of the shares excl. fees (Köpesumma / sale proceeds),
+  "fee_sek": TOTAL fees in SEK = courtage + växlingsavgift (sum every fee line),
+  "native_price": execution price per share in native currency (Avslutskurs), or null,
+  "native_currency": "DKK" / "SEK" / "EUR" / etc. for the Kurs, or null,
+  "trade_date": "YYYY-MM-DD from Senaste avslut / Affärsdatum, or null",
   "confidence": float 0.0-1.0
 }
 Set any field to null if it cannot be reliably determined.\
@@ -401,6 +408,17 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         )
         return
 
+    # Derive the SEK per-share price from the SEK amount (Köpesumma): the broker
+    # settles in SEK, so cost basis is amount_sek / shares — NOT the native Kurs.
+    try:
+        sh = float(data.get("shares") or 0)
+        amt = data.get("amount_sek")
+        if amt is not None and sh > 0:
+            data["price_sek"] = round(float(amt) / sh, 4)
+    except (TypeError, ValueError):
+        pass
+    data.setdefault("price_sek", None)
+
     # ISIN → name fallback → Yahoo ticker lookup
     isin = (data.get("isin") or "").strip().upper()
     company_name = (data.get("company_name") or "").strip()
@@ -432,8 +450,14 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     lines.append(f"Ticker: <b>{ticker or '?'}</b>")
     lines.append(f"Side: <b>{(data.get('side') or '?').upper()}</b>")
     lines.append(f"Shares: <b>{data.get('shares') or '?'}</b>")
-    lines.append(f"Price: <b>{data.get('price_sek') or '?'} SEK</b>")
-    lines.append(f"Fee: <b>{data.get('fee_sek') or '?'} SEK</b>")
+    price_line = f"Price: <b>{data.get('price_sek') or '?'} SEK/sh</b>"
+    nc = (data.get("native_currency") or "").upper()
+    if nc and nc != "SEK" and data.get("native_price"):
+        price_line += f"  (Kurs {data.get('native_price')} {nc})"
+    lines.append(price_line)
+    if data.get("amount_sek"):
+        lines.append(f"Amount: <b>{data.get('amount_sek')} SEK</b>")
+    lines.append(f"Fee: <b>{data.get('fee_sek') or '?'} SEK</b>  (courtage + FX)")
     if trade_date:
         lines.append(f"Date: <b>{trade_date}</b>")
     lines.append(f"\n{conf_bar} Confidence: {confidence:.0%}")

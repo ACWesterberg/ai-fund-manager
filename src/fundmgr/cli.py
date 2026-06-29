@@ -332,7 +332,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
             holds = [a for a in guardrail_result.approved_actions if a.side == "hold"]
             tg_consensus = vote_counts is not None and n_samples > 1
             tg_vote = (lambda t: f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else "")
-            header = f"<b>📊 Fund Run Complete</b>  <code>{run_id}</code>"
+            header = f"<b>{html.escape(cfg.display_name)}</b>\n📊 Run Complete  <code>{run_id}</code>"
             if tg_consensus:
                 header += f"  <i>({n_samples}-run consensus)</i>"
             lines = [header]
@@ -873,7 +873,7 @@ def check_stops(quiet: bool):
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if (stops_hit or profits_hit or warnings) and bot_token and chat_id:
-        lines = ["<b>📉 Price Alert</b>"]
+        lines = [f"<b>{cfg.display_name}</b>\n📉 Price Alert"]
         for ticker, chg, stop_pct, price in stops_hit:
             note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review &amp; sell"
             lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")

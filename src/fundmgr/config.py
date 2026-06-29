@@ -96,6 +96,11 @@ class AppConfig:
     auto_fill: bool = False  # if True, paper-execute fills automatically after each run
     fx_to_sek: bool = False  # convert foreign-currency holdings to SEK for cash/NAV
                              # (real fund). Sims run native-consistent; leave False.
+    name: str = ""           # display name for notifications (which fund this is)
+
+    @property
+    def display_name(self) -> str:
+        return self.name or f"{self.llm.provider}/{self.llm.model_id}"
 
     def config_hash(self) -> str:
         """Short hash of the decision-shaping config, for within-repo regime drift.
@@ -186,6 +191,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.auto_fill = bool(raw["auto_fill"])
     if "fx_to_sek" in raw:
         cfg.fx_to_sek = bool(raw["fx_to_sek"])
+    if "name" in raw:
+        cfg.name = str(raw["name"])
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(

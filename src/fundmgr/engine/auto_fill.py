@@ -147,9 +147,8 @@ def execute_paper_fills(
     # Reminder: orders that didn't execute because their market was closed.
     if skipped_closed and notify_skips:
         from fundmgr.notify.send import send_telegram
-        fund = cfg.llm.model_id or cfg.llm.provider
         lines = [
-            f"<b>⏸ Fills skipped — market closed</b>  <i>({fund})</i>",
+            f"<b>{cfg.display_name}</b>\n⏸ Fills skipped — market closed",
             f"{len(skipped_closed)} order(s) not executed (holiday/off-hours):",
         ]
         lines += [f"  {tk}  {sd.upper()}  [{ex}]" for tk, sd, ex in skipped_closed]

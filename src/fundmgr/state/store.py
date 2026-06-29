@@ -256,13 +256,10 @@ class Store:
     def apply_fill(self, txn: Transaction) -> None:
         """Apply a fill to positions and cash atomically.
 
-        Per-share prices are stored native; cash (SEK) is converted from the
-        trade's native currency. If the FX rate is unavailable we degrade to
-        1.0 (no conversion) rather than fail the fill — `fund fix-fx-cash` can
-        re-correct later.
+        Prices/fees are recorded in SEK — the broker (ISK) settles in SEK and
+        fills are entered in SEK (OCR reads Köpesumma/Totalt belopp). The
+        currency tag is metadata only; no conversion happens here.
         """
-        from fundmgr.data.fx import rate_to_sek
-        rate = rate_to_sek(txn.currency, self) or 1.0
         with self._conn() as conn:
             # Record the transaction (price/fee native, plus its currency)
             conn.execute(
@@ -297,10 +294,10 @@ class Store:
                     "shares = excluded.shares, avg_cost_sek = excluded.avg_cost_sek, updated_at = excluded.updated_at",
                     (txn.ticker, new_shares, new_avg, txn.timestamp.isoformat()),
                 )
-                # Deduct from cash (converted to SEK)
+                # Deduct from cash
                 conn.execute(
                     "UPDATE cash SET balance_sek = balance_sek - ? WHERE id = 1",
-                    ((txn.gross_sek + txn.fee_sek) * rate,),
+                    (txn.gross_sek + txn.fee_sek,),
                 )
             else:  # sell
                 cur_shares = float(row["shares"]) if row else 0.0
@@ -310,10 +307,10 @@ class Store:
                     "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",
                     (new_shares, txn.timestamp.isoformat(), txn.ticker),
                 )
-                # Add proceeds to cash (converted to SEK, minus fee)
+                # Add proceeds to cash (minus fee)
                 conn.execute(
                     "UPDATE cash SET balance_sek = balance_sek + ? WHERE id = 1",
-                    ((txn.gross_sek - txn.fee_sek) * rate,),
+                    (txn.gross_sek - txn.fee_sek,),
                 )
 
     # ── Transactions ──────────────────────────────────────────────────────────

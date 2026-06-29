@@ -205,15 +205,21 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
             f"({len(qual_learnings)} qualitative, {len(stat_learnings)} calibration)."
         )
 
-    # ── Step 6: Build portfolio snapshot (attach live prices) ────────────────
-    from fundmgr.data.fx import populate_fx
+    # ── Step 6: Build portfolio snapshot (attach live prices, native→SEK) ────
+    from fundmgr.data.fx import rate_to_sek
+    fx_cache: dict[str, float] = {}
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in tickers}
     positions = store.get_positions()
     for p in positions:
         feat = features.get(p.ticker)
         if feat:
-            p.current_price_sek = feat.last_price
-    if cfg.fx_to_sek:
-        populate_fx(positions, store, cfg.universe_path)  # native→SEK for NAV/weights
+            price = feat.last_price
+            cur = cur_by_ticker.get(p.ticker, "SEK")
+            if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
+                rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+                fx_cache[cur] = rate
+                price *= rate
+            p.current_price_sek = price
     snap = PortfolioSnapshot(positions=positions, cash_sek=store.get_cash())
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
@@ -493,13 +499,6 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         ts = datetime.utcnow()
 
     ticker = ticker.upper()
-    # Native currency of this ticker (price/fee are entered in it; cash converts).
-    from fundmgr.config import load_universe
-    from fundmgr.data.fx import rate_to_sek
-    currency = "SEK"
-    if cfg.fx_to_sek:
-        currency = next((t.currency for t in load_universe(cfg.universe_path) if t.yahoo_ticker == ticker), "SEK")
-
     txn = Transaction(
         ticker=ticker,
         side=side,
@@ -508,22 +507,13 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         fee_sek=fee,
         source="fill",
         timestamp=ts,
-        currency=currency,
     )
 
     store.apply_fill(txn)
 
     gross = shares * price
     direction = "Bought" if side == "buy" else "Sold"
-    if currency != "SEK":
-        rate = rate_to_sek(currency, store) or 1.0
-        sek = (gross + (fee if side == "buy" else -fee)) * rate
-        click.echo(
-            f"✓ {direction} {shares} × {ticker} @ {price:.2f} {currency} = {gross:,.0f} {currency} "
-            f"(fee {fee:.2f} {currency})  →  {sek:,.0f} SEK @ {rate:.3f}"
-        )
-    else:
-        click.echo(f"✓ {direction} {shares} × {ticker} @ {price:.2f} SEK = {gross:,.0f} SEK (fee: {fee:.2f} SEK)")
+    click.echo(f"✓ {direction} {shares} × {ticker} @ {price:.2f} SEK = {gross:,.0f} SEK (fee: {fee:.2f} SEK)")
     cash = store.get_cash()
     click.echo(f"  Cash remaining: {cash:,.0f} SEK")
 
@@ -541,50 +531,6 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         ))
     except Exception:
         pass
-
-
-@cli.command("fix-fx-cash")
-@click.option("--yes", is_flag=True, help="Apply without confirmation.")
-def fix_fx_cash(yes: bool):
-    """Recompute cash applying FX to foreign-currency fills (one-time migration).
-
-    Past foreign buys/sells were booked at face value as SEK, so the cash
-    balance is wrong. This replays every transaction, converts it using its
-    ticker's native currency (looked up from the universe — old rows have no
-    stored currency), and rewrites cash = capital + Σ(net × FX). Uses current
-    spot FX as an approximation.
-    """
-    cfg, store = _get_store()
-    if not cfg.fx_to_sek:
-        click.echo("fx_to_sek is disabled for this fund — nothing to fix.")
-        return
-
-    from fundmgr.config import load_universe
-    from fundmgr.data.fx import rate_to_sek
-    cur_map = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
-
-    txns = sorted(store.get_transactions(limit=1_000_000), key=lambda x: x.timestamp)
-    cash = cfg.capital_sek
-    foreign = 0
-    for t in txns:
-        cur = cur_map.get(t.ticker, "SEK")
-        rate = rate_to_sek(cur, store) or 1.0
-        if cur != "SEK":
-            foreign += 1
-        cash += t.net_sek * rate  # net_sek is native (signed); ×rate → SEK
-
-    current = store.get_cash()
-    click.echo(f"  Transactions replayed: {len(txns)}  ({foreign} foreign-currency)")
-    click.echo(f"  Current cash:    {current:,.2f} SEK")
-    click.echo(f"  Recomputed cash: {cash:,.2f} SEK   (Δ {cash - current:+,.2f})")
-    if abs(cash - current) < 0.01:
-        click.echo("  Already correct — nothing to do.")
-        return
-    if not yes and not click.confirm("Rewrite the cash balance?", default=False):
-        click.echo("Aborted — nothing changed.")
-        return
-    store.set_cash(cash)
-    click.echo(f"✓ Cash balance set to {cash:,.2f} SEK")
 
 
 @cli.command("set-cash")
@@ -780,6 +726,19 @@ def check_stops(quiet: bool):
 
     stop_map = store.get_effective_stops()
 
+    # Native→SEK for comparing live prices against the SEK cost basis.
+    from fundmgr.data.fx import rate_to_sek
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in get_enabled_tickers(cfg.universe_path)}
+    fx_cache: dict[str, float] = {}
+
+    def _to_sek(price: float, ticker: str) -> float:
+        cur = cur_by_ticker.get(ticker, "SEK")
+        if not cfg.fx_to_sek or cur == "SEK":
+            return price
+        rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+        fx_cache[cur] = rate
+        return price * rate
+
     if not quiet:
         click.echo("\n─── Price Level Check ───────────────────────────────")
         click.echo(f"  {'Ticker':<16} {'Avg Cost':>9} {'Live':>8} {'Chg%':>7} {'Levels':>14} {'Status'}")
@@ -803,7 +762,8 @@ def check_stops(quiet: bool):
                 click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}")
             continue
 
-        live_price = float(hist["Close"].iloc[-1])
+        live_native = float(hist["Close"].iloc[-1])
+        live_price = _to_sek(live_native, p.ticker)  # SEK, for cost-basis comparison & display
 
         # % change since entry — the metric stop/take-profit levels are measured against.
         chg = (live_price / p.avg_cost_sek - 1) * 100 if p.avg_cost_sek else 0.0
@@ -816,7 +776,7 @@ def check_stops(quiet: bool):
             last_bar_date = hist.index[-1].date()
             if last_bar_date == today_date:
                 prev_day_close = float(hist["Close"].iloc[-2])
-                daily_chg = (live_price / prev_day_close - 1) * 100
+                daily_chg = (live_native / prev_day_close - 1) * 100  # native ratio
         levels = stop_map.get(p.ticker, {})
         stop_pct = levels.get("stop_pct")
         tp_pct = levels.get("take_profit_pct")
@@ -988,7 +948,7 @@ def review_stop(ticker: str | None, notify: bool):
         targets = [{"ticker": matches[0], "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
-        scan = find_stop_breaches(store)
+        scan = find_stop_breaches(store, cfg)
         breaches, skipped = scan["breaches"], scan["skipped"]
         if skipped:
             click.echo("  Could not evaluate: " + ", ".join(

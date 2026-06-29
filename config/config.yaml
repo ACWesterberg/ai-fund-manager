@@ -1,9 +1,9 @@
 capital_sek: 50000
 cadence: weekly
 benchmark: "^OMXSPI"
-fx_to_sek: false  # DISABLED: cash/cost-basis are already entered in SEK.
-                  # The real FX gap is market data (yfinance native) vs SEK
-                  # cost basis — fix that separately, not by converting cash.
+fx_to_sek: true   # Convert native market prices (yfinance) -> SEK at valuation,
+                  # so live/stop/NAV align with the SEK cost basis. Cash and
+                  # cost basis stay SEK (broker ISK settles in SEK).
 
 llm:
   provider: openai          # openai | anthropic

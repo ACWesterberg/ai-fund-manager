@@ -23,7 +23,7 @@ from fundmgr.engine.schema import StopReview
 from fundmgr.state.store import Store
 
 
-def find_stop_breaches(store: Store) -> dict:
+def find_stop_breaches(store: Store, cfg: AppConfig | None = None) -> dict:
     """Scan holdings for stop-loss breaches.
 
     Returns {"breaches": [...], "skipped": [...]} where breaches are dicts
@@ -32,9 +32,17 @@ def find_stop_breaches(store: Store) -> dict:
     caller can surface them rather than silently report "no breaches".
 
     Stops fall back to the level decided at buy time (get_effective_stops), so
-    positions whose stop was never persisted are still checked.
+    positions whose stop was never persisted are still checked. Live prices are
+    converted native→SEK (when cfg.fx_to_sek) to match the SEK cost basis.
     """
     import yfinance as yf
+    from fundmgr.data.fx import rate_to_sek
+
+    fx_on = bool(cfg and cfg.fx_to_sek)
+    cur_by_ticker = {}
+    if fx_on:
+        cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+    fx_cache: dict[str, float] = {}
 
     stop_map = store.get_effective_stops()
     breaches: list[dict] = []
@@ -52,6 +60,11 @@ def find_stop_breaches(store: Store) -> dict:
         if live is None:
             skipped.append({"ticker": p.ticker, "reason": "price unavailable"})
             continue
+        cur = cur_by_ticker.get(p.ticker, "SEK")
+        if fx_on and cur != "SEK":  # native→SEK to compare with SEK cost basis
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+            fx_cache[cur] = rate
+            live = live * rate
         chg = (live / p.avg_cost_sek - 1) * 100
         if chg <= -stop_pct:
             breaches.append({"ticker": p.ticker, "chg": chg, "stop_pct": stop_pct, "live": live})
@@ -110,13 +123,20 @@ def _build_review_prompt(ticker: str, store: Store, cfg: AppConfig, live_price: 
     if pos is None:
         return None
 
-    names = {t.yahoo_ticker: t.name for t in load_universe(cfg.universe_path)}
-    name = names.get(ticker, ticker)
+    uni = load_universe(cfg.universe_path)
+    name = {t.yahoo_ticker: t.name for t in uni}.get(ticker, ticker)
+    currency = {t.yahoo_ticker: t.currency for t in uni}.get(ticker, "SEK")
     stop = store.get_effective_stops().get(ticker, {})
     stop_pct = stop.get("stop_pct")
 
     technicals, tech_live = _technicals_block(ticker)
-    live = live_price or tech_live or pos.avg_cost_sek
+    if live_price is not None:
+        live = live_price                      # already SEK (caller converted)
+    else:
+        live = tech_live or pos.avg_cost_sek
+        if cfg.fx_to_sek and tech_live is not None and currency != "SEK":
+            from fundmgr.data.fx import rate_to_sek
+            live = tech_live * (rate_to_sek(currency, store) or 1.0)  # native→SEK
     chg = (live / pos.avg_cost_sek - 1) * 100 if pos.avg_cost_sek else 0.0
     mkt_value = pos.shares * live
 

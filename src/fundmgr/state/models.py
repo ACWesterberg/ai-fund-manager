@@ -9,22 +9,17 @@ from typing import Literal
 class Position:
     ticker: str
     shares: float
-    avg_cost_sek: float          # stored in the stock's native currency
-    current_price_sek: float = 0.0  # native currency (see fx_rate)
+    avg_cost_sek: float          # SEK (broker settles in SEK)
+    current_price_sek: float = 0.0  # SEK — callers convert native→SEK before setting
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    # Native→SEK conversion. Per-share prices are kept native (so returns/%/
-    # stop-loss stay consistent); fx_rate converts amounts into SEK for NAV.
-    # Populated by fx.populate_fx() at valuation time; 1.0 for SEK names.
-    currency: str = "SEK"
-    fx_rate: float = 1.0
 
     @property
     def market_value_sek(self) -> float:
-        return self.shares * self.current_price_sek * self.fx_rate
+        return self.shares * self.current_price_sek
 
     @property
     def unrealised_pnl_sek(self) -> float:
-        return (self.current_price_sek - self.avg_cost_sek) * self.shares * self.fx_rate
+        return (self.current_price_sek - self.avg_cost_sek) * self.shares
 
     @property
     def unrealised_pnl_pct(self) -> float:

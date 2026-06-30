@@ -69,4 +69,4 @@ line-length = 100
 target-version = "py311"
 
 [tool.uv.sources]
-financedata = { path = "../../FinanceData", editable = true }
+financedata = { path = "../FinanceData", editable = true }

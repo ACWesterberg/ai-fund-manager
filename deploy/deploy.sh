@@ -36,10 +36,11 @@ UV=$(command -v uv || echo "$HOME/.local/bin/uv")
 # Shared financedata package: install it explicitly first. `uv pip install -e .`
 # does not resolve [tool.uv.sources] path deps, so without this the project's
 # `financedata` requirement would fail to resolve (or run stale).
-if [ -d "$HOME/FinanceData" ]; then
-    "$UV" pip install -e "$HOME/FinanceData" --quiet
+FINANCEDATA_DIR="${FINANCEDATA_DIR:-$REPO_DIR/../FinanceData}"
+if [ -d "$FINANCEDATA_DIR" ]; then
+    "$UV" pip install -e "$FINANCEDATA_DIR" --quiet
 else
-    log "  ⚠ ~/FinanceData not found — financedata import will fail until it's present"
+    log "  ⚠ $FINANCEDATA_DIR not found — financedata import will fail until it's present"
 fi
 "$UV" pip install -e . --quiet
 

@@ -2,9 +2,9 @@
 FX conversion to SEK (the fund's base currency).
 
 The fund books cash and NAV in SEK, but holdings on foreign exchanges are
-quoted in their native currency (DKK, EUR, NOK, USD, …). This converts native
-amounts to SEK using daily spot rates from yfinance ({CUR}SEK=X), cached for the
-day in the store's app_meta so we don't refetch per ticker.
+quoted in their native currency (DKK, EUR, NOK, USD, …). Conversion now delegates
+to the shared financedata.get_fx_rate (single cached source across projects),
+with a local yfinance fallback for older financedata installs.
 
 Design notes:
   - SEK → identity (rate 1.0), no fetch.
@@ -40,11 +40,24 @@ def _fetch_rate(currency: str) -> float | None:
 
 
 def rate_to_sek(currency: str, store: "Store | None" = None) -> float | None:
-    """Return the {currency}->SEK rate (1.0 for SEK), cached per day. None on failure."""
+    """Return the {currency}->SEK rate (1.0 for SEK). None when unavailable.
+
+    Prefers the shared financedata.get_fx_rate (single cached source across
+    projects); falls back to a local yfinance fetch if that version of
+    financedata isn't installed yet.
+    """
     cur = (currency or "SEK").upper()
     if cur == "SEK":
         return 1.0
+    try:
+        from financedata import get_fx_rate
+    except ImportError:
+        return _local_rate_to_sek(cur, store)
+    return get_fx_rate(cur, "SEK")
 
+
+def _local_rate_to_sek(cur: str, store: "Store | None" = None) -> float | None:
+    """Fallback: local yfinance fetch + per-day cache (pre-financedata-FX)."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
     memo_key = f"{cur}:{today}"
     if memo_key in _MEMO:

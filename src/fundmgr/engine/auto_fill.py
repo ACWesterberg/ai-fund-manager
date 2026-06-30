@@ -13,8 +13,6 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
-import yfinance as yf
-
 from fundmgr.config import AppConfig
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.state.models import NavPoint, Transaction
@@ -22,13 +20,9 @@ from fundmgr.state.store import Store
 
 
 def _fetch_price(ticker: str) -> float | None:
-    """Fetch the latest available price for a ticker."""
-    try:
-        info = yf.Ticker(ticker).fast_info
-        price = getattr(info, "last_price", None) or getattr(info, "open", None)
-        return float(price) if price and price > 0 else None
-    except Exception:
-        return None
+    """Fetch the latest available price for a ticker (shared cache via financedata)."""
+    from fundmgr.data.quotes import live_price
+    return live_price(ticker)
 
 
 def _compute_shares(nav_sek: float, target_weight_pct: float, price_sek: float) -> float:

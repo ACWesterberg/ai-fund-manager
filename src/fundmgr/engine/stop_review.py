@@ -35,8 +35,8 @@ def find_stop_breaches(store: Store, cfg: AppConfig | None = None) -> dict:
     positions whose stop was never persisted are still checked. Live prices are
     converted native→SEK (when cfg.fx_to_sek) to match the SEK cost basis.
     """
-    import yfinance as yf
     from fundmgr.data.fx import rate_to_sek
+    from fundmgr.data.quotes import live_price
 
     fx_on = bool(cfg and cfg.fx_to_sek)
     cur_by_ticker = {}
@@ -52,11 +52,7 @@ def find_stop_breaches(store: Store, cfg: AppConfig | None = None) -> dict:
         if not stop_pct or not p.avg_cost_sek:
             skipped.append({"ticker": p.ticker, "reason": "no stop on record"})
             continue
-        try:
-            hist = yf.Ticker(p.ticker).history(period="2d")
-            live = float(hist["Close"].iloc[-1]) if hist is not None and not hist.empty else None
-        except Exception:
-            live = None
+        live = live_price(p.ticker)
         if live is None:
             skipped.append({"ticker": p.ticker, "reason": "price unavailable"})
             continue

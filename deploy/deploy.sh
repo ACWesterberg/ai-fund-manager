@@ -33,11 +33,20 @@ git log --oneline "$BEFORE..$AFTER" | while read -r line; do log "  $line"; done
 # Install / update Python dependencies
 log "Updating dependencies…"
 UV=$(command -v uv || echo "$HOME/.local/bin/uv")
-# Shared financedata package: install it explicitly first. `uv pip install -e .`
-# does not resolve [tool.uv.sources] path deps, so without this the project's
-# `financedata` requirement would fail to resolve (or run stale).
+# Shared financedata package: pull its latest source and (re)install it first.
+# `uv pip install -e .` does not resolve [tool.uv.sources] path deps, so without
+# this the project's `financedata` requirement would fail to resolve (or run
+# stale). Git-pull is non-fatal so a FinanceData hiccup can't block the deploy.
 FINANCEDATA_DIR="${FINANCEDATA_DIR:-$REPO_DIR/../FinanceData}"
 if [ -d "$FINANCEDATA_DIR" ]; then
+    if [ -d "$FINANCEDATA_DIR/.git" ]; then
+        log "Updating FinanceData ($FINANCEDATA_DIR)…"
+        if git -C "$FINANCEDATA_DIR" pull --ff-only --quiet; then
+            log "  FinanceData → $(git -C "$FINANCEDATA_DIR" rev-parse --short HEAD)"
+        else
+            log "  ⚠ FinanceData git pull failed — installing current checkout"
+        fi
+    fi
     "$UV" pip install -e "$FINANCEDATA_DIR" --quiet
 else
     log "  ⚠ $FINANCEDATA_DIR not found — financedata import will fail until it's present"

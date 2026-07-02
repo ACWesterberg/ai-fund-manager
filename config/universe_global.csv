@@ -2999,3 +2999,1287 @@ Sumitomo ADR,SSUM,JP3404200007,JP,OTC,Industrials,False
 Mitsui & Co ADR,MITSY,JP3425400005,JP,OTC,Industrials,True
 Mazda Motor ADR,MZDAY,JP3868400007,JP,OTC,Consumer Discretionary,True
 Suzuki Motor ADR,SZKMY,JP3397200001,JP,OTC,Consumer Discretionary,True
+Opendoor Technologies Inc,OPEN,US6837121036,US,NASDAQ,Real Estate,True
+Sable Offshore Corp.,SOC,US78574H1041,US,NYSE,Energy,True
+Ondas Inc,ONDS,US68236H2040,US,NASDAQ,Technology,True
+CoreWeave,CRWV,US21873S1087,US,NASDAQ,Technology,True
+Super Micro Computer,SMCI,US86800U3023,US,NASDAQ,Technology,True
+Plug Power,PLUG,US72919P2020,US,NASDAQ,Industrials,True
+Joby Aviation,JOBY,KYG651631007,US,NYSE,Industrials,True
+"Hertz Global Holdings, Inc",HTZ,US42806J7000,US,NASDAQ,Industrials,True
+MARA Holdings,MARA,US5657881067,US,NASDAQ,Financials,True
+Freshworks,FRSH,US3580541049,US,NASDAQ,Technology,True
+TeraWulf,WULF,US88080T1043,US,NASDAQ,Financials,True
+Rocket Companies,RKT,US77311W1018,US,NYSE,Financials,True
+Robinhood Markets,HOOD,US7707001027,US,NASDAQ,Financials,True
+Hims & Hers Health,HIMS,US4330001060,US,NYSE,Healthcare,True
+Rivian Automotive,RIVN,US76954A1034,US,NASDAQ,Consumer Discretionary,True
+QXO,QXO,US82846H4056,US,NYSE,Industrials,True
+Circle Internet Group,CRCL,US1725731079,US,NYSE,Financials,True
+ConAgra Brands,CAG,US2058871029,US,NYSE,Consumer Staples,True
+Riot Platforms,RIOT,US7672921050,US,NASDAQ,Financials,True
+Rocket Lab,RKLB,US7731211089,US,NASDAQ,Industrials,True
+Cleveland-Cliffs,CLF,US1858991011,US,NYSE,Materials,True
+Alphabet,GOOG,US02079K1079,US,NASDAQ,Communication Services,True
+UWM Holdings,UWMC,US91823B1098,US,NYSE,Financials,True
+CleanSpark,CLSK,US18452B2097,US,NASDAQ,Financials,True
+QuantumScape,QS,US74767V1098,US,NASDAQ,Consumer Discretionary,True
+Kenvue,KVUE,US49177J1025,US,NYSE,Consumer Staples,True
+Applied Digital,APLD,US0381692070,US,NASDAQ,Technology,True
+AST SpaceMobile,ASTS,US00217D1000,US,NASDAQ,Technology,True
+Core Scientific,CORZ,US21874A1060,US,NASDAQ,Technology,True
+Keurig Dr Pepper,KDP,US49271V1008,US,NASDAQ,Consumer Staples,True
+Coty,COTY,US2220702037,US,NYSE,Consumer Staples,True
+Host Hotels & Resorts,HST,US44107P1049,US,NASDAQ,Real Estate,True
+CCC Intelligent Solutions Holdi,CCC,US12510Q1004,US,NASDAQ,Technology,True
+Alcoa,AA,US0138721065,US,NYSE,Materials,True
+Chipotle Mexican Grill,CMG,US1696561059,US,NYSE,Consumer Discretionary,True
+Figma,FIG,US3168411052,US,NYSE,Technology,True
+Pacific Gas & Electric Co.,PCG,US69331C1080,US,NYSE,Utilities,True
+ImmunityBio,IBRX,US45256X1037,US,NASDAQ,Healthcare,True
+Bloom Energy,BE,US0937121079,US,NYSE,Industrials,True
+Blue Owl Capital,OWL,US09581B1035,US,NYSE,Financials,True
+Compass,COMP,US20464U1007,US,NYSE,Real Estate,True
+Patterson-UTI Energy,PTEN,US7034811015,US,NASDAQ,Energy,True
+Navitas Semiconductor Corporati,NVTS,US63942X1063,US,NASDAQ,Technology,True
+Copart,CPRT,US2172041061,US,NASDAQ,Industrials,True
+AGNC Investment Corp.,AGNC,US00123Q1040,US,NASDAQ,Real Estate,True
+IonQ,IONQ,US46222L1089,US,NYSE,Technology,True
+Coupang,CPNG,US22266T1097,US,NYSE,Consumer Discretionary,True
+Red Cat Holdings,RCAT,US75644T1007,US,NASDAQ,Industrials,True
+Viatris,VTRS,US92556V1061,US,NASDAQ,Healthcare,True
+Allogene Therapeutics,ALLO,US0197701065,US,NASDAQ,Healthcare,True
+Toast,TOST,US8887871080,US,NYSE,Technology,True
+Lucid Group,LCID,US5494982029,US,NASDAQ,Consumer Discretionary,True
+CSX,CSX,US1264081035,US,NASDAQ,Industrials,True
+ZoomInfo Technologies,GTM,US98980F1049,US,NASDAQ,Technology,True
+SharpLink,SBET,US8200144058,US,NASDAQ,Financials,True
+"SELLAS Life Sciences Group, Inc",SLS,US81642T2096,US,NASDAQ,Healthcare,True
+Medline,MDLN,US58507V1070,US,NASDAQ,Healthcare,True
+Rackspace Technology,RXT,US7501021056,US,NASDAQ,Technology,True
+Planet Labs PBC,PL,US72703X1063,US,NYSE,Industrials,True
+Carvana Co.,CVNA,US1468691027,US,NYSE,Consumer Discretionary,True
+Quantum Computing,QUBT,US74766W1080,US,NASDAQ,Technology,True
+Vishay Intertechnology,VSH,US9282981086,US,NYSE,Technology,True
+ADT,ADT,US00090Q1031,US,NYSE,Industrials,True
+The Goodyear Tire & Rubber Comp,GT,US3825501014,US,NASDAQ,Consumer Discretionary,True
+Bristol-Myers Squibb,BMY,US1101221083,US,NYSE,Healthcare,True
+Sandisk,SNDK,US80004C2008,US,NASDAQ,Technology,True
+Celsius Holdings,CELH,US15118V2079,US,NASDAQ,Consumer Staples,True
+Fermi,FRMI,US3149111086,US,NASDAQ,Real Estate,True
+Mosaic,MOS,US61945C1036,US,NYSE,Materials,True
+Vistance Networks,VISN,US20337X1090,US,NASDAQ,Technology,True
+Webull,BULL,KYG9572D1034,US,NASDAQ,Technology,True
+Geron,GERN,US3741631036,US,NASDAQ,Healthcare,True
+Gen Digital,GEN,US6687711084,US,NASDAQ,Technology,True
+Oklo,OKLO,US02156V1098,US,NYSE,Utilities,True
+DraftKings,DKNG,US26142V1052,US,NASDAQ,Consumer Discretionary,True
+Galaxy Digital,GLXY,US36317J2096,US,NASDAQ,Financials,True
+Fox,FOXA,US35137L1052,US,NASDAQ,Communication Services,True
+Butterfly Network,BFLY,US1241551027,US,NYSE,Healthcare,True
+Tempus AI,TEM,US88023B1035,US,NASDAQ,Healthcare,True
+"Apollo Global Management, Inc.",APO,US03769M1062,US,NYSE,Financials,True
+Tractor Supply,TSCO,US8923561067,US,NASDAQ,Consumer Discretionary,True
+FMC,FMC,US3024913036,US,NYSE,Materials,True
+Gap,GAP,US3647601083,US,NYSE,Consumer Discretionary,True
+Cerebras Systems,CBRS,US15675D1037,US,NASDAQ,Technology,True
+The AES,AES,US00130H1059,US,NYSE,Utilities,True
+Occidental Petroleum Corporatio,OXY,US6745991058,US,NYSE,Energy,True
+Zeta Global Holdings Corp.,ZETA,US98956A1051,US,NYSE,Technology,True
+Fluence Energy,FLNC,US34379V1035,US,NASDAQ,Utilities,True
+Nuvation Bio,NUVB,US67080N1019,US,NYSE,Healthcare,True
+VICI Properties,VICI,US9256521090,US,NYSE,Real Estate,True
+Kratos Defense & Security Solut,KTOS,US50077B2079,US,NASDAQ,Industrials,True
+"Clover Health Investments, Corp",CLOV,US18914F1030,US,NASDAQ,Healthcare,True
+Altimmune,ALT,US02155H2004,US,NASDAQ,Healthcare,True
+SentinelOne,S,US81730H1095,US,NYSE,Technology,True
+Paramount Skydance,PSKY,US69932A2042,US,NASDAQ,Communication Services,True
+Credo Technology Group Holding,CRDO,KYG254571055,US,NASDAQ,Technology,True
+Clear Channel Outdoor Holdings,CCO,US18453H1068,US,NYSE,Communication Services,True
+Enphase Energy,ENPH,US29355A1079,US,NASDAQ,Technology,True
+indie Semiconductor,INDI,US45569U1016,US,NASDAQ,Technology,True
+Precigen,PGEN,US74017N1054,US,NASDAQ,Healthcare,True
+Annaly Capital Management,NLY,US0357108390,US,NYSE,Real Estate,True
+CVS Health,CVS,US1266501006,US,NYSE,Healthcare,True
+Amprius Technologies,AMPX,US03214Q1085,US,NYSE,Industrials,True
+Flowers Foods,FLO,US3434981011,US,NYSE,Consumer Staples,True
+Albertsons Companies,ACI,US0130911037,US,NYSE,Consumer Staples,True
+ViaSat,VSAT,US92552V1008,US,NASDAQ,Technology,True
+Fiserv,FISV,US3377381088,US,NASDAQ,Technology,True
+Rithm Capital Corp.,RITM,US64828T2015,US,NYSE,Real Estate,True
+Space Exploration Technologies Corp.,SPCX,US19423L6728,US,NASDAQ,Technology,True
+Datavault AI,DVLT,US86633R6099,US,NASDAQ,Technology,True
+American Bitcoin Corp,ABTC,US02462A1043,US,NASDAQ,Financials,True
+AMC Entertainment Holdings Inc,AMC,US00165C3025,US,NYSE,Communication Services,True
+The Wendy’s Co,WEN,US95058W1009,US,NASDAQ,Consumer Discretionary,True
+Beyond Meat Inc,BYND,US08862E1091,US,NASDAQ,Consumer Staples,True
+Bit Digital Inc.,BTBT,KYG1144A1058,US,NASDAQ,Financials,True
+SoundHound AI Inc,SOUN,US8361001071,US,NASDAQ,Technology,True
+Rigetti Computing Inc,RGTI,US76655K1034,US,NASDAQ,Technology,True
+"BigBear.ai Holdings,",BBAI,US08975B1098,US,NYSE,Technology,True
+D-Wave Quantum,QBTS,US26740W1099,US,NYSE,Technology,True
+Virgin Galactic Holdings Inc,SPCE,US92766K4031,US,NYSE,Industrials,True
+"New Era Energy & Digital,",NUAI,US64428N1090,US,NASDAQ,Energy,True
+FuelCell Energy Inc,FCEL,US35952H7008,US,NASDAQ,Industrials,True
+Soluna Holdings Inc,SLNH,US5835433013,US,NASDAQ,Technology,True
+StablecoinX Inc. -,USDE,US90138D1070,US,NASDAQ,Financials,True
+Eightco Holdings,ORBS,US22890A3023,US,NASDAQ,Financials,True
+Getty Images Holdings,GETY,US3742751056,US,NYSE,Communication Services,True
+Surf Air Mobility,SRFM,US8689272032,US,NYSE,Industrials,True
+OUTLOOK THERAPEUTICS INC,OTLK,US69012T3059,US,NASDAQ,Healthcare,True
+Crescent Energy Co,CRGY,US44952J1043,US,NYSE,Energy,True
+United States Antimony,UAMY,US9115491030,US,NYSE,Materials,True
+Fervo Energy,FRVO,US31556C1062,US,NASDAQ,Energy,True
+Sunrun Inc,RUN,US86771W1053,US,NASDAQ,Industrials,True
+Dynex Capital Inc,DX,US26817Q8868,US,NYSE,Financials,True
+Fastenal,FAST,US3119001044,US,NASDAQ,Industrials,True
+Honeywell Aerospace Inc. -,HONA,US4380923095,US,NASDAQ,Industrials,True
+"Klaviyo,",KVYO,US49845K1016,US,NYSE,Technology,True
+"Chime Financial,",CHYM,US16935C1099,US,NASDAQ,Financials,True
+Huntsman,HUN,US4470111075,US,NYSE,Materials,True
+Ares Capital,ARCC,US04010L1035,US,NASDAQ,Financials,True
+Applied Opt,AAOI,US03823U1025,US,NASDAQ,Technology,True
+CytomX Therapeutics Inc,CTMX,US23284F1057,US,NASDAQ,Healthcare,True
+"X-Energy,",XE,US98386P1021,US,NASDAQ,Utilities,True
+Firefly Aerospace,FLY,US31816X1063,US,NASDAQ,Industrials,True
+AXT Inc,AXTI,US00246W1036,US,NASDAQ,Technology,True
+Under Armour Inc A,UAA,US9043111072,US,NYSE,Consumer Discretionary,True
+Zoetis Inc,ZTS,US98978V1035,US,NYSE,Healthcare,True
+Zillow Group Inc Class C,Z,US98954M2008,US,NASDAQ,Communication Services,True
+CoStar Group Inc,CSGP,US22160N1090,US,NASDAQ,Real Estate,True
+Hut 8 Corp.,HUT,US44812J1043,US,NASDAQ,Technology,True
+"Unusual Machines,",UMAC,US91532F1021,US,NASDAQ,Industrials,True
+Unicycive Therapeutics Inc,UNCY,US90466Y2028,US,NASDAQ,Healthcare,True
+Akebia Ther,AKBA,US00972D1054,US,NASDAQ,Healthcare,True
+Applovin Corp,APP,US03831W1080,US,NASDAQ,Technology,True
+Fate Therapeutics Inc,FATE,US31189P1021,US,NASDAQ,Healthcare,True
+Teladoc Inc,TDOC,US87918A1051,US,NYSE,Healthcare,True
+"Astera Labs,",ALAB,US04626A1034,US,NASDAQ,Technology,True
+Old National Bancorp,ONB,US6800331075,US,NASDAQ,Financials,True
+Ocugen Inc,OCGN,US67577C1053,US,NASDAQ,Healthcare,True
+Cabaletta Bio Inc,CABA,US12674W1099,US,NASDAQ,Healthcare,True
+Analog Devices Inc,ADI,US0326541051,US,NASDAQ,Technology,True
+Algonquin Power & Utilities Corp. Common Shares,AQN,CA0158571053,US,NASDAQ,Utilities,True
+Open Lending Corp,LPRO,US68373J1043,US,NASDAQ,Financials,True
+Valley National Bancorp,VLY,US9197941076,US,NASDAQ,Financials,True
+SES AI Corp,SES,US78397Q1094,US,NYSE,Industrials,True
+"Block, Inc",XYZ,US8522341036,US,NYSE,Financials,True
+Blackstone Group Inc,BX,US09260D1072,US,NYSE,Financials,True
+QuantumSi Inc,QSI,US74765K1051,US,NASDAQ,Healthcare,True
+Shoals Technologies Group Inc,SHLS,US82489W1071,US,NASDAQ,Industrials,True
+Kyndryl Holdings Inc,KD,US50155Q1004,US,NYSE,Technology,True
+Olaplex Holdings Inc,OLPX,US6793691089,US,NASDAQ,Consumer Staples,True
+Perrigo Company plc,PRGO,IE00BGH1M568,US,NASDAQ,Healthcare,True
+C4 Therapeutics Inc,CCCC,US12529R1077,US,NASDAQ,Healthcare,True
+"Ouster,",OUST,US68989M2026,US,NASDAQ,Technology,True
+Ardelyx Inc,ARDX,US0396971071,US,NASDAQ,Healthcare,True
+Array Technologies Inc,ARRY,US04271T1007,US,NASDAQ,Industrials,True
+Energy Vault Holdings Inc,NRGV,US29280W1099,US,NYSE,Industrials,True
+Dentsply Sirona Inc,XRAY,US24906P1093,US,NASDAQ,Healthcare,True
+"SailPoint,",SAIL,US78781J1097,US,NASDAQ,Technology,True
+NiSource Inc,NI,US65473P1057,US,NYSE,Utilities,True
+EchoStar,ECHO,US2787681061,US,NASDAQ,Communication Services,True
+Kopin,KOPN,US5006001011,US,NASDAQ,Technology,True
+Verra Mobility Corp,VRRM,US92511U1025,US,NASDAQ,Industrials,True
+"The Cooper Companies, Inc",COO,US2166485019,US,NASDAQ,Healthcare,True
+Strive Asset Management,ASST,US8629453007,US,NASDAQ,Financials,True
+American Electric Power Co Inc,AEP,US0255371017,US,NASDAQ,Utilities,True
+Lifestance Health Group Inc,LFST,US53228F1012,US,NASDAQ,Healthcare,True
+Annexon Inc,ANNX,US03589W1027,US,NASDAQ,Healthcare,True
+Weyerhaeuser,WY,US9621661043,US,NYSE,Real Estate,True
+Cerus,CERS,US1570851014,US,NASDAQ,Healthcare,True
+Elme Communities,ELME,US9396531017,US,NYSE,Real Estate,True
+BioCryst Pharmaceuticals Inc,BCRX,US09058V1035,US,NASDAQ,Healthcare,True
+DexCom Inc,DXCM,US2521311074,US,NASDAQ,Healthcare,True
+Karman Holdings,KRMN,US4859241048,US,NYSE,Industrials,True
+"Bed Bath & Beyond,",BBBY,US6903701018,US,NYSE,Consumer Discretionary,True
+Quantinuum,QNT,PLQNTUM00018,US,NASDAQ,Technology,True
+Alkami Technology Inc,ALKT,US01644J1088,US,NASDAQ,Technology,True
+Fortune Brands Innovations,FBIN,US34964C1062,US,NYSE,Consumer Discretionary,True
+"Rubrik,",RBRK,US7811541090,US,NYSE,Technology,True
+Biohaven Pharmaceutical Holding Co Ltd,BHVN,VGG111961055,US,NYSE,Healthcare,True
+Elanco Animal Health,ELAN,US28414H1032,US,NYSE,Healthcare,True
+Remitly Global Inc,RELY,US75960P1049,US,NASDAQ,Financials,True
+Sirius XM Holding Inc,SIRI,US8299331004,US,NASDAQ,Communication Services,True
+Digital Turbine Inc,APPS,US25400W1027,US,NASDAQ,Technology,True
+Enovix Corp,ENVX,US2935941078,US,NASDAQ,Industrials,True
+Corteva Inc,CTVA,US22052L1044,US,NYSE,Materials,True
+ELF Beauty Inc,ELF,US26856L1035,US,NYSE,Consumer Staples,True
+Kohl's,KSS,US5002551043,US,NYSE,Consumer Discretionary,True
+Kimco Realty,KIM,US49446R1095,US,NYSE,Real Estate,True
+Blue Owl Capital,OBDC,US69121K1043,US,NYSE,Financials,True
+Prospect Capital,PSEC,US74348T1025,US,NASDAQ,Financials,True
+Novavax Inc,NVAX,US6700024010,US,NASDAQ,Healthcare,True
+"StubHub Holdings,",STUB,US86384P1093,US,NYSE,Consumer Discretionary,True
+Crown Castle,CCI,US22822V1017,US,NYSE,Real Estate,True
+Regenxbio Inc,RGNX,US75901B1070,US,NASDAQ,Healthcare,True
+NeoVolta,NEOV,US6406551068,US,NASDAQ,Industrials,True
+Park Hotels & Resorts Inc,PK,US7005171050,US,NYSE,Real Estate,True
+Gitlab Inc,GTLB,US37637K1088,US,NASDAQ,Technology,True
+Webster Financial,WBS,US9478901096,US,NYSE,Financials,True
+GameStop Corp.,GME,US36467W1099,US,NYSE,Consumer Discretionary,True
+Primo Brands,PRMB,US7416231022,US,NYSE,Consumer Staples,True
+Paychex Inc,PAYX,US7043261079,US,NASDAQ,Industrials,True
+Semtech,SMTC,US8168501018,US,NASDAQ,Technology,True
+"Flagstar Bank, N.A.",FLG,US6494451031,US,NYSE,Financials,True
+Core & Main Inc,CNM,US21874C1027,US,NYSE,Industrials,True
+CMS Energy,CMS,US1258961002,US,NYSE,Utilities,True
+Black Diamond Therapeutics Inc,BDTX,US09203E1055,US,NASDAQ,Healthcare,True
+Tango Therapeutics Inc,TNGX,US87583X1090,US,NASDAQ,Healthcare,True
+"Netskope,",NTSK,US64119N6085,US,NASDAQ,Technology,True
+MaxLinear Inc,MXL,US57776J1007,US,NASDAQ,Technology,True
+Monster Beverage Corp,MNST,US61174X1090,US,NASDAQ,Consumer Staples,True
+Standard Biotools Inc,LAB,US34385P1084,US,NASDAQ,Healthcare,True
+United Parcel Service Inc,UPS,US9113121068,US,NYSE,Industrials,True
+Tilray Inc,TLRY,US88688T1007,US,NASDAQ,Healthcare,True
+Lumentum Holdings Inc,LITE,US55024U1097,US,NASDAQ,Technology,True
+International Paper,IP,US4601461035,US,NYSE,Materials,True
+Northern Oil & Gas Inc,NOG,US6655313079,US,NYSE,Energy,True
+Orchid Island Capital,ORC,US68571X3017,US,NYSE,Real Estate,True
+"Caris Life Sciences,",CAI,US1421521071,US,NASDAQ,Healthcare,True
+Old Republic International Corp,ORI,US6802231042,US,NYSE,Financials,True
+Corebridge Financial,CRBG,US21871X1090,US,NYSE,Financials,True
+F.N.B. Corp,FNB,US3025201019,US,NYSE,Financials,True
+Lightwave Logic Inc,LWLG,US5322751042,US,NASDAQ,Technology,True
+Best Buy Co. Inc,BBY,US0865161014,US,NYSE,Consumer Discretionary,True
+Macy’s Inc,M,US55616P1049,US,NYSE,Consumer Discretionary,True
+Hyliion Holdings Corp.,HYLN,US4491091074,US,NASDAQ,Industrials,True
+"Navan,",NAVN,US6391931010,US,NASDAQ,Technology,True
+Ambarella Inc.,AMBA,KYG037AX1014,US,NASDAQ,Technology,True
+Streamex Corp,STEX,US09073N3008,US,NASDAQ,Financials,True
+Atlas Energy Solutions,AESI,US6420451089,US,NYSE,Energy,True
+Api Group Corp,APG,US00187Y1001,US,NYSE,Industrials,True
+Avepoint Inc,AVPT,US0536041041,US,NASDAQ,Technology,True
+Personalis Inc,PSNL,US71535D1063,US,NASDAQ,Healthcare,True
+Palisade Bio Inc,PALI,US6963894026,US,NASDAQ,Healthcare,True
+ASP Isotopes,ASPI,US04342Y1047,US,NASDAQ,Industrials,True
+Summit Therapeutics PLC,SMMT,US86627T1088,US,NASDAQ,Healthcare,True
+"StandardAero,",SARO,US85423L1035,US,NYSE,Industrials,True
+Erasca Inc,ERAS,US29479A1088,US,NASDAQ,Healthcare,True
+Allegro Microsystems Inc,ALGM,US01749D1054,US,NASDAQ,Technology,True
+Achieve Life Sciences Inc,ACHV,US0044685008,US,NASDAQ,Healthcare,True
+Macerich,MAC,US5543821012,US,NYSE,Real Estate,True
+Dropbox Inc,DBX,US26210C1045,US,NASDAQ,Technology,True
+Olin,OLN,US6806652052,US,NYSE,Materials,True
+Expand Energy,EXE,US1651677353,US,NASDAQ,Energy,True
+"Prime Medicine,",PRME,US74168J1016,US,NASDAQ,Healthcare,True
+Alto Ingredients Inc,ALTO,US0215131063,US,NASDAQ,Materials,True
+"Aeva Technologies,",AEVA,US00835Q2021,US,NASDAQ,Technology,True
+Bill Com Holdings Inc,BILL,US0900431000,US,NYSE,Technology,True
+Cushman & Wakefield Ltd. Common Shares,CWK,BMG2717C1064,US,NASDAQ,Financials,True
+Intellia Therapeutics Inc,NTLA,US45826J1051,US,NASDAQ,Healthcare,True
+GE HealthCare Technologies,GEHC,US36266G1076,US,NASDAQ,Healthcare,True
+Upstart Holdings Inc,UPST,US91680M1071,US,NASDAQ,Financials,True
+Trump Media & Technology Group Corp.,DJT,US25400Q1058,US,NASDAQ,Communication Services,True
+First Horizon,FHN,US3205171057,US,NYSE,Financials,True
+Solid Power Inc,SLDP,US83422N1054,US,NASDAQ,Industrials,True
+NOV,NOV,US62955J1034,US,NYSE,Energy,True
+Rapid7 Inc,RPD,US7534221046,US,NASDAQ,Technology,True
+"Apogee Therapeutics,",APGE,US03770N1019,US,NASDAQ,Healthcare,True
+Doximity Inc,DOCS,US26622P1075,US,NYSE,Healthcare,True
+SLM Corp,SLM,US78442P1066,US,NASDAQ,Financials,True
+Gaming & Leisure Properties,GLPI,US36467J1088,US,NASDAQ,Real Estate,True
+Zoom Video Communications Inc,ZM,US98980L1017,US,NASDAQ,Technology,True
+Upwork Inc,UPWK,US91688F1049,US,NASDAQ,Communication Services,True
+Century Aluminum,CENX,US1564311082,US,NASDAQ,Materials,True
+Bumble Inc,BMBL,US12047B1052,US,NASDAQ,Communication Services,True
+American Eagle Outfitters Inc,AEO,US02553E1064,US,NYSE,Consumer Discretionary,True
+Graphic Packaging Holding,GPK,US3886891015,US,NYSE,Materials,True
+Public Service Enterprise Group Inc,PEG,US7445731067,US,NYSE,Utilities,True
+Liberty Energy Inc.,LBRT,US5323721044,US,NASDAQ,Energy,True
+Patriot National Bancorp Inc,PNBK,US70336F2039,US,NASDAQ,Financials,True
+Nextpower,NXT,US65290E1010,US,NASDAQ,Technology,True
+Sarepta Therapeutics Inc,SRPT,US8036071004,US,NASDAQ,Healthcare,True
+SmartRent Inc,SMRT,US83193G1076,US,NYSE,Technology,True
+Cognex,CGNX,US1924221039,US,NASDAQ,Technology,True
+Payoneer Global Inc,PAYO,US70451X1046,US,NASDAQ,Financials,True
+Apollo Commercial Real Estate Finance Inc,ARI,US03762U1051,US,NYSE,Real Estate,True
+Allison Transmission Holdings Inc,ALSN,US01973R1014,US,NYSE,Industrials,True
+Progress Software,PRGS,US7433121008,US,NASDAQ,Technology,True
+American Battery Technology,ABAT,US02451V3096,US,NASDAQ,Materials,True
+DigitalOcean Holdings Inc,DOCN,US25402D1028,US,NYSE,Technology,True
+"SOLV Energy,",MWH,US78475V1035,US,NASDAQ,Industrials,True
+Dauch,DCH,US0240611030,US,NYSE,Consumer Discretionary,True
+First Hawaiian Inc,FHB,US32051X1081,US,NASDAQ,Financials,True
+Adaptive Biotechnologies Corp,ADPT,US00650F1093,US,NASDAQ,Healthcare,True
+Verisk Analytics Inc,VRSK,US92345Y1064,US,NASDAQ,Industrials,True
+Tetra Tech Inc,TTEK,US88162G1031,US,NASDAQ,Industrials,True
+Purecycle Technologies Holdings Corp,PCT,US74623V1035,US,NASDAQ,Materials,True
+Viridian Therapeutics Inc,VRDN,US92790C1045,US,NASDAQ,Healthcare,True
+Sotera Health Co,SHC,US83601L1026,US,NASDAQ,Healthcare,True
+WhiteFiber Inc.,WYFI,KYG961151035,US,NASDAQ,Financials,True
+Levi Strauss & Co Class A,LEVI,US52736R1023,US,NYSE,Consumer Discretionary,True
+NeoGenomics Inc,NEO,US64049M2098,US,NASDAQ,Healthcare,True
+Serve Robotics,SERV,US81758H1068,US,NASDAQ,Industrials,True
+Globant S.A. Common Shares,GLOB,LU1052827321,US,NASDAQ,Technology,True
+Brookdale Senior Living Inc,BKD,US1124631045,US,NYSE,Healthcare,True
+Penguin Solutions,PENG,KYG8232Y1017,US,NASDAQ,Technology,True
+Figs Inc,FIGS,US30260D1037,US,NYSE,Consumer Discretionary,True
+Definium Therapeutics Inc. Common Shares,DFTX,CA24477V1058,US,NASDAQ,Healthcare,True
+Viking Therapeutics Inc,VKTX,US92686J1060,US,NASDAQ,Healthcare,True
+FS KKR Capital Corp,FSK,US3026352068,US,NYSE,Financials,True
+Porch Group Inc,PRCH,US7332451043,US,NASDAQ,Financials,True
+Brixmor Property,BRX,US11120U1051,US,NYSE,Real Estate,True
+"Forward Industries,",FWDI,US3498624093,US,NASDAQ,Technology,True
+Arthur J Gallagher & Co,AJG,US3635761097,US,NYSE,Financials,True
+Taysha Gene Therapies Inc,TSHA,US8776191061,US,NASDAQ,Healthcare,True
+EquipmentShare.com Inc,EQPT,US29445S1006,US,NASDAQ,Industrials,True
+Target Hospitality Corp,TH,US87615L1070,US,NASDAQ,Industrials,True
+Trevi Therapeutics  Inc,TRVI,US89532M1018,US,NASDAQ,Healthcare,True
+GlobalFoundries Inc.,GFS,KYG393871085,US,NASDAQ,Technology,True
+Comstock Resources Inc,CRK,US2057683029,US,NYSE,Energy,True
+ADMA Biologics Inc,ADMA,US0008991046,US,NASDAQ,Healthcare,True
+BridgeBio Pharma Inc,BBIO,US10806X1028,US,NASDAQ,Healthcare,True
+Talos Energy,TALO,US87484T1088,US,NYSE,Energy,True
+Yum! Brands Inc,YUM,US9884981013,US,NYSE,Consumer Discretionary,True
+BGC Group Inc.,BGC,US05541T1016,US,NASDAQ,Financials,True
+Rocket Pharmaceuticals Inc,RCKT,US77313F1066,US,NASDAQ,Healthcare,True
+Grid Dynamics Holdings Inc,GDYN,US39813G1094,US,NASDAQ,Technology,True
+Pattern Group Inc.,PTRN,US70339W1045,US,NASDAQ,Technology,True
+Automatic Data Processing Inc,ADP,US0530151036,US,NASDAQ,Industrials,True
+Carlyle Group Inc,CG,US14316J1088,US,NASDAQ,Financials,True
+Editas Medicine Inc,EDIT,US28106W1036,US,NASDAQ,Healthcare,True
+Tarsus Pharmaceuticals Inc,TARS,US87650L1035,US,NASDAQ,Healthcare,True
+Replimune Group Inc,REPL,US76029N1063,US,NASDAQ,Healthcare,True
+Essential Utilities Inc,WTRG,US29670G1022,US,NYSE,Utilities,True
+AeroVironment Inc,AVAV,US0080731088,US,NASDAQ,Industrials,True
+Veritone Inc,VERI,US92347M1009,US,NASDAQ,Technology,True
+Axa Equitable Holdings Inc,EQH,US29452E1010,US,NYSE,Financials,True
+Rumble,RUM,US78137L1052,US,NASDAQ,Communication Services,True
+Freshpet Inc,FRPT,US3580391056,US,NASDAQ,Consumer Staples,True
+PBF Energy Inc,PBF,US69318G1067,US,NYSE,Energy,True
+Liberty Media Corporation Series C Liberty Formula One,FWONK,US5312298541,US,NASDAQ,Communication Services,True
+Opko Health Inc,OPK,US68375N1037,US,NASDAQ,Healthcare,True
+Warby Parker Inc,WRBY,US93403J1060,US,NYSE,Consumer Discretionary,True
+Warner Music Group,WMG,US9345502036,US,NASDAQ,Communication Services,True
+JFrog Ltd.,FROG,IL0011684185,US,NASDAQ,Technology,True
+"Fastly,",FSLY,US31188V1008,US,NASDAQ,Technology,True
+Rush Street Interactive Inc,RSI,US7820111000,US,NYSE,Consumer Discretionary,True
+The Bank of New York Mellon,BNY,US05601A2087,US,NASDAQ,Financials,True
+Under Armour Inc C,UA,US9043112062,US,NYSE,Consumer Discretionary,True
+Sana Biotechnology Inc,SANA,US7995661045,US,NASDAQ,Healthcare,True
+REalloys,ALOY,US75606V1017,US,NASDAQ,Materials,True
+Concentrix,CNXC,US20602D1019,US,NASDAQ,Technology,True
+Backblaze Inc,BLZE,US05637B1052,US,NASDAQ,Technology,True
+Somnigroup International,SGI,US88023U1016,US,NYSE,Consumer Discretionary,True
+Associated Banc-Corp,ASB,US0454871056,US,NYSE,Financials,True
+LegalZoom.com Inc,LZ,US52466B1035,US,NASDAQ,Industrials,True
+Jack In The Box,JACK,US4663671091,US,NASDAQ,Consumer Discretionary,True
+Xerox Corp,XRX,US98421M1062,US,NASDAQ,Technology,True
+Gentex,GNTX,US3719011096,US,NASDAQ,Consumer Discretionary,True
+Veralto,VLTO,US92338C1036,US,NYSE,Industrials,True
+Archer-Daniels-Midland,ADM,US0394831020,US,NYSE,Consumer Staples,True
+Eversource Energy,ES,US30040W1080,US,NYSE,Utilities,True
+Knight Transportation Inc,KNX,US4990491049,US,NYSE,Industrials,True
+Antero Midstream Partners LP,AM,US03676B1026,US,NYSE,Energy,True
+Howmet Aerospace,HWM,US4432011082,US,NYSE,Industrials,True
+O-I Glass Inc,OI,US67098H1041,US,NYSE,Materials,True
+Evgo Inc,EVGO,US30052F1003,US,NASDAQ,Consumer Discretionary,True
+Waystar Holding Corp.,WAY,US9467841055,US,NASDAQ,Healthcare,True
+Brown & Brown Inc,BRO,US1152361010,US,NYSE,Financials,True
+LightPath Technologies Inc,LPTH,US5322578056,US,NASDAQ,Technology,True
+Xeris Pharmaceuticals Inc,XERS,US98422E1038,US,NASDAQ,Healthcare,True
+Teradata Corp,TDC,US88076W1036,US,NYSE,Technology,True
+Blue Owl Technology Finance Corp.,OTF,US0959241060,US,NYSE,Financials,True
+Aramark Holdings,ARMK,US03852U1060,US,NYSE,Industrials,True
+TON Strategy Co,TONX,US92337U3023,US,NASDAQ,Financials,True
+Ultragenyx,RARE,US0404132050,US,NASDAQ,Healthcare,True
+Six Flags Entertainment,FUN,US83001C1080,US,NYSE,Consumer Discretionary,True
+"Voyager Technologies,",VOYG,US92892B1035,US,NYSE,Industrials,True
+"Everpure, Inc.",P,US74624M1027,US,NYSE,Technology,True
+Utz Brands Inc,UTZ,US9180901012,US,NYSE,Consumer Staples,True
+Talkspace,TALK,US87427V1035,US,NASDAQ,Healthcare,True
+Five9 Inc,FIVN,US3383071012,US,NASDAQ,Technology,True
+"Arxis,",ARXS,US04339D1054,US,NASDAQ,Healthcare,True
+CF Industries Holdings Inc,CF,US1252691001,US,NYSE,Materials,True
+"PowerFleet,",AIOT,US73931J1097,US,NASDAQ,Technology,True
+Viking Holdings Ltd,VIK,KYG93A5V1069,US,NASDAQ,Consumer Discretionary,True
+Vertex,VERX,US92538J1060,US,NASDAQ,Technology,True
+Agilent Technologies Inc,A,US00846U1016,US,NYSE,Healthcare,True
+Box Inc,BOX,US10316T1043,US,NYSE,Technology,True
+Organon & Co,OGN,US68622V1061,US,NYSE,Healthcare,True
+"PENN Entertainment,",PENN,US7075691094,US,NASDAQ,Consumer Discretionary,True
+N-Able Inc,NABL,US62878D1000,US,NYSE,Technology,True
+FreeCast,CAST,SE0000379190,US,NASDAQ,Technology,True
+Alaska Air Group Inc,ALK,US0116591092,US,NYSE,Industrials,True
+BorgWarner Inc,BWA,US0997241064,US,NYSE,Consumer Discretionary,True
+Royalty Pharma plc Class A,RPRX,US75629V1044,US,NASDAQ,Healthcare,True
+"FedEx Freight Holding Company,",FDXF,US3143521058,US,NYSE,Industrials,True
+"Banc of California,",BANC,US05990K1060,US,NYSE,Financials,True
+Symbotic Inc,SYM,US87151X1019,US,NASDAQ,Industrials,True
+Tyson Foods Inc,TSN,US9024941034,US,NYSE,Consumer Staples,True
+NCR Voyix,VYX,US62886E1082,US,NYSE,Technology,True
+"Miami International Holdings,",MIAX,US59356Q1085,US,NYSE,Financials,True
+Sonos Inc,SONO,US83570H1086,US,NASDAQ,Consumer Discretionary,True
+"Marsh & McLennan Companies,",MRSH,US5717481023,US,NYSE,Financials,True
+"Happen,",HAPN,US52603A2087,US,NASDAQ,Financials,True
+"Newsmax,",NMAX,US65250K1051,US,NYSE,Communication Services,True
+CubeSmart,CUBE,US2296631094,US,NYSE,Real Estate,True
+Ares Management LP,ARES,US03990B1017,US,NYSE,Financials,True
+Rezolute Inc,RZLT,US76200L3096,US,NASDAQ,Healthcare,True
+Cogent Biosciences Inc,COGT,US19240Q2012,US,NASDAQ,Healthcare,True
+Lexicon Pharmaceuticals Inc,LXRX,US5288723027,US,NASDAQ,Healthcare,True
+Aclaris Therapeutics Inc,ACRS,US00461U1051,US,NASDAQ,Healthcare,True
+Insmed Inc,INSM,US4576693075,US,NASDAQ,Healthcare,True
+Gogo Inc,GOGO,US38046C1099,US,NASDAQ,Communication Services,True
+"Zenas BioPharma,",ZBIO,US98937L1052,US,NASDAQ,Healthcare,True
+GCT Semiconductor Holding Inc,GCTS,US36170N1072,US,NYSE,Technology,True
+Compass Therapeutics,CMPX,US20454B1044,US,NASDAQ,Healthcare,True
+BJs Wholesale Club Holdings Inc,BJ,US05550J1016,US,NYSE,Consumer Staples,True
+MSC Industrial Direct Company Inc,MSM,US5535301064,US,NYSE,Industrials,True
+ACV Auctions,ACVA,US00091G1040,US,NYSE,Consumer Discretionary,True
+Frontier Group Holdings Inc,ULCC,US35909R1086,US,NASDAQ,Industrials,True
+TPG Inc,TPG,US8726571016,US,NASDAQ,Financials,True
+Cognition Therapeutics Inc,CGTX,US19243B1026,US,NASDAQ,Healthcare,True
+Floor & Decor Holdings Inc,FND,US3397501012,US,NYSE,Consumer Discretionary,True
+NioCorp Developments Ltd.,NB,US64135M1053,US,NASDAQ,Materials,True
+Legence Corp. Class A Common stock,LGN,US52476L1098,US,NASDAQ,Industrials,True
+GE Vernova LLC,GEV,US36828A1016,US,NYSE,Industrials,True
+Olema Pharmaceuticals Inc,OLMA,US68062P1066,US,NASDAQ,Healthcare,True
+Harley-Davidson Inc,HOG,US4128221086,US,NYSE,Consumer Discretionary,True
+Nautilus Biotechnology Inc,NAUT,US63909J1088,US,NASDAQ,Healthcare,True
+MACOM Technology Solutions Holdings Inc,MTSI,US55405Y1001,US,NASDAQ,Technology,True
+Amentum Holdings,AMTM,US0239391016,US,NYSE,Industrials,True
+Home BancShares Inc,HOMB,US4368932004,US,NYSE,Financials,True
+Valvoline Inc,VVV,US92047W1018,US,NYSE,Consumer Discretionary,True
+Grocery Outlet Holding Corp,GO,US39874R1014,US,NASDAQ,Consumer Staples,True
+Rayonier Inc,RYN,US7549071030,US,NYSE,Real Estate,True
+Willscot Mobile Mini Holdings Corp A,WSC,US9713781048,US,NASDAQ,Industrials,True
+Bunge Limited Common Shares,BG,BMG169621056,US,NASDAQ,Consumer Staples,True
+Academy Sports Outdoors Inc,ASO,US00402L1070,US,NASDAQ,Consumer Discretionary,True
+TTM Technologies Inc,TTMI,US87305R1095,US,NASDAQ,Technology,True
+Nano Nuclear Energy,NNE,US63010H1086,US,NASDAQ,Industrials,True
+"MNTN,",MNTN,US55318A1088,US,NYSE,Technology,True
+Maravai Lifesciences Holdings Inc,MRVI,US56600D1072,US,NASDAQ,Healthcare,True
+"Blaize Holdings,",BZAI,US0929151076,US,NASDAQ,Technology,True
+Fortive Corp,FTV,US34959J1088,US,NYSE,Industrials,True
+Alliant Energy Corp,LNT,US0188021085,US,NASDAQ,Utilities,True
+Pagerduty Inc,PD,US69553P1003,US,NYSE,Technology,True
+"SharonAI Holdings,",SHAZ,US7789203061,US,NASDAQ,Technology,True
+Varonis Systems,VRNS,US9222801022,US,NASDAQ,Technology,True
+Nextnav Acquisition Corp,NN,US65345N1063,US,NASDAQ,Technology,True
+MasterBrand,MBC,US57638P1049,US,NYSE,Consumer Discretionary,True
+"Concentra Group Holdings Parent,",CON,US20603L1026,US,NYSE,Healthcare,True
+W&T Offshore Inc,WTI,US92922P1066,US,NYSE,Energy,True
+Blend Labs Inc,BLND,US09352U1088,US,NYSE,Technology,True
+Verastem Inc,VSTM,US92337C2035,US,NASDAQ,Healthcare,True
+Ocular Therapeutix Inc,OCUL,US67576A1007,US,NASDAQ,Healthcare,True
+American Resources Corp Class A,AREC,US02927U2087,US,NASDAQ,Materials,True
+Syndax Pharmaceuticals Inc,SNDX,US87164F1057,US,NASDAQ,Healthcare,True
+Beam Therapeutics Inc,BEAM,US07373V1052,US,NASDAQ,Healthcare,True
+Vista Gold Corp,VGZ,CA9229064090,US,NASDAQ,Materials,True
+3D Systems,DDD,US88554D2053,US,NYSE,Technology,True
+Domo Inc,DOMO,US2575541055,US,NASDAQ,Technology,True
+Pitney Bowes Inc,PBI,US7244791007,US,NYSE,Industrials,True
+Eyepoint Pharmaceuticals Inc,EYPT,US30233G2093,US,NASDAQ,Healthcare,True
+Cytokinetics Inc,CYTK,US23282W6057,US,NASDAQ,Healthcare,True
+Relmada Therapeutics Inc,RLMD,US75955J4022,US,NASDAQ,Healthcare,True
+Fulton Financial,FULT,US3602711000,US,NASDAQ,Financials,True
+Solid Biosciences LLC,SLDB,US83422E2046,US,NASDAQ,Healthcare,True
+Loandepot Inc,LDI,US53946R1068,US,NYSE,Financials,True
+"The Baldwin Insurance Group,",BWIN,US05589G1022,US,NASDAQ,Financials,True
+TheRealReal Inc,REAL,US88339P1012,US,NASDAQ,Consumer Discretionary,True
+"Gemini Space Station,",GEMI,US36866J1051,US,NASDAQ,Financials,True
+Avanos Medical Inc,AVNS,US05350V1061,US,NYSE,Healthcare,True
+FedEx,FDX,US31428X1063,US,NYSE,Industrials,True
+Ollie's Bargain Outlet Hldg,OLLI,US6811161099,US,NASDAQ,Consumer Discretionary,True
+"Solaris Energy Infrastructure,",SEI,US83418M1036,US,NYSE,Energy,True
+Microvast Holdings Inc,MVST,US59516C1062,US,NASDAQ,Industrials,True
+Two Harbors Investments Corp,TWO,US90187B8046,US,NYSE,Financials,True
+Corvus Pharmaceuticals Inc,CRVS,US2210151005,US,NASDAQ,Healthcare,True
+American Homes 4 Rent,AMH,US02665T3068,US,NYSE,Real Estate,True
+Kura Oncology Inc,KURA,US50127T1097,US,NASDAQ,Healthcare,True
+Eastern Bankshares Inc,EBC,US27627N1054,US,NASDAQ,Financials,True
+Revolution Medicines Inc,RVMD,US76155X1000,US,NASDAQ,Healthcare,True
+Tetra Technologies Inc,TTI,US88162F1057,US,NYSE,Energy,True
+Amplitech Group Inc,AMPG,US03211Q2003,US,NASDAQ,Technology,True
+Goodrx Holdings Inc,GDRX,US38246G1085,US,NASDAQ,Healthcare,True
+HF Sinclair Corp,DINO,US4039491000,US,NYSE,Energy,True
+Brightstar Lottery PLC Trading under the Legal Name to begin at the market open,BRSL,GB00BVG7F061,US,NASDAQ,Consumer Discretionary,True
+Abeona Therapeutics Inc,ABEO,US00289Y1073,US,NASDAQ,Healthcare,True
+CVB Financial,CVBF,US1266001056,US,NASDAQ,Financials,True
+Jefferies Financial Group Inc,JEF,US47233W1099,US,NYSE,Financials,True
+Immix Biopharma Inc,IMMX,US45258H1068,US,NASDAQ,Healthcare,True
+Krispy Kreme Inc,DNUT,US50101L1061,US,NASDAQ,Consumer Staples,True
+"Slide Insurance Holdings,",SLDE,US8313491057,US,NASDAQ,Financials,True
+Regal Rexnord,RRX,US7587501039,US,NYSE,Industrials,True
+Immunome Inc,IMNM,US45257U1088,US,NASDAQ,Healthcare,True
+Simply Good Foods Co,SMPL,US82900L1026,US,NASDAQ,Consumer Staples,True
+Embecta Corp,EMBC,US29082K1051,US,NASDAQ,Healthcare,True
+Century Therapeutics Inc,IPSC,US15673T1007,US,NASDAQ,Healthcare,True
+"Heartflow,",HTFL,US42238D1072,US,NASDAQ,Healthcare,True
+Empery Digital,EMPD,US92864V6083,US,NASDAQ,Consumer Discretionary,True
+Deckers Outdoor,DECK,US2435371073,US,NYSE,Consumer Discretionary,True
+TG Therapeutics Inc,TGTX,US88322Q1085,US,NASDAQ,Healthcare,True
+Owens Corning Inc,OC,US6907421019,US,NYSE,Industrials,True
+Harmonic Inc,HLIT,US4131601027,US,NASDAQ,Technology,True
+"Hinge Health,",HNGE,US4333131039,US,NYSE,Healthcare,True
+MFA Financial Inc,MFA,US55272X6076,US,NYSE,Real Estate,True
+"Velo3D,",VELO,US92259N3026,US,NASDAQ,Industrials,True
+Bloomin Brands Inc,BLMN,US0942351083,US,NASDAQ,Consumer Discretionary,True
+Global Business Travel Group Inc,GBTG,US37890B1008,US,NYSE,Consumer Discretionary,True
+Pegasystems Inc,PEGA,US7055731035,US,NASDAQ,Technology,True
+Shattuck Labs Inc,STTK,US82024L1035,US,NASDAQ,Healthcare,True
+MGIC Investment Corp,MTG,US5528481030,US,NYSE,Financials,True
+Hycroft Mining Holding,HYMC,US44862P1093,US,NASDAQ,Materials,True
+"Versant Media Group,",VSNT,US9252831030,US,NASDAQ,Communication Services,True
+Jeld-Wen Holding Inc,JELD,US47580P1030,US,NYSE,Industrials,True
+Cinemark Holdings Inc,CNK,US17243V1026,US,NYSE,Communication Services,True
+Site Centers Corp,SITC,US82981J8514,US,NYSE,Real Estate,True
+Prosperity Bancshares Inc,PB,US7436061052,US,NYSE,Financials,True
+"Kodiak Gas Services,",KGS,US50012A1088,US,NYSE,Energy,True
+Momentus Inc,MNTS,US60879E4089,US,NASDAQ,Industrials,True
+Climb Bio Inc,CLYM,US28658R1068,US,NASDAQ,Healthcare,True
+LifeMD Inc,LFMD,US53216B1044,US,NASDAQ,Healthcare,True
+"Merlin,",MRLN,US5901061003,US,NASDAQ,Industrials,True
+"Solstice Advanced Materials, Inc",SOLS,US83443Q1031,US,NASDAQ,Materials,True
+"Liftoff Mobile,",LFTO,US53229X1019,US,NASDAQ,Communication Services,True
+Dana Inc,DAN,US2362641090,US,NYSE,Consumer Discretionary,True
+Cheniere Energy Inc,LNG,US16411R2085,US,NYSE,Energy,True
+Fubotv Inc,FUBO,US35953D1046,US,NYSE,Communication Services,True
+Brightspire Capital Inc,BRSP,US10949T1097,US,NYSE,Real Estate,True
+Chemours Co,CC,US1638511089,US,NYSE,Materials,True
+Nextdecade Corp,NEXT,US65342K1051,US,NASDAQ,Energy,True
+Candel Therapeutics Inc,CADL,US1374041093,US,NASDAQ,Healthcare,True
+Enterprise Products Partners LP,EPD,US2937921078,US,NYSE,Energy,True
+New York Times,NYT,US6501111073,US,NYSE,Communication Services,True
+Avalo Therapeutics Inc,AVTX,US05338F3064,US,NASDAQ,Healthcare,True
+Lixte Biotechnology Holdings Inc,LIXT,US5393192027,US,NASDAQ,Healthcare,True
+SharkNinja Inc.,SN,US81686A1043,US,NASDAQ,Consumer Discretionary,True
+Kilroy Realty Corp,KRC,US49427F1084,US,NYSE,Real Estate,True
+Westlake Chemical,WLK,US9604131022,US,NYSE,Materials,True
+Gevo Inc,GEVO,US3743964062,US,NASDAQ,Energy,True
+Douglas Emmett Inc,DEI,US25960P1093,US,NYSE,Real Estate,True
+Boost Run,BRUN,SE0016589208,US,NASDAQ,Technology,True
+Delek US Energy Inc,DK,US24665A1034,US,NYSE,Energy,True
+Victoria's Secret & Co,VSXY,US9264001028,US,NYSE,Consumer Discretionary,True
+"TKO Group Holdings,",TKO,US87256C1018,US,NYSE,Communication Services,True
+Callaway Golf,CALY,US1311931042,US,NYSE,Consumer Discretionary,True
+8x8,EGHT,US2829141009,US,NASDAQ,Technology,True
+Vontier Corp,VNT,US9288811014,US,NYSE,Industrials,True
+Montana Technologies,AIRJ,US6121601016,US,NASDAQ,Industrials,True
+Wealthfront,WLTH,US9470021018,US,NASDAQ,Financials,True
+Arhaus Inc,ARHS,US04035M1027,US,NASDAQ,Consumer Discretionary,True
+Groupon Inc,GRPN,US3994732069,US,NASDAQ,Consumer Discretionary,True
+B&G Foods Inc,BGS,US05508R1068,US,NYSE,Consumer Staples,True
+Amylyx Pharmaceuticals Inc,AMLX,US03237H1014,US,NASDAQ,Healthcare,True
+Netstreit Corp,NTST,US64119V3033,US,NYSE,Real Estate,True
+Stanley Black & Decker Inc,SWK,US8545021011,US,NYSE,Industrials,True
+Ralliant,RAL,US7509401086,US,NYSE,Technology,True
+Alight Inc,ALIT,US01626W1018,US,NYSE,Technology,True
+Chegg Inc,CHGG,US1630921096,US,NYSE,Consumer Discretionary,True
+Clean Energy Fuels Corp,CLNE,US1844991018,US,NASDAQ,Energy,True
+Rxsight Inc,RXST,US78349D1072,US,NASDAQ,Healthcare,True
+Vital Farms Inc,VITL,US92847W1036,US,NASDAQ,Consumer Staples,True
+Ginkgo Bioworks Holdings,DNA,US37611X1000,US,NYSE,Healthcare,True
+Perspective Therapeutics,CATX,US46489V3024,US,NASDAQ,Healthcare,True
+Incyte,INCY,US45337C1027,US,NASDAQ,Healthcare,True
+"Amneal Pharmaceuticals,",AMRX,US03168L1052,US,NASDAQ,Healthcare,True
+Regency Centers,REG,US7588491032,US,NASDAQ,Real Estate,True
+Astrana Health Inc,ASTH,US03763A2078,US,NASDAQ,Healthcare,True
+Equifax Inc,EFX,US2944291051,US,NYSE,Industrials,True
+Clearway Energy Inc Class C,CWEN,US18539C2044,US,NYSE,Utilities,True
+Spyre Therapeutics,SYRE,US00773J2024,US,NASDAQ,Healthcare,True
+Curbline Properties Corp.,CURB,US23128Q1013,US,NYSE,Real Estate,True
+Synaptics Incorporated,SYNA,US87157D1090,US,NASDAQ,Technology,True
+Helix Energy Solutions Group Inc,HLX,US42330P1075,US,NYSE,Energy,True
+Construction Partners Inc,ROAD,US21044C1071,US,NASDAQ,Industrials,True
+Arcus Biosciences Inc,RCUS,US03969F1093,US,NYSE,Healthcare,True
+Noble Corporation plc A,NE,BMG651631007,US,NASDAQ,Energy,True
+Atlantic Union Bankshares Corp,AUB,US04911A1079,US,NYSE,Financials,True
+Hawaiian Electric Industries Inc,HE,US4198701009,US,NYSE,Utilities,True
+Bakkt Holdings Inc,BKKT,US05759B3050,US,NYSE,Financials,True
+Ironwood Pharmaceuticals Inc,IRWD,US46333X1081,US,NASDAQ,Healthcare,True
+Eos Energy Enterprises Inc,EOSE,US29415C1018,US,NASDAQ,Industrials,True
+Sadot Group,SDOT,US6273335033,US,NASDAQ,Consumer Staples,True
+Elicio Therapeutics,ELTX,US28657F1030,US,NASDAQ,Healthcare,True
+Innodata Inc,INOD,US4576422053,US,NASDAQ,Technology,True
+"GPGI,",GPGI,,US,NYSE,Industrials,True
+Fulcrum Therapeutics Inc,FULC,US3596161097,US,NASDAQ,Healthcare,True
+Eledon Pharmaceuticals Inc,ELDN,US28617K1016,US,NASDAQ,Healthcare,True
+Myriad Genetics Inc,MYGN,US62855J1043,US,NASDAQ,Healthcare,True
+DTE Energy,DTE,US2333311072,US,NYSE,Utilities,True
+Janux Therapeutics Inc,JANX,US47103J1051,US,NASDAQ,Healthcare,True
+Stitch Fix,SFIX,US8608971078,US,NASDAQ,Consumer Discretionary,True
+Oric Pharmaceuticals Inc,ORIC,US68622P1093,US,NASDAQ,Healthcare,True
+H&R Block Inc,HRB,US0936711052,US,NYSE,Consumer Discretionary,True
+Geo Group Inc,GEO,US36162J1060,US,NYSE,Industrials,True
+ManpowerGroup Inc,MAN,US56418H1005,US,NYSE,Industrials,True
+Alexandria Real Estate Equities Inc,ARE,US0152711091,US,NYSE,Real Estate,True
+Dianthus Therapeutics,DNTH,US2528281080,US,NASDAQ,Healthcare,True
+"Evommune,",EVMN,US30054Y1073,US,NYSE,Healthcare,True
+Workiva Inc,WK,US98139A1051,US,NYSE,Technology,True
+CarGurus,CARG,US1417881091,US,NASDAQ,Consumer Discretionary,True
+Apartment Investment and Management Co,AIV,US03748R7474,US,NYSE,Real Estate,True
+Godaddy Inc,GDDY,US3802371076,US,NYSE,Technology,True
+"Millrose Properties,",MRP,US6011371027,US,NYSE,Real Estate,True
+Ecovyst Inc,ECVT,US27923Q1094,US,NYSE,Materials,True
+National Vision Holdings Inc,EYE,US63845R1077,US,NASDAQ,Healthcare,True
+NIQ Global Intelligence plc,NIQ,,US,NASDAQ,Technology,True
+Fidelity National Financial Inc,FNF,US31620R3030,US,NYSE,Financials,True
+"Qnity Electronics, Inc",Q,US74743L1008,US,NYSE,Technology,True
+Fortrea Holdings,FTRE,US34965K1079,US,NASDAQ,Healthcare,True
+Valaris Limited Common Shares,VAL,,US,NASDAQ,Energy,True
+Vaalco Energy Inc,EGY,US91851C2017,US,NYSE,Energy,True
+First Advantage Corp,FA,US31846B1089,US,NASDAQ,Industrials,True
+Modine Manufacturing,MOD,US6078281002,US,NYSE,Industrials,True
+Bank Ozk,OZK,US06417N1037,US,NASDAQ,Financials,True
+"Expeditors International of Washington,",EXPD,US3021301094,US,NYSE,Industrials,True
+Blacksky Technology Inc,BKSY,US09263B2079,US,NYSE,Technology,True
+Helmerich and Payne Inc,HP,US4234521015,US,NYSE,Energy,True
+First Watch Restaurant Group Inc,FWRG,US33748L1017,US,NASDAQ,Consumer Discretionary,True
+CNX Resources Corp,CNX,US12653C1080,US,NYSE,Energy,True
+Williams-Sonoma Inc,WSM,US9699041011,US,NYSE,Consumer Discretionary,True
+Dakota Gold Corp.,DC,US46655E1001,US,NASDAQ,Materials,True
+Pilgrims Pride Corp,PPC,US72147K1088,US,NASDAQ,Consumer Staples,True
+Oncology Institute Inc,TOI,US68236X1000,US,NASDAQ,Healthcare,True
+UL Solutions,ULS,US9037311076,US,NYSE,Industrials,True
+QuidelOrtho,QDEL,US2197981051,US,NASDAQ,Healthcare,True
+"BRC Group Holdings,",RILY,US05580M1080,US,NASDAQ,Financials,True
+Aecom Technology,ACM,US00766T1007,US,NYSE,Industrials,True
+ThredUp Inc,TDUP,US88556E1029,US,NASDAQ,Consumer Discretionary,True
+Ringcentral Inc,RNG,US76680R2067,US,NYSE,Communication Services,True
+XMax Inc,XMAX,US66979P3001,US,NASDAQ,Technology,True
+Savara Inc,SVRA,US8051111016,US,NASDAQ,Healthcare,True
+MeiraGTx Holdings plc,MGTX,,US,NASDAQ,Healthcare,True
+Smith AO,AOS,US8318652091,US,NYSE,Industrials,True
+Progyny Inc,PGNY,US74340E1038,US,NASDAQ,Healthcare,True
+Nuvalent Inc,NUVL,US6707031075,US,NASDAQ,Healthcare,True
+Biomarin Pharmaceutical Inc,BMRN,US09061G1013,US,NASDAQ,Healthcare,True
+Vaxcyte Inc,PCVX,US92243G1085,US,NASDAQ,Healthcare,True
+Palladyne AI Corp,PDYN,US80359A2050,US,NASDAQ,Technology,True
+"Oruka Therapeutics,",ORKA,US6876041087,US,NASDAQ,Healthcare,True
+Adapthealth Corp,AHCO,US00653Q1022,US,NASDAQ,Healthcare,True
+Ingram Micro Holding,INGM,US4571521065,US,NYSE,Technology,True
+"BXP,",BXP,US1011211018,US,NYSE,Real Estate,True
+Cogent Communications Group Inc,CCOI,US19239V3024,US,NASDAQ,Communication Services,True
+Dupont De Nemours Inc,DD,US26614N1028,US,NYSE,Materials,True
+Ionis Pharmaceuticals Inc,IONS,US4622221004,US,NASDAQ,Healthcare,True
+Revvity,RVTY,US7140461093,US,NYSE,Healthcare,True
+CBRE Group Inc Class A,CBRE,US12504L1098,US,NYSE,Real Estate,True
+Diversified Energy Company plc,DEC,US25520W1071,US,NYSE,Energy,True
+Darden Restaurants Inc,DRI,US2371941053,US,NYSE,Consumer Discretionary,True
+Expro Group Holdings N.V.,XPRO,,US,NASDAQ,Energy,True
+Zillow Group Inc,ZG,US98954M1018,US,NASDAQ,Real Estate,True
+Ovid Therapeutics Inc,OVID,US6904691010,US,NASDAQ,Healthcare,True
+Graco Inc,GGG,US3841091040,US,NYSE,Industrials,True
+"USA TODAY Co.,",TDAY,US36472T1097,US,NYSE,Communication Services,True
+Aveanna Healthcare Holdings Inc,AVAH,US05356F1057,US,NASDAQ,Healthcare,True
+"Omada Health,",OMDA,US68170A1088,US,NASDAQ,Healthcare,True
+Axogen Inc,AXGN,US05463X1063,US,NASDAQ,Healthcare,True
+"Beta Technologies,",BETA,US0869211039,US,NYSE,Industrials,True
+Honest Company Inc,HNST,US4383331067,US,NASDAQ,Consumer Staples,True
+"ServiceTitan,",TTAN,US81764X1037,US,NASDAQ,Technology,True
+Simmons First National,SFNC,US8287302009,US,NASDAQ,Financials,True
+Liberty Latin America Ltd. Class C,LILAK,,US,NASDAQ,Communication Services,True
+Protara Therapeutics Inc,TARA,US74365U1079,US,NASDAQ,Healthcare,True
+"TXNM Energy,",TXNM,US69349H1077,US,NYSE,Utilities,True
+Oxford Lane Capital Corp,OXLC,US6915438476,US,NASDAQ,Financials,True
+Dyne Therapeutics Inc,DYN,US26818M1080,US,NASDAQ,Healthcare,True
+Ormat Technologies Inc,ORA,US6866881021,US,NYSE,Utilities,True
+First Financial Bancorp,FFBC,US3202091092,US,NASDAQ,Financials,True
+Sun Communities Inc,SUI,US8666741041,US,NYSE,Real Estate,True
+Northwest Bancshares Inc,NWBI,US6673401039,US,NASDAQ,Financials,True
+Monte Rosa Therapeutics Inc,GLUE,US61225M1027,US,NASDAQ,Healthcare,True
+"Mineralys Therapeutics,",MLYS,US6031701013,US,NASDAQ,Healthcare,True
+"Angel Studios,",ANGX,US0349481095,US,NYSE,Communication Services,True
+"Innventure,",INV,US45784M1080,US,NASDAQ,Industrials,True
+Procept Biorobotics Corp,PRCT,US74276L1052,US,NASDAQ,Healthcare,True
+Inspire Medical Systems Inc,INSP,US4577301090,US,NYSE,Healthcare,True
+"Kailera Therapeutics, Inc. - Common stock",KLRA,US4829311020,US,NASDAQ,Healthcare,True
+Arlo Technologies,ARLO,US04206A1016,US,NYSE,Technology,True
+RXO,RXO,US74982T1034,US,NYSE,Industrials,True
+RLI Corp,RLI,US7496071074,US,NYSE,Financials,True
+Papa John's International Inc,PZZA,US6988131024,US,NASDAQ,Consumer Discretionary,True
+Textron Inc,TXT,US8832031012,US,NYSE,Industrials,True
+Disc Medicine,IRON,US2546041011,US,NASDAQ,Healthcare,True
+ADEIA CORP,ADEA,US00676P1075,US,NASDAQ,Technology,True
+Liberty Broadband Srs C,LBRDK,US5303073051,US,NASDAQ,Communication Services,True
+Tigo Energy,TYGO,US88675P1030,US,NASDAQ,Technology,True
+Silicon Laboratories Inc,SLAB,US8269191024,US,NASDAQ,Technology,True
+Arteris Inc,AIP,US04302A1043,US,NASDAQ,Technology,True
+Ellington Financial,EFC,US28852N1090,US,NYSE,Financials,True
+MediaAlpha,MAX,US58450V1044,US,NYSE,Financials,True
+Vita Coco Company Inc,COCO,US92846Q1076,US,NASDAQ,Consumer Staples,True
+Hallador Energy,HNRG,US40609P1057,US,NASDAQ,Utilities,True
+Janus International Group Inc,JBI,US47103N1063,US,NYSE,Industrials,True
+Equity Lifestyle Properties Inc,ELS,US29472R1086,US,NYSE,Real Estate,True
+Reynolds Consumer Products Inc,REYN,US76171L1061,US,NASDAQ,Consumer Staples,True
+Liquidia Technologies Inc,LQDA,US53635D2027,US,NASDAQ,Healthcare,True
+Ideaya Biosciences Inc,IDYA,US45166A1025,US,NASDAQ,Healthcare,True
+Q2 Holdings,QTWO,US74736L1098,US,NYSE,Technology,True
+Scholar Rock Holding Corp,SRRK,US80706P1030,US,NASDAQ,Healthcare,True
+Mama's Creations,MAMA,US56146T1034,US,NASDAQ,Consumer Staples,True
+Adient plc,ADNT,,US,NASDAQ,Consumer Discretionary,True
+"Smithfield Foods,",SFD,US8322482071,US,NASDAQ,Consumer Staples,True
+Dick’s Sporting Goods Inc,DKS,US2533931026,US,NYSE,Consumer Discretionary,True
+ADTRAN Inc,ADTN,US00486H1059,US,NASDAQ,Technology,True
+Universal Technical Institute,UTI,,US,NASDAQ,Real Estate,True
+Jacobs Solutions,J,US4698141078,US,NYSE,Industrials,True
+First Interstate BancSystem Inc,FIBK,US32055Y2019,US,NASDAQ,Financials,True
+Telephone and Data Systems Inc,TDS,US8794338298,US,NYSE,Communication Services,True
+Edgewise Therapeutics Inc,EWTX,US28036F1057,US,NASDAQ,Healthcare,True
+CorMedix Inc,CRMD,US21900C3088,US,NASDAQ,Healthcare,True
+Phillips Edison & Co Inc,PECO,US71844V2016,US,NASDAQ,Real Estate,True
+BlackRock TCP Capital Corp,TCPC,US09259E1082,US,NASDAQ,Financials,True
+Hope Bancorp Inc,HOPE,US43940T1097,US,NASDAQ,Financials,True
+"Centuri Holdings,",CTRI,US1559231055,US,NYSE,Industrials,True
+Lantronix Inc,LTRX,US5165482036,US,NASDAQ,Technology,True
+Sagimet Biosciences Inc.,SGMT,US7867001049,US,NASDAQ,Healthcare,True
+Aquestive Therapeutics Inc,AQST,US03843E1047,US,NASDAQ,Healthcare,True
+ATI,ATI,,US,NYSE,Materials,True
+Driven Brands Holdings Inc,DRVN,US26210V1026,US,NASDAQ,Consumer Discretionary,True
+Everspin Technologies Inc,MRAM,US30041T1043,US,NASDAQ,Technology,True
+Five Below Inc,FIVE,US33829M1018,US,NASDAQ,Consumer Discretionary,True
+Rayonier Advanced Materials,RYAM,US75508B1044,US,NYSE,Materials,True
+Cousins Properties Incorporated,CUZ,US2227955026,US,NYSE,Real Estate,True
+LCI Industries,LCII,US50189K1034,US,NYSE,Consumer Discretionary,True
+Terex,TEX,US8807791038,US,NYSE,Industrials,True
+Hilton Grand Vacations Inc,HGV,US43283X1054,US,NYSE,Consumer Discretionary,True
+"Starfighters Space,",FJET,US85529M1045,US,NASDAQ,Industrials,True
+"Kardigan, Inc. -",KARD,,US,NASDAQ,Healthcare,True
+East West Bancorp Inc,EWBC,US27579R1041,US,NASDAQ,Financials,True
+NCR Atleos,NATL,US63001N1063,US,NYSE,Technology,True
+"PACS Group,",PACS,US69380Q1076,US,NYSE,Healthcare,True
+Yext Inc,YEXT,US98585N1063,US,NYSE,Technology,True
+Ecolab Inc,ECL,US2788651006,US,NYSE,Materials,True
+Alx Oncology Holdings,ALXO,US00166B1052,US,NASDAQ,Healthcare,True
+Newmark Group Inc,NMRK,US65158N1028,US,NASDAQ,Real Estate,True
+"Kodiak AI,",KDK,US5000811043,US,NASDAQ,Technology,True
+Golub Capital BDC Inc,GBDC,US38173M1027,US,NASDAQ,Financials,True
+First American,FAF,US31847R1023,US,NYSE,Financials,True
+Blackline Inc,BL,US09239B1098,US,NASDAQ,Technology,True
+United Bankshares Inc,UBSI,US9099071071,US,NASDAQ,Financials,True
+Hercules Capital Inc,HTGC,US4270965084,US,NYSE,Financials,True
+PTC Therapeutics Inc,PTCT,US69366J2006,US,NASDAQ,Healthcare,True
+Design Therapeutics Inc,DSGN,US25056L1035,US,NASDAQ,Healthcare,True
+Alumis Inc,ALMS,US0223071020,US,NASDAQ,Healthcare,True
+"Strata Critical Medical,",SRTA,US0926671043,US,NASDAQ,Healthcare,True
+UGI,UGI,US9026811052,US,NYSE,Utilities,True
+"TIC Solutions,",TIC,US00510N1028,US,NYSE,Industrials,True
+Denali Therapeutics Inc,DNLI,US24823R1059,US,NASDAQ,Healthcare,True
+Resideo Technologies Inc,REZI,US76118Y1047,US,NYSE,Industrials,True
+HealthEquity Inc,HQY,US42226A1079,US,NASDAQ,Healthcare,True
+Artisan Partners Asset Management Inc,APAM,US04316A1088,US,NYSE,Financials,True
+Stoke Therapeutics Inc,STOK,US86150R1077,US,NASDAQ,Healthcare,True
+Nurix Therapeutics Inc,NRIX,US67080M1036,US,NASDAQ,Healthcare,True
+Mission Produce Inc,AVO,US60510V1089,US,NASDAQ,Consumer Staples,True
+Service Corporation International,SCI,US8175651046,US,NYSE,Consumer Discretionary,True
+Aspen Aerogels Inc,ASPN,US04523Y1055,US,NYSE,Materials,True
+Mitek Systems Inc,MITK,US6067102003,US,NASDAQ,Technology,True
+MasTec Inc,MTZ,US5763231090,US,NYSE,Industrials,True
+NPK International,NPKI,US6517185046,US,NYSE,Industrials,True
+Cytek Biosciences Inc,CTKB,US23285D1090,US,NASDAQ,Healthcare,True
+Duolingo Inc,DUOL,US26603R1068,US,NASDAQ,Consumer Discretionary,True
+HCA Holdings Inc,HCA,US40412C1018,US,NYSE,Healthcare,True
+Thomson Reuters Corporation Common Shares,TRI,,US,NASDAQ,Consumer Discretionary,True
+Norfolk Southern,NSC,US6558441084,US,NYSE,Industrials,True
+Compass Diversified Holdings,CODI,US20451Q1040,US,NYSE,Financials,True
+Provident Financial Services Inc,PFS,US74386T1051,US,NYSE,Financials,True
+Goldman Sachs BDC Inc,GSBD,US38147U1079,US,NYSE,Financials,True
+OceanFirst Financial Corp,OCFC,US6752341080,US,NASDAQ,Financials,True
+Crinetics Pharmaceuticals Inc,CRNX,US22663K1079,US,NASDAQ,Healthcare,True
+Comstock Mining Inc,LODE,US2057504092,US,NYSE,Materials,True
+The Cheesecake Factory,CAKE,US1630721017,US,NASDAQ,Consumer Discretionary,True
+Cardinal Infrastructure Group,CDNL,US14154A1025,US,NASDAQ,Industrials,True
+FTAI Infrastructure,FIP,US35953C1062,US,NASDAQ,Industrials,True
+"ARS Pharmaceuticals, Inc",SPRY,US82835W1080,US,NASDAQ,Healthcare,True
+SunCoke Energy Inc,SXC,US86722A1034,US,NYSE,Materials,True
+"CG Oncology, Inc. Common stock",CGON,US1569441009,US,NASDAQ,Healthcare,True
+Logitech International S.A.,LOGI,,US,NASDAQ,Technology,True
+Atmos Energy,ATO,US0495601058,US,NYSE,Utilities,True
+Cryoport Inc,CYRX,US2290503075,US,NASDAQ,Industrials,True
+Southern Copper,SCCO,US84265V1052,US,NYSE,Materials,True
+Biogen Inc,BIIB,US09062X1037,US,NASDAQ,Healthcare,True
+"Petco Health and Wellness Company,",WOOF,US71601V1052,US,NASDAQ,Consumer Discretionary,True
+Solventum Corp.,SOLV,US83444M1018,US,NYSE,Healthcare,True
+"Paymentus Holdings,",PAY,US70439P1084,US,NYSE,Technology,True
+Agios Pharm,AGIO,US00847X1046,US,NASDAQ,Healthcare,True
+Ramaco Resources Inc,METC,US75134P6007,US,NASDAQ,Energy,True
+FS Credit Opportunities Corp.,FSCO,,US,NASDAQ,Financials,True
+Anavex Life Sciences Corp,AVXL,US0327973006,US,NASDAQ,Healthcare,True
+Advance Auto Parts Inc,AAP,US00751Y1064,US,NYSE,Consumer Discretionary,True
+Enliven Therapeutics,ELVN,US29337E1029,US,NASDAQ,Healthcare,True
+Green Plains Renewable Energy Inc,GPRE,US3932221043,US,NASDAQ,Energy,True
+MoonLake Immunotherapeutics Class A,MLTX,,US,NASDAQ,Healthcare,True
+Astronics,ATRO,US0464331083,US,NASDAQ,Industrials,True
+"VisionWave Holdings,",VWAV,US9279501053,US,NASDAQ,Technology,True
+Atomera Inc,ATOM,US04965B1008,US,NASDAQ,Technology,True
+Zevra Therapeutics,ZVRA,US4884452065,US,NASDAQ,Healthcare,True
+One Stop Systems Inc,OSS,US68247W1099,US,NASDAQ,Technology,True
+Immuneering Corp,IMRX,US45254E1073,US,NASDAQ,Healthcare,True
+Celcuity LLC,CELC,US15102K1007,US,NASDAQ,Healthcare,True
+"Maze Therapeutics,",MAZE,US5787841007,US,NASDAQ,Healthcare,True
+Steven Madden Ltd,SHOO,US5562691080,US,NASDAQ,Consumer Discretionary,True
+AtriCure Inc,ATRC,US04963C2098,US,NASDAQ,Healthcare,True
+Charles River Laboratories,CRL,US1598641074,US,NYSE,Healthcare,True
+Zentalis Pharmaceuticals Llc,ZNTL,US98943L1070,US,NASDAQ,Healthcare,True
+Brinker International Inc,EAT,US1096411004,US,NYSE,Consumer Discretionary,True
+Veeco Instruments Inc,VECO,US9224171002,US,NASDAQ,Technology,True
+STERIS plc (Ireland),STE,,US,NASDAQ,Healthcare,True
+Allegion plc,ALLE,,US,NASDAQ,Consumer Discretionary,True
+Marqeta Inc,MQ,US57142B1044,US,NASDAQ,Technology,True
+Vera Therapeutics Inc,VERA,US92337R1014,US,NASDAQ,Healthcare,True
+4D Molecular Therapeutics Inc,FDMT,US35104E1001,US,NASDAQ,Healthcare,True
+Louisiana-Pacific,LPX,US5463471053,US,NYSE,Materials,True
+Alnylam Pharmaceuticals Inc,ALNY,US02043Q1076,US,NASDAQ,Healthcare,True
+Dave Inc,DAVE,US23834J2015,US,NASDAQ,Financials,True
+AAON Inc,AAON,US0003602069,US,NASDAQ,Industrials,True
+"Globalstar,",GSAT,US3789735079,US,NASDAQ,Communication Services,True
+Yum China Holdings Inc,YUMC,US98850P1093,US,NYSE,Consumer Discretionary,True
+A10 Network,ATEN,US0021211018,US,NYSE,Technology,True
+Vestis,VSTS,US29430C1027,US,NYSE,Industrials,True
+Life360,LIF,,US,NASDAQ,Technology,True
+"MBX Biosciences,",MBX,US55287L1017,US,NASDAQ,Healthcare,True
+GSI Technology Inc,GSIT,US36241U1060,US,NASDAQ,Technology,True
+Radian Group Inc,RDN,US7502361014,US,NYSE,Financials,True
+Abacus Global Management,ABX,,US,NASDAQ,Financials,True
+Dave & Buster’s Entertainment,PLAY,US2383371091,US,NASDAQ,Consumer Discretionary,True
+ITT Inc,ITT,US45073V1089,US,NYSE,Industrials,True
+Kennametal Inc,KMT,US4891701009,US,NYSE,Industrials,True
+Trinity Capital Inc,TRIN,US8964423086,US,NASDAQ,Financials,True
+Codexis Inc,CDXS,US1920051067,US,NASDAQ,Healthcare,True
+RadNet Inc,RDNT,US7504911022,US,NASDAQ,Healthcare,True
+Acco Brands,ACCO,US00081T1088,US,NYSE,Industrials,True
+Avnet Inc,AVT,US0538071038,US,NASDAQ,Technology,True
+Abercrombie & Fitch,ANF,US0028962076,US,NYSE,Consumer Discretionary,True
+Generac Holdings Inc,GNRC,US3687361044,US,NYSE,Industrials,True
+Hillman Solutions Corp,HLMN,US4316361090,US,NASDAQ,Industrials,True
+Lindblad Expeditions Holdings Inc,LIND,US5352191093,US,NASDAQ,Consumer Discretionary,True
+"United Community Banks,",UCB,US90984P3038,US,NYSE,Financials,True
+Eagle Point Credit Company Common Share of Beneficial Interest,ECC,,US,NASDAQ,Financials,True
+Mirum Pharmaceuticals Inc,MIRM,US6047491013,US,NASDAQ,Healthcare,True
+Winnebago Industries Inc,WGO,US9746371007,US,NYSE,Consumer Discretionary,True
+Hudson Pacific Properties Inc,HPP,US4440974065,US,NYSE,Real Estate,True
+PennantPark Floating Rate Capital Ltd,PFLT,US70806A1060,US,NYSE,Financials,True
+Ziff Davis Inc,ZD,US48123V1026,US,NASDAQ,Communication Services,True
+Sally Beauty Holdings Inc,SBH,US79546E1047,US,NYSE,Consumer Discretionary,True
+California Resources Corp,CRC,US13057Q3056,US,NYSE,Energy,True
+Rhythm Pharmaceuticals Inc,RYTM,US76243J1051,US,NASDAQ,Healthcare,True
+People Incorporated,PPLI,US44891N2080,US,NASDAQ,Communication Services,True
+Federal Signal,FSS,US3138551086,US,NYSE,Industrials,True
+First Financial Bankshares Inc,FFIN,US32020R1095,US,NASDAQ,Financials,True
+Edgewell Personal Care Co,EPC,US28035Q1022,US,NYSE,Consumer Staples,True
+"Pediatrix Medical Group,",MD,US58502B1061,US,NYSE,Healthcare,True
+Mid-America Apartment Communities Inc,MAA,US59522J1034,US,NYSE,Real Estate,True
+Parsons Corp,PSN,US70202L1026,US,NYSE,Industrials,True
+eXp World Holdings Inc,AGNT,US30212W1009,US,NASDAQ,Real Estate,True
+Aura Minerals Inc. Common Shares,AUGO,VGG069731120,US,NASDAQ,Materials,True
+Cal-Maine Foods Inc,CALM,US1280302027,US,NASDAQ,Consumer Staples,True
+Stepstone Group Inc,STEP,US85914M1071,US,NASDAQ,Financials,True
+Axsome Therapeutics Inc,AXSM,US05464T1043,US,NASDAQ,Healthcare,True
+"KinderCare Learning Companies,",KLC,US49456W1053,US,NYSE,Consumer Discretionary,True
+Bright Horizons Family Solutions Inc,BFAM,US1091941005,US,NYSE,Consumer Discretionary,True
+Holley Inc,HLLY,US43538H1032,US,NYSE,Consumer Discretionary,True
+"Generate Biomedicines,",GENB,US3709201004,US,NASDAQ,Healthcare,True
+Urban Edge Properties,UE,US91704F1049,US,NYSE,Real Estate,True
+Hancock Whitney Corp,HWC,US4101201097,US,NASDAQ,Financials,True
+World Kinect,WKC,US9814751064,US,NYSE,Energy,True
+Kinetik Holdings Inc,KNTK,US02215L2097,US,NYSE,Energy,True
+Westrock Coffee,WEST,US96145W1036,US,NASDAQ,Consumer Staples,True
+Granite Ridge Resources Inc,GRNT,US3874321074,US,NYSE,Energy,True
+Mueller Water Products,MWA,US6247581084,US,NYSE,Industrials,True
+"Lineage,",LINE,US53566V1061,US,NASDAQ,Real Estate,True
+ProFrac Holding Corp.,ACDC,US74319N1000,US,NASDAQ,Energy,True
+Greenbrier Companies Inc,GBX,US3936571013,US,NYSE,Industrials,True
+"OPENLANE,",OPLN,US48238T1097,US,NYSE,Consumer Discretionary,True
+Arcutis Biotherapeutics Inc,ARQT,US03969K1088,US,NASDAQ,Healthcare,True
+Greenland Energy,GLND,US70580B1061,US,NASDAQ,Energy,True
+Dolby Laboratories,DLB,US25659T1079,US,NYSE,Technology,True
+CNO Financial Group Inc,CNO,US12621E1038,US,NYSE,Financials,True
+COPT Defense Properties,CDP,US22002T1088,US,NYSE,Real Estate,True
+OneMain Holdings Inc,OMF,US68268W1036,US,NYSE,Financials,True
+Waters,WAT,US9418481035,US,NYSE,Healthcare,True
+Neurocrine Biosciences Inc,NBIX,US64125C1099,US,NASDAQ,Healthcare,True
+"Virtu Financial,",VIRT,US9282541013,US,NYSE,Financials,True
+DeFi Development Corp.,DFDV,US47100L3015,US,NASDAQ,Financials,True
+Crown Holdings Inc,CCK,US2283681060,US,NYSE,Materials,True
+First Busey Corp,BUSE,US3193832041,US,NASDAQ,Financials,True
+Phathom Pharmaceuticals Inc,PHAT,US71722W1071,US,NASDAQ,Healthcare,True
+Churchill Downs Incorporated,CHDN,US1714841087,US,NASDAQ,Consumer Discretionary,True
+Lantheus Holdings Inc,LNTH,US5165441032,US,NASDAQ,Healthcare,True
+Forward Air,FWRD,US34986A1043,US,NASDAQ,Industrials,True
+Stonex Group Inc,SNEX,US8618961085,US,NASDAQ,Financials,True
+Supernus Pharmaceuticals Inc,SUPN,US8684591089,US,NASDAQ,Healthcare,True
+Monro Muffler Brake Inc,MNRO,US6102361010,US,NASDAQ,Consumer Discretionary,True
+Nuvectis Pharma Inc,NVCT,US67080T1088,US,NASDAQ,Healthcare,True
+"Senseonics Holdings,",SENS,,US,NASDAQ,Healthcare,True
+Itron Inc,ITRI,US4657411066,US,NASDAQ,Technology,True
+PROG Holdings Inc,PRG,,US,NYSE,Financials,True
+Bicara Therapeutics,BCAX,US0554771032,US,NASDAQ,Healthcare,True
+Flowco Holdings,FLOC,US3429091081,US,NYSE,Energy,True
+United Parks & Resorts Inc,PRKS,US81282V1008,US,NYSE,Consumer Discretionary,True
+MSCI Inc,MSCI,US55354G1004,US,NYSE,Financials,True
+Universal Health Services Inc,UHS,US9139031002,US,NYSE,Healthcare,True
+Hamilton Lane Inc,HLNE,US4074971064,US,NASDAQ,Financials,True
+CVR Energy Inc,CVI,US12662P1084,US,NYSE,Energy,True
+New Mountain Finance,NMFC,US6475511001,US,NASDAQ,Financials,True
+SiteOne Landscape Supply Inc,SITE,US82982L1035,US,NYSE,Industrials,True
+FTAI Aviation Ltd.,FTAI,,US,NASDAQ,Industrials,True
+MillerKnoll Inc,MLKN,US6005441000,US,NASDAQ,Consumer Discretionary,True
+"Central Bancompany,",CBC,US1524131000,US,NASDAQ,Financials,True
+Via Transportation,VIA,,US,NASDAQ,Technology,True
+Trinity Industries Inc,TRN,US8965221091,US,NYSE,Industrials,True
+Calumet Specialty Products Partners,CLMT,US1314761032,US,NASDAQ,Energy,True
+National Beverage Corp,FIZZ,US6350171061,US,NASDAQ,Consumer Staples,True
+"Jade Biosciences,",JBIO,US0080642061,US,NASDAQ,Healthcare,True
+V2X Inc,VVX,US92242T1016,US,NYSE,Industrials,True
+"MiniMed Group,",MMED,US60365F1093,US,NASDAQ,Healthcare,True
+Ryman Hospitality Properties Inc,RHP,US78377T1079,US,NYSE,Real Estate,True
+Skywater Technology Inc,SKYT,US83089J1088,US,NASDAQ,Technology,True
+Artivion Inc,AORT,US2289031005,US,NYSE,Healthcare,True
+West Pharmaceutical Services Inc,WST,US9553061055,US,NYSE,Healthcare,True
+Silgan Holdings Inc,SLGN,US8270481091,US,NYSE,Materials,True
+TFS Financial,TFSL,US87240R1077,US,NASDAQ,Financials,True
+"Lexeo Therapeutics,",LXEO,US52886X1072,US,NASDAQ,Healthcare,True
+JBG SMITH Properties,JBGS,US46590V1008,US,NYSE,Real Estate,True
+Sonida Senior Living Inc,SNDA,US1404752032,US,NYSE,Healthcare,True
+KB Home,KBH,US48666K1097,US,NYSE,Consumer Discretionary,True
+Hudson Technologies Inc,HDSN,US4441441098,US,NASDAQ,Materials,True
+Horizon Bancorp,HBNC,US4404071049,US,NASDAQ,Financials,True
+Avient Corp,AVNT,US05368V1061,US,NYSE,Materials,True
+Perma-Fix Environmental Svcs Inc,PESI,US7141572039,US,NASDAQ,Industrials,True
+HNI Corp,HNI,US4042511000,US,NYSE,Industrials,True
+Cross Country Healthcare Inc,CCRN,US2274831047,US,NASDAQ,Healthcare,True
+"Kyverna Therapeutics,",KYTX,US5019761049,US,NASDAQ,Healthcare,True
+Synnex,SNX,US87162W1009,US,NYSE,Technology,True
+Brookfield Renewable Corporation Brookfield Renewable Corporation Class A Subord,BEPC,,US,NASDAQ,Utilities,True
+Immunovant Inc,IMVT,US45258J1025,US,NASDAQ,Healthcare,True
+Tenax Therapeutics Inc,TENX,US88032L6056,US,NASDAQ,Healthcare,True
+Oceaneering International Inc,OII,US6752321025,US,NYSE,Energy,True
+Alliance Laundry Holdings,ALH,US01862Q1076,US,NYSE,Industrials,True
+Arcosa Inc,ACA,US0396531008,US,NYSE,Industrials,True
+Cummins Inc,CMI,US2310211063,US,NYSE,Industrials,True
+Powell Industries Inc,POWL,US7391281067,US,NASDAQ,Industrials,True
+BKV,BKV,US05603J1088,US,NYSE,Energy,True
+WESCO International Inc,WCC,US95082P1057,US,NYSE,Industrials,True
+Catalyst Pharmaceuticals Inc,CPRX,US14888U1016,US,NASDAQ,Healthcare,True
+Runway Growth Finance Corp,RWAY,US78163D1000,US,NASDAQ,Financials,True
+OppFi Inc,OPFI,US68386H1032,US,NYSE,Financials,True
+Urban Outfitters Inc,URBN,US9170471026,US,NASDAQ,Consumer Discretionary,True
+Repay Holdings Corp,RPAY,US76029L1008,US,NASDAQ,Technology,True
+"Champion Homes,",SKY,US8308301055,US,NYSE,Consumer Discretionary,True
+Perdoceo Education Corp,PRDO,US71363P1066,US,NASDAQ,Consumer Discretionary,True
+Post Holdings Inc,POST,US7377431009,US,NYSE,Consumer Staples,True
+Nerdwallet Inc,NRDS,US64082B1026,US,NASDAQ,Financials,True
+ChronoScale,CHRN,US1709241046,US,NASDAQ,Healthcare,True
+Eve Holding Inc,EVEX,US29970N1046,US,NYSE,Industrials,True
+Boyd Gaming,BYD,US1033041013,US,NYSE,Consumer Discretionary,True
+BWX Technologies Inc,BWXT,US05605H1005,US,NYSE,Industrials,True
+"Opus Genetics,",IRD,US67577R1023,US,NASDAQ,Healthcare,True
+Woodward Inc,WWD,US9807451037,US,NASDAQ,Industrials,True
+Polaris Industries Inc,PII,US7310681025,US,NYSE,Consumer Discretionary,True
+Nu Skin Enterprises Inc,NUS,US67018T1051,US,NYSE,Consumer Staples,True
+Upbound Group,UPBD,US76009N1000,US,NASDAQ,Consumer Discretionary,True
+Granite Construction Incorporated,GVA,US3873281071,US,NYSE,Industrials,True
+Tanger Factory Outlet Centers Inc,SKT,US8754651060,US,NYSE,Real Estate,True
+Knowles Cor,KN,US49926D1090,US,NYSE,Technology,True
+Harmony Biosciences Holdings,HRMY,US4131971040,US,NASDAQ,Healthcare,True
+Fox Factory Holding Corp,FOXF,US35138V1026,US,NASDAQ,Consumer Discretionary,True
+"Beta Bionics,",BBNX,US08659B1026,US,NASDAQ,Healthcare,True
+Innoviva Inc,INVA,US45781M1018,US,NASDAQ,Healthcare,True
+Avalyn Pharma,AVLN,,US,NASDAQ,Healthcare,True
+Stride Inc,LRN,US86333M1080,US,NYSE,Consumer Discretionary,True
+Quantum,QMCO,US7479066000,US,NASDAQ,Technology,True
+Identiv Inc,INVE,US45170X2053,US,NASDAQ,Technology,True
+Wabash National,WNC,US9295661071,US,NYSE,Industrials,True
+BioLife Solutions Inc,BLFS,US09062W2044,US,NASDAQ,Healthcare,True
+Icahn Enterprises LP,IEP,US4511001012,US,NASDAQ,Industrials,True
+Ulta Beauty Inc,ULTA,US90384S3031,US,NASDAQ,Consumer Discretionary,True
+Capitol Federal Financial Inc,CFFN,US14057J1016,US,NASDAQ,Financials,True
+Pyxis Oncology Inc,PYXS,US7473241013,US,NASDAQ,Healthcare,True
+"Guardian Pharmacy Services,",GRDN,US40145W1018,US,NYSE,Healthcare,True
+Globe Life Inc,GL,US37959E1029,US,NYSE,Financials,True
+AnaptysBio Inc,ANAB,US0327241065,US,NASDAQ,Healthcare,True
+Pubmatic Inc,PUBM,US74467Q1031,US,NASDAQ,Technology,True
+Towne Bank,TOWN,US89214P1093,US,NASDAQ,Financials,True
+QuinStreet Inc,QNST,US74874Q1004,US,NASDAQ,Communication Services,True
+Westinghouse Air Brake Technologies Corp,WAB,US9297401088,US,NYSE,Industrials,True
+MacroGenics Inc,MGNX,US5560991094,US,NASDAQ,Healthcare,True
+First Commonwealth Financial,FCF,US3198291078,US,NYSE,Financials,True
+Scotts Miracle-Gro,SMG,US8101861065,US,NYSE,Materials,True
+Tyra Biosciences Inc,TYRA,US90240B1061,US,NASDAQ,Healthcare,True
+Arvinas Inc,ARVN,US04335A1051,US,NASDAQ,Healthcare,True
+Curiositystream,CURI,US23130Q1076,US,NASDAQ,Communication Services,True
+"Ambiq Micro,",AMBQ,US0231931058,US,NYSE,Technology,True
+"National Healthcare Properties,",NHP,,US,NASDAQ,Real Estate,True
+Kestra Medical Technologies Ltd.,KMTS,,US,NASDAQ,Healthcare,True
+Thor Industries Inc,THO,US8851601018,US,NYSE,Consumer Discretionary,True
+Vanda Pharmaceuticals Inc,VNDA,US9216591084,US,NASDAQ,Healthcare,True
+Meritage,MTH,US59001A1025,US,NYSE,Consumer Discretionary,True
+"Cullinan Therapeutics,",CGEM,US2300311063,US,NASDAQ,Healthcare,True
+Comtech Telecommunications Corp,CMTL,US2058262096,US,NASDAQ,Technology,True
+NMI Holdings Inc,NMIH,US6292093050,US,NASDAQ,Financials,True
+Crexendo Inc,CXDO,US2265521078,US,NASDAQ,Communication Services,True
+AerSale Corp,ASLE,US00810F1066,US,NASDAQ,Industrials,True
+Arko Corp,ARKO,US0412421085,US,NASDAQ,Consumer Staples,True
+Navient Corp,NAVI,US63938C1080,US,NASDAQ,Financials,True
+Kodiak Sciences Inc,KOD,US50015M1099,US,NASDAQ,Healthcare,True
+Maximus Inc,MMS,US5779331041,US,NYSE,Industrials,True
+Badger Meter Inc,BMI,US0565251081,US,NYSE,Industrials,True
+Voya Financial Inc,VOYA,US9290891004,US,NYSE,Financials,True
+SIGA Technologies Inc,SIGA,US8269171067,US,NASDAQ,Healthcare,True
+Si-Bone Inc,SIBN,US8257041090,US,NASDAQ,Healthcare,True
+Novanta,NOVT,,US,NASDAQ,Technology,True
+Domino's Pizza,DPZ,US25754A2015,US,NASDAQ,Consumer Discretionary,True
+Hub Group Inc,HUBG,US4433201062,US,NASDAQ,Industrials,True
+Hannon Armstrong Sustainable Infrastructure Capital Inc,HASI,US41068X1000,US,NYSE,Financials,True
+ANGI Homeservices Inc,ANGI,US00183L2016,US,NASDAQ,Communication Services,True
+Cadiz Inc,CDZI,US1275372076,US,NASDAQ,Utilities,True
+"Federated Hermes,",FHI,,US,NYSE,Financials,True
+CareDx Inc,CDNA,US14167L1035,US,NASDAQ,Healthcare,True
+Brinks,BCO,US1096961040,US,NYSE,Industrials,True
+Advanced Energy Industries Inc,AEIS,US0079731008,US,NASDAQ,Technology,True
+Crane NXT Co,CXT,US2244411052,US,NYSE,Technology,True
+Exponent Inc,EXPO,US30214U1025,US,NASDAQ,Industrials,True
+Visteon Corp,VC,US92839U2069,US,NASDAQ,Consumer Discretionary,True
+GeneDx Holdings Corp.,WGS,US81663L2007,US,NASDAQ,Healthcare,True
+Green Dot,GDOT,US39304D1028,US,NYSE,Financials,True
+Taskus Inc,TASK,US87652V1098,US,NASDAQ,Technology,True
+Daktronics Inc,DAKT,US2342641097,US,NASDAQ,Technology,True
+Insperity Inc,NSP,US45778Q1076,US,NYSE,Industrials,True
+MiMedx Group Inc,MDXG,US6024961012,US,NASDAQ,Healthcare,True
+"Skyward Specialty Insurance Group,",SKWD,US8309401029,US,NASDAQ,Financials,True
+SL Green Realty Corp,SLG,US78440X8873,US,NYSE,Real Estate,True
+Ethan Allen Interiors Inc,ETD,US2976021046,US,NYSE,Consumer Discretionary,True
+Drilling Tools International Corp.,DTI,US26205E1073,US,NASDAQ,Energy,True
+Cincinnati Financial,CINF,US1720621010,US,NASDAQ,Financials,True
+American Superconductor,AMSC,US0301112076,US,NASDAQ,Industrials,True
+Warrior Met Coal Inc,HCC,US93627C1018,US,NYSE,Materials,True
+Liberty Latin America Ltd.,LILA,,US,NASDAQ,Communication Services,True
+Allegiant Travel,ALGT,US01748X1028,US,NASDAQ,Industrials,True
+Glaukos Corp,GKOS,US3773221029,US,NYSE,Healthcare,True
+Mercury Systems Inc,MRCY,US5893781089,US,NASDAQ,Industrials,True
+Oil States International Inc,OIS,US6780261052,US,NYSE,Energy,True
+Methode Electronics Inc,MEI,US5915202007,US,NYSE,Technology,True
+H2O America,HTO,US7843051043,US,NASDAQ,Utilities,True
+Dream Finders Homes Inc,DFH,US26154D1000,US,NYSE,Consumer Discretionary,True
+Blackbaud Inc,BLKB,US09227Q1004,US,NASDAQ,Technology,True
+Euronet Worldwide Inc,EEFT,US2987361092,US,NASDAQ,Financials,True
+National Fuel Gas,NFG,US6361801011,US,NYSE,Utilities,True
+Vishay Precision Group Inc,VPG,US92835K1034,US,NYSE,Technology,True
+Oportun Financial Corp,OPRT,US68376D1046,US,NASDAQ,Financials,True
+Tutor Perini,TPC,US9011091082,US,NYSE,Industrials,True
+Liberty Capital Corporation Series C GCI Group,GLIBK,,US,NASDAQ,Communication Services,True
+Main Street Capital,MAIN,US56035L1044,US,NYSE,Financials,True
+i3 Verticals Inc,IIIV,US46571Y1073,US,NASDAQ,Technology,True
+Eastman Kodak Co,KODK,US2774614067,US,NYSE,Industrials,True
+"BillionToOne,",BLLN,US0901681058,US,NASDAQ,Healthcare,True
+AMC Robotics,AMCI,US0016611073,US,NASDAQ,Industrials,True
+DT Midstream Inc,DTM,US23345M1071,US,NYSE,Energy,True
+Intapp Inc,INTA,US45827U1097,US,NASDAQ,Technology,True
+Ryerson Holding,RYZ,US7837541041,US,NYSE,Materials,True
+Carlisle Companies Incorporated,CSL,US1423391002,US,NYSE,Industrials,True
+"SmartStop Self Storage REIT,",SMA,US83192D4025,US,NYSE,Real Estate,True
+Aura Biosciences Inc,AURA,US05153U1079,US,NASDAQ,Healthcare,True
+UMB Financial,UMBF,US9027881088,US,NASDAQ,Financials,True
+Celldex Therapeutics Inc,CLDX,US15117B2025,US,NASDAQ,Healthcare,True
+ESAB Corp,ESAB,US29605J1060,US,NYSE,Industrials,True
+"Suncrete,",RMIX,US86723E1047,US,NASDAQ,Materials,True
+Bioventus Inc,BVS,US09075A1088,US,NASDAQ,Healthcare,True
+Thryv Holdings Inc,THRY,US8860292064,US,NASDAQ,Technology,True
+Mayville Engineering Co Inc,MEC,US5786051079,US,NYSE,Industrials,True
+Vuzix Corp Cmn Stk,VUZI,US92921W3007,US,NASDAQ,Technology,True
+SPS Commerce Inc,SPSC,US78463M1071,US,NASDAQ,Technology,True
+Ameris Bancorp,ABCB,US03076K1088,US,NYSE,Financials,True
+Energy Recovery Inc,ERII,US29270J1007,US,NASDAQ,Industrials,True
+F5 Networks Inc,FFIV,US3156161024,US,NASDAQ,Technology,True
+Kirby,KEX,US4972661064,US,NYSE,Industrials,True
+"Commerce.com,",CMRC,US08975P1084,US,NASDAQ,Technology,True
+National CineMedia Inc,NCMI,US6353091076,US,NASDAQ,Communication Services,True
+Fortis Inc. Common Shares,FTS,,US,NASDAQ,Utilities,True
+Capital Southwest,CSWC,US1405011073,US,NASDAQ,Financials,True
+Kearny Financial Corp,KRNY,US48716P1084,US,NASDAQ,Financials,True
+"Black Rock Coffee Bar,",BRCB,US0922441029,US,NASDAQ,Consumer Discretionary,True
+The Bancorp Inc,TBBK,US05969A1051,US,NASDAQ,Financials,True
+Smith & Wesson Brands Inc,SWBI,US8317541063,US,NASDAQ,Consumer Discretionary,True
+Agenus Inc,AGEN,US00847G8042,US,NASDAQ,Healthcare,True
+"BioAge Labs, Inc",BIOA,US09077V1008,US,NASDAQ,Healthcare,True
+"Revolve Group,",RVLV,US76156B1070,US,NYSE,Consumer Discretionary,True
+CECO Environmental Corp.,CECO,US1251411013,US,NASDAQ,Industrials,True
+Ameriprise Financial Inc,AMP,US03076C1062,US,NYSE,Financials,True
+Chimera Investment,CIM,US16934Q8024,US,NYSE,Real Estate,True
+ConnectOne Bancorp Inc,CNOB,US20786W1071,US,NASDAQ,Financials,True
+"Sterling Infrastructure,",STRL,US8592411016,US,NASDAQ,Industrials,True
+Universal Display,OLED,US91347P1057,US,NASDAQ,Technology,True
+Oaktree Specialty Lending Corp,OCSL,US67401P4054,US,NASDAQ,Financials,True
+Pool,POOL,US73278L1052,US,NASDAQ,Industrials,True
+Avista,AVA,US05379B1070,US,NYSE,Utilities,True
+NRX Pharmaceuticals Inc,NRXP,US6294442099,US,NASDAQ,Healthcare,True
+Galectin Therapeutics Inc,GALT,US3632252025,US,NASDAQ,Healthcare,True
+Dorian LPG Ltd.,LPG,,US,NASDAQ,Consumer Discretionary,True
+Smart Sand Inc,SND,US83191H1077,US,NASDAQ,Materials,True
+"Eikon Therapeutics,",EIKN,US2825641036,US,NASDAQ,Healthcare,True
+Azenta Inc,AZTA,US1143401024,US,NASDAQ,Healthcare,True
+Accendra Health Inc,ACH,US6907321029,US,NYSE,Healthcare,True
+"AIRO Group Holdings,",AIRO,US0094221068,US,NASDAQ,Industrials,True
+Funko Inc,FNKO,US3610081057,US,NASDAQ,Consumer Discretionary,True
+Equillium Inc,EQ,US29446K1060,US,NASDAQ,Healthcare,True
+iRhythm Technologies Inc,IRTC,US4500561067,US,NASDAQ,Healthcare,True
+United Natural Foods Inc,UNFI,US9111631035,US,NYSE,Consumer Staples,True
+Octave Intelligence plc,OCTV,,US,NASDAQ,Technology,True
+Beacon Financial,BBT,US0846801076,US,NYSE,Financials,True
+"Rafael Holdings,",RFL,US75062E1064,US,NYSE,Healthcare,True
+Nkarta Inc,NKTX,US65487U1088,US,NASDAQ,Healthcare,True
+"Ardent Health Partners,",ARDT,US03980N1072,US,NYSE,Healthcare,True
+Cerence Inc,CRNC,US1567271093,US,NASDAQ,Technology,True
+Donaldson Company Inc,DCI,US2576511099,US,NYSE,Industrials,True
+AMN Healthcare Services Inc,AMN,US0017441017,US,NYSE,Healthcare,True
+Toro Co,TTC,US8910921084,US,NYSE,Industrials,True
+RH,RH,US74967X1037,US,NYSE,Consumer Discretionary,True
+Avery Dennison Corp,AVY,US0536111091,US,NYSE,Materials,True
+PennantPark Investment,PNNT,US7080621045,US,NYSE,Financials,True
+Ribbon Communications Inc,RBBN,US7625441040,US,NASDAQ,Technology,True
+Vericel Corp Ord,VCEL,US92346J1088,US,NASDAQ,Healthcare,True
+Telos Corp,TLS,US87969B1017,US,NASDAQ,Technology,True
+Marten Transport Ltd,MRTN,US5730751089,US,NASDAQ,Industrials,True
+One Gas Inc,OGS,US68235P1084,US,NYSE,Utilities,True
+CBIZ Inc,CBZ,US1248051021,US,NYSE,Industrials,True
+Coca-Cola Consolidated,COKE,US1910981026,US,NASDAQ,Consumer Staples,True
+Ziprecruiter Inc,ZIP,US98980B1035,US,NYSE,Communication Services,True
+NetScout Systems Inc,NTCT,US64115T1043,US,NASDAQ,Technology,True
+Black Hills,BKH,US0921131092,US,NYSE,Utilities,True
+Amplify Energy Corp,AMPY,US03212B1035,US,NYSE,Energy,True
+Everus Construction Group Inc,ECG,US3004261034,US,NYSE,Industrials,True
+OPTIMIZERx Corp,OPRX,US68401U2042,US,NASDAQ,Healthcare,True
+Lennox International Inc,LII,US5261071071,US,NYSE,Industrials,True
+Reliance Steel & Aluminum Co,RS,US7595091023,US,NYSE,Materials,True
+"Silvaco Group,",SVCO,US82728C1027,US,NASDAQ,Technology,True
+"Parabilis Medicines,",PBLS,US6989551014,US,NASDAQ,Healthcare,True
+Sezzle,SEZL,US78435P1057,US,NASDAQ,Financials,True
+Lincoln Educational Services,LINC,US5335351004,US,NASDAQ,Consumer Discretionary,True
+Myers Industries Inc,MYE,US6284641098,US,NYSE,Industrials,True
+La-Z-Boy Incorporated,LZB,US5053361078,US,NYSE,Consumer Discretionary,True
+MarketAxess Holdings Inc,MKTX,US57060D1081,US,NASDAQ,Financials,True
+GigaCloud Technology Inc Class A,GCT,,US,NASDAQ,Consumer Discretionary,True
+Jackson Financial Inc,JXN,US46817M1071,US,NYSE,Financials,True
+LeMaitre Vascular Inc,LMAT,US5255582018,US,NASDAQ,Healthcare,True
+AMC Global Media,AMCX,US00164V1035,US,NASDAQ,Communication Services,True
+"Lumexa Imaging Holdings,",LMRI,US5502491062,US,NASDAQ,Healthcare,True
+"TSS,",TSSI,US87288V1017,US,NASDAQ,Industrials,True
+Rimini Street Inc,RMNI,US76674Q1076,US,NASDAQ,Technology,True
+Healthcare Services Group Inc,HCSG,US4219061086,US,NASDAQ,Industrials,True
+TuHURA Biosciences Inc,HURA,US8989201038,US,NASDAQ,Healthcare,True
+Suja Life,SUJA,,US,NASDAQ,Consumer Staples,True
+"Yesway,",YSWY,US98585C1009,US,NASDAQ,Consumer Staples,True
+Evolus Inc,EOLS,US30052C1071,US,NASDAQ,Healthcare,True
+Designer Brands Inc,DBI,US2505651081,US,NYSE,Consumer Discretionary,True
+Armstrong World Industries Inc,AWI,US04247X1028,US,NYSE,Industrials,True
+Compass Minerals International Inc,CMP,US20451N1019,US,NYSE,Materials,True
+Onterris,ONT,,US,NASDAQ,Consumer Discretionary,True
+"Upstream Bio,",UPB,US91678A1079,US,NASDAQ,Healthcare,True
+Paysign Inc,PAYS,US70451A1043,US,NASDAQ,Financials,True
+"Pacira BioSciences,",PCRX,US6951271005,US,NASDAQ,Healthcare,True
+Southwest Gas Holdings Inc,SWX,US8448951025,US,NYSE,Utilities,True
+John Wiley & Sons,WLY,US9682232064,US,NYSE,Communication Services,True
+Zymeworks,ZYME,US98985Y1082,US,NASDAQ,Healthcare,True
+JBT Marel,JBTM,US4778391049,US,NYSE,Industrials,True
+Casella Waste Systems Inc,CWST,US1474481041,US,NASDAQ,Industrials,True
+Brunswick,BC,US1170431092,US,NYSE,Consumer Discretionary,True
+"Niagen Bioscience,",NAGE,US1710774076,US,NASDAQ,Healthcare,True
+Emergent Biosolutions Inc,EBS,US29089Q1058,US,NYSE,Healthcare,True
+Cathay General Bancorp,CATY,US1491501045,US,NASDAQ,Financials,True
+Belden Inc,BDC,US0774541066,US,NYSE,Industrials,True
+Prelude Therapeutics Inc,PRLD,US74065P1012,US,NASDAQ,Healthcare,True
+Byrna Technologies Inc,BYRN,US12448X2018,US,NASDAQ,Industrials,True
+VSE,VSEC,US9182841000,US,NASDAQ,Industrials,True
+Orion Group Holdings Inc,ORN,US68628V3087,US,NYSE,Industrials,True
+Ellington Credit Company Common Shares of Beneficial Interest,EARN,,US,NASDAQ,Real Estate,True
+ChargePoint Holdings Inc,CHPT,US15961R3030,US,NYSE,Industrials,True
+Eagle Bancorp Inc,EGBN,US2689481065,US,NASDAQ,Financials,True
+FirstCash Inc,FCFS,US33768G1076,US,NASDAQ,Financials,True
+Acuity Brands Inc,AYI,US00508Y1029,US,NYSE,Industrials,True
+Re Max Holding,RMAX,US75524W1080,US,NYSE,Real Estate,True
+Hess Midstream Partners LP,HESM,US4281031058,US,NYSE,Energy,True
+"Atlanta Braves Holdings, Inc. Series C",BATRK,US0477263026,US,NASDAQ,Communication Services,True
+Travel + Leisure Co,TNL,US8941641024,US,NYSE,Consumer Discretionary,True
+Titan International Inc,TWI,US88830M1027,US,NYSE,Industrials,True
+Quanterix Corp,QTRX,US74766Q1013,US,NASDAQ,Healthcare,True
+Popular Inc,BPOP,PR7331747001,US,NASDAQ,Financials,True
+Cannae Holdings Inc,CNNE,US13765N1072,US,NYSE,Financials,True
+GCM Grosvenor Inc,GCMG,US36831E1082,US,NASDAQ,Financials,True
+"Aktis Oncology, Inc. Common stock",AKTS,US01021M1045,US,NASDAQ,Healthcare,True
+IDACORP Inc,IDA,US4511071064,US,NYSE,Utilities,True
+Appian Corp,APPN,US03782L1017,US,NASDAQ,Technology,True
+Matson Inc,MATX,US57686G1058,US,NYSE,Industrials,True
+Vitesse Energy Inc,VTS,US92852X1037,US,NYSE,Energy,True
+Highpeak Energy Acquisition Corp,HPK,US43114Q1058,US,NASDAQ,Energy,True
+Anterix Inc,ATEX,US03676C1009,US,NASDAQ,Communication Services,True
+Corpay Inc,CPAY,US2199481068,US,NYSE,Financials,True
+LENZ Therapeutics Inc,LENZ,US52635N1037,US,NASDAQ,Healthcare,True
+Axos Financial Inc,AX,US05465C1009,US,NYSE,Financials,True
+PennyMac Finl Svcs Inc,PFSI,US70932M1071,US,NYSE,Financials,True
+"Bread Financial Holdings,",BFH,US0185811082,US,NYSE,Financials,True
+Ligand Pharmaceuticals Incorporated,LGND,US53220K5048,US,NASDAQ,Healthcare,True
+ABM Industries Incorporated,ABM,US0009571003,US,NYSE,Industrials,True
+CBL & Associates Properties Inc,CBL,US1248308785,US,NYSE,Real Estate,True
+"Array Digital Infrastructure,",AD,US9116841084,US,NYSE,Real Estate,True
+Pangaea Logistics Solutions Ltd. Common Shares,PANL,,US,NASDAQ,Consumer Discretionary,True
+"Savers Value Village,",SVV,US80517M1099,US,NYSE,Consumer Discretionary,True
+The Elmet Group Co.,ELMT,US2893951051,US,NASDAQ,Materials,True
+Cps Technologies,CPSH,US12619F1049,US,NASDAQ,Technology,True
+Syntec Optics Holdings,OPTX,US87169M1053,US,NASDAQ,Technology,True
+Horizon Technology Finance,HRZN,US44045A1025,US,NASDAQ,Financials,True
+"Artiva Biotherapeutics,",ARTV,US04317A1079,US,NASDAQ,Healthcare,True
+Clearpoint Neuro Inc,CLPT,US18507C1036,US,NASDAQ,Healthcare,True
+Farmers National Banc Corp,FMNB,US3096271073,US,NASDAQ,Financials,True
+Power Integrations Inc,POWI,US7392761034,US,NASDAQ,Technology,True
+First Merchants,FRME,US3208171096,US,NASDAQ,Financials,True
+Organogenesis Holdings Inc,ORGO,US68621F1021,US,NASDAQ,Healthcare,True
+Caseys General Stores Inc,CASY,US1475281036,US,NASDAQ,Consumer Staples,True
+"Metallus, Inc",MTUS,US8873991033,US,NYSE,Materials,True
+NorthWestern,NWE,US6680743050,US,NASDAQ,Utilities,True
+"Carter Bankshares,",CARE,US1461031064,US,NASDAQ,Financials,True
+"MapLight Therapeutics,",MPLT,US56565P1030,US,NASDAQ,Healthcare,True
+Heartland Express Inc,HTLD,US4223471040,US,NASDAQ,Industrials,True
+Goosehead Insurance Inc,GSHD,US38267D1090,US,NASDAQ,Financials,True
+Vail Resorts Inc,MTN,US91879Q1094,US,NYSE,Consumer Discretionary,True
+"Liberty Live Holdings, Inc. Series C Liberty Live Group",LLYVK,US5312297220,US,NASDAQ,Communication Services,True
+Airship AI Holdings Inc,AISP,US0089401089,US,NASDAQ,Technology,True
+Buckle Inc,BKE,US1184401065,US,NYSE,Consumer Discretionary,True
+Ares Commercial Real Estate,ACRE,US04013V1089,US,NYSE,Real Estate,True
+Treace Medical Concepts Inc,TMCI,US89455T1097,US,NASDAQ,Healthcare,True
+WSFS Financial,WSFS,US9293281021,US,NASDAQ,Financials,True
+"GRAIL, LLC",GRAL,US3847471014,US,NASDAQ,Healthcare,True
+"TechTarget,",TTGT,US87874R3084,US,NASDAQ,Communication Services,True
+Morningstar Inc,MORN,US6177001095,US,NASDAQ,Financials,True
+CEVA Inc,CEVA,US1572101053,US,NASDAQ,Technology,True
+CION Investment,CION,,US,NASDAQ,Financials,True
+Texas Pacific Land,TPL,,US,NASDAQ,Energy,True
+"BridgeBio Oncology Therapeutics,",BBOT,US1079241022,US,NASDAQ,Healthcare,True
+Columbus McKinnon,CMCO,US1993331057,US,NASDAQ,Industrials,True
+Sutro Biopharma,STRO,US8693672011,US,NASDAQ,Healthcare,True
+PRA Group Inc,PRAA,US69354N1063,US,NASDAQ,Financials,True
+TriMas,TRS,US8962152091,US,NASDAQ,Industrials,True
+"Palvella Therapeutics, Inc",PVLA,US6979471090,US,NASDAQ,Healthcare,True
+"First Tracks Biotherapeutics,",TRAX,US3371851029,US,NASDAQ,Healthcare,True
+Helios Technologies Inc,HLIO,US42328H1095,US,NYSE,Industrials,True
+Rush Enterprises A Inc,RUSHA,US7818462092,US,NASDAQ,Consumer Discretionary,True
+InnovAge Holding Corp,INNV,US45784A1043,US,NASDAQ,Healthcare,True
+Trupanion Inc,TRUP,US8982021060,US,NASDAQ,Financials,True
+CTO Realty Growth Inc,CTO,US22948Q1013,US,NYSE,Real Estate,True
+Airsculpt Technologies Inc,AIRS,US0094961002,US,NASDAQ,Healthcare,True
+Heritage Insurance Hldgs Inc,HRTG,US42727J1025,US,NYSE,Financials,True
+Dycom Industries Inc,DY,US2674751019,US,NYSE,Industrials,True
+FirstSun Capital Bancorp,FSUN,US33767U1079,US,NASDAQ,Financials,True
+Eton Pharmaceuticals Inc,ETON,US29772L1089,US,NASDAQ,Healthcare,True
+Blue Ridge Bankshares Inc,BRBS,US0958251052,US,NASDAQ,Financials,True
+Barings BDC Inc,BBDC,US06759L1035,US,NYSE,Financials,True
+Latham Group Inc,SWIM,US51819L1070,US,NASDAQ,Consumer Discretionary,True
+Lands’ End Inc,LE,US51509F1057,US,NASDAQ,Consumer Discretionary,True
+STAAR Surgical,STAA,US8523123052,US,NASDAQ,Healthcare,True
+"Ridgepost Capital, Inc",RPC,US69376K1060,US,NYSE,Financials,True
+TriNet Group Inc,TNET,US8962881079,US,NYSE,Industrials,True
+CNA Financial,CNA,US1261171003,US,NYSE,Financials,True
+Blue Bird Corp,BLBD,US0953061068,US,NASDAQ,Industrials,True
+Eagle Materials Inc,EXP,US26969P1084,US,NYSE,Materials,True
+Digi International Inc,DGII,US2537981027,US,NASDAQ,Technology,True
+Stratasys Ltd. Ordinary Shares (Israel),SSYS,,US,NASDAQ,Technology,True
+Precision BioSciences Inc,DTIL,US74019P2074,US,NASDAQ,Healthcare,True
+Amtech Systems Inc,ASYS,US0323325045,US,NASDAQ,Technology,True
+Materion,MTRN,US5766901012,US,NYSE,Materials,True
+Century Communities Inc,CCS,US1565043007,US,NYSE,Consumer Discretionary,True
+National Bank Holdings,NBHC,US6337071046,US,NYSE,Financials,True
+Corbus Pharmaceuticals Holding,CRBP,US21833P3010,US,NASDAQ,Healthcare,True
+Middleby Corp,MIDD,US5962781010,US,NASDAQ,Industrials,True
+"Septerna,",SEPN,US81734D1046,US,NASDAQ,Healthcare,True

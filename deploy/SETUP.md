@@ -8,8 +8,9 @@ This guide walks through setting up the AI Fund Manager on a Raspberry Pi 5 from
 
 - Raspberry Pi 5 running Raspberry Pi OS Lite (64-bit, Bookworm)
 - SSH access to the Pi on your local network
-- A GitHub account with this repository
-- API keys: OpenAI, Telegram bot token + chat ID
+- GitHub access to **both** repos: `ai-fund-manager` and `FinanceData`
+- API keys: OpenAI (GPT sim), Anthropic (Claude sim), Telegram bot token + chat ID
+- (For backups) a Google account / Drive — see `deploy/BACKUP.md`
 
 ---
 
@@ -30,21 +31,29 @@ source ~/.bashrc   # or re-login
 
 ---
 
-## 2. Clone the repository
+## 2. Clone the repositories (sibling layout)
+
+The fund depends on the shared **FinanceData** package, which must sit **next to**
+the fund repo (`../FinanceData`). Clone both under `~/Documents`:
 
 ```bash
-cd ~
-git clone https://github.com/YOUR_USERNAME/ai-fund-manager.git
+mkdir -p ~/Documents && cd ~/Documents
+git clone https://github.com/acwesterberg/ai-fund-manager.git ai-fund-manager
+git clone https://github.com/YOUR_USERNAME/FinanceData.git FinanceData   # shared data pkg
 cd ai-fund-manager
+git checkout deploy       # the Pi runs the deploy branch
 ```
 
-Create and activate the virtual environment, then install dependencies:
+Create the venv and install — **FinanceData first**, then the fund:
 
 ```bash
 uv venv .venv
-source .venv/bin/activate
+uv pip install -e ../FinanceData      # shared package (get_prices/news/fundamentals/fx/live)
 uv pip install -e .
 ```
+
+> If FinanceData lives elsewhere, set `FINANCEDATA_DIR=/path/to/FinanceData` in the
+> deploy environment — `deploy.sh` reads it (default `../FinanceData`).
 
 ---
 
@@ -73,13 +82,23 @@ DEPLOY_BRANCH=deploy
 
 ---
 
-## 4. Initialise the database
+## 4. Initialise the three funds
+
+Each `fund init` seeds that fund's DB with its config's `capital_sek`:
 
 ```bash
-~/.venv/bin/fund init
+.venv/bin/fund init                                              # 🇸🇪 Nordic REAL — 50k
+FUND_CONFIG=config/config_global.yaml .venv/bin/fund init        # 🌍 Global sim GPT-5.5 — 150k
+FUND_CONFIG=config/config_claude.yaml .venv/bin/fund init        # 🤖 Global sim Claude — 150k
 ```
 
-This creates `data/fund.db` and seeds the cash balance (50 000 SEK).
+This creates `data/fund.db`, `data/fund_global.db`, `data/fund_claude.db`.
+
+> **Restoring instead of starting fresh?** If you have a Google Drive backup
+> (see `deploy/BACKUP.md`), skip `init` and restore the `.db` files from the
+> latest `fund-backup-*.tgz` — that brings back full history. Fresh `init`
+> loses prior history; rebuild the real fund's positions with `fund fill` +
+> `fund set-cash` from your broker's current holdings.
 
 ---
 
@@ -88,29 +107,26 @@ This creates `data/fund.db` and seeds the cash balance (50 000 SEK).
 Copy the service files and enable them:
 
 ```bash
-sudo cp deploy/fundmgr-bot.service /etc/systemd/system/
-sudo cp deploy/fundmgr-web.service /etc/systemd/system/
+sudo cp deploy/fundmgr-bot.service        /etc/systemd/system/
+sudo cp deploy/fundmgr-web.service        /etc/systemd/system/   # real-fund dashboard
+sudo cp deploy/fundmgr-global-web.service /etc/systemd/system/   # sim dashboards (/sim, /sim-claude)
 ```
 
-Edit each file if your username is not `pi` or if you cloned the repo to a different path:
+Edit each file if your username is not `pi` or the repo path differs
+(they default to `/home/alexander/Documents/ai-fund-manager`):
 
 ```bash
 sudo nano /etc/systemd/system/fundmgr-bot.service
-sudo nano /etc/systemd/system/fundmgr-web.service
+# …web + global-web too
 ```
 
 Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable fundmgr-bot fundmgr-web
-sudo systemctl start  fundmgr-bot fundmgr-web
-```
-
-Check they came up:
-
-```bash
-systemctl status fundmgr-bot fundmgr-web
+sudo systemctl enable fundmgr-bot fundmgr-web fundmgr-global-web
+sudo systemctl start  fundmgr-bot fundmgr-web fundmgr-global-web
+systemctl status fundmgr-bot fundmgr-web fundmgr-global-web
 ```
 
 ---
@@ -126,7 +142,7 @@ sudo visudo -f /etc/sudoers.d/fundmgr
 Add this line (replace `pi` with your username if different):
 
 ```
-pi ALL=(ALL) NOPASSWD: /bin/systemctl restart fundmgr-bot, /bin/systemctl restart fundmgr-web
+pi ALL=(ALL) NOPASSWD: /bin/systemctl restart fundmgr-bot, /bin/systemctl restart fundmgr-web, /bin/systemctl restart fundmgr-global-web
 ```
 
 Save and exit. Verify with:
@@ -152,15 +168,19 @@ Then install the cron jobs:
 crontab -e
 ```
 
-Paste the contents of `deploy/cron.example` — see that file for the full schedule with comments. Summary:
+Paste the contents of `deploy/cron.example` — the full schedule for all three
+funds (run / check-news / check-stops) **plus the Google Drive backup jobs**.
+Summary:
 
-| Fund | Job | Time (CET) | Reason |
-|------|-----|------------|--------|
-| Nordic | Weekly run | Mon 09:30 | 30 min after OMX opens |
-| Nordic | News checks | Weekdays 09/11/14/16 | Full trading day coverage |
-| Nordic | Stop-loss | Weekdays 17:45 | 15 min after OMX closes |
-| Global sim | Weekly run | Mon 16:00 | NYSE open 30 min + EU still live |
-| Global sim | Stop-loss | Weekdays 22:15 | 15 min after NYSE closes |
+| Fund | Job | Time (CET) |
+|------|-----|------------|
+| 🇸🇪 Nordic REAL | Weekly run / news / stops | Mon 09:30 / wkdays / 15-min |
+| 🌍 Global sim GPT-5.5 | Weekly run / news / stops | Mon 16:00 / wkdays / 15-min |
+| 🤖 Global sim Claude | Weekly run / news / stops | Mon 16:30 / wkdays / 15-min |
+| Backups | DB → Google Drive | Daily 03:00 + post-Mon-run |
+
+The backup cron lines need **rclone + Google Drive** set up once — see
+`deploy/BACKUP.md`. (Without rclone the script still keeps local archives.)
 
 ---
 
@@ -272,7 +292,7 @@ curl http://localhost:8000/
 # Telegram bot — send /status from your Telegram app
 
 # Manual deploy test
-DEPLOY_BRANCH=deploy bash ~/ai-fund-manager/deploy/deploy.sh
+DEPLOY_BRANCH=deploy bash ~/Documents/ai-fund-manager/deploy/deploy.sh
 ```
 
 ---
@@ -362,7 +382,7 @@ journalctl -u fundmgr-web -n 50 --no-pager
 
 **Deploy script fails**
 ```bash
-tail -50 ~/ai-fund-manager/data/logs/deploy.log
+tail -50 ~/Documents/ai-fund-manager/data/logs/deploy.log
 ```
 
 **FinBERT model download is slow on first run**
@@ -372,4 +392,4 @@ The HuggingFace model (`ProsusAI/finbert`, ~440 MB) is downloaded on first use a
 Price data is cached in SQLite for `lookback_days` (252 days). Re-running the same day re-uses the cache.
 
 **`fund` command not found**
-Make sure you're using the venv's binary: `~/.venv/bin/fund` or `source ~/.venv/bin/activate` first.
+Make sure you're using the venv's binary: `~/Documents/ai-fund-manager/.venv/bin/fund` or `source ~/.venv/bin/activate` first.

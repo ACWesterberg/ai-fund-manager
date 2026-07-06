@@ -52,3 +52,14 @@
 
 # Stop-loss checks — every 15 min during NYSE trading hours (15:30–22:00 CET)
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_claude.log 2>&1
+
+
+# ═══ BACKUPS — SQLite DBs → Google Drive (rclone) ════════════════════════════
+# See deploy/BACKUP.md for one-time rclone setup.
+
+# Daily backup — 03:00 CET
+0 3 * * * cd /home/alexander/Documents/ai-fund-manager && deploy/backup.sh >> data/logs/backup.log 2>&1
+
+# Post-run snapshots after the Monday decision runs (captures post-decision state)
+0 11 * * 1 cd /home/alexander/Documents/ai-fund-manager && deploy/backup.sh >> data/logs/backup.log 2>&1
+0 18 * * 1 cd /home/alexander/Documents/ai-fund-manager && deploy/backup.sh >> data/logs/backup.log 2>&1

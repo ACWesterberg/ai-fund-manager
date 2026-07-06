@@ -33,13 +33,24 @@ source ~/.bashrc   # or re-login
 
 ## 2. Clone the repositories (sibling layout)
 
+GitHub no longer allows password auth over HTTPS, and the Pi must clone **and**
+keep pulling (deploy, FinanceData updates), so set up an SSH key first — one
+account-level key covers both private repos and all unattended pulls:
+
+```bash
+ssh-keygen -t ed25519 -C "raspberrypi-fund" -f ~/.ssh/id_ed25519 -N ""   # no passphrase → cron can pull
+cat ~/.ssh/id_ed25519.pub
+# → add at GitHub → Settings → SSH and GPG keys → New SSH key
+ssh -T git@github.com    # verify: "Hi <user>! You've successfully authenticated"
+```
+
 The fund depends on the shared **FinanceData** package, which must sit **next to**
-the fund repo (`../FinanceData`). Clone both under `~/Documents`:
+the fund repo (`../FinanceData`). Clone both (over SSH) under `~/Documents`:
 
 ```bash
 mkdir -p ~/Documents && cd ~/Documents
-git clone https://github.com/acwesterberg/ai-fund-manager.git ai-fund-manager
-git clone https://github.com/YOUR_USERNAME/FinanceData.git FinanceData   # shared data pkg
+git clone git@github.com:acwesterberg/ai-fund-manager.git ai-fund-manager
+git clone git@github.com:acwesterberg/FinanceData.git FinanceData   # adjust owner/name if different
 cd ai-fund-manager
 git checkout deploy       # the Pi runs the deploy branch
 ```

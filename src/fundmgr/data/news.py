@@ -25,9 +25,10 @@ def fetch_news(
 
     Only stale/missing tickers hit the network; the rest are served from the shared
     SQLite cache (so this fetch also warms the cache for DeepSwing's intraday scans,
-    and vice-versa). When RSS/NewsAPI find nothing for a ticker, yfinance fills in
-    (Finnhub is skipped for the Nordic fund). Set force_refresh=True for freshness-
-    sensitive callers such as the news-trigger scan."""
+    and vice-versa). When RSS/NewsAPI find nothing for a ticker, the fallback fills
+    in per-ticker: Finnhub for US symbols (when FINNHUB_API_KEY is set) and yfinance
+    for everything else — the universe is global, not Nordic-only. Set
+    force_refresh=True for freshness-sensitive callers such as the news-trigger scan."""
     symbols = [t.yahoo_ticker for t in tickers]
     names = {t.yahoo_ticker: t.name for t in tickers}
     return get_news_cached(
@@ -36,7 +37,7 @@ def fetch_news(
         names=names,
         max_age_hours=max_age_hours,
         ttl_hours=ttl_hours,
-        market="nordic",
+        market=None,  # global universe → infer US (Finnhub) vs non-US per ticker
         use_fallback=use_fallback,
         force_refresh=force_refresh,
     )

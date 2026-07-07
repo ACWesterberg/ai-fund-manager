@@ -311,6 +311,7 @@ def snapshot_to_dict(
         "fields": fields,
     }
     if cfg is not None:
+        from fundmgr.engine.optimizer import guidance_fingerprint
         out["regime"] = {
             "capital_sek":  cfg.capital_sek,
             "provider":     cfg.llm.provider,
@@ -318,5 +319,6 @@ def snapshot_to_dict(
             "n_samples":    cfg.llm.n_samples,
             "session":      None,  # nullable shared key (swing-trader sets us/european)
             "config_hash":  cfg.config_hash(),
+            "guidance_hash": guidance_fingerprint(cfg),  # None when no MIPRO guidance active
         }
     return json.dumps(out)

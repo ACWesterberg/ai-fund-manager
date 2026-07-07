@@ -920,6 +920,26 @@ class Store:
             ).fetchone()
         return row["d"] if row and row["d"] else None
 
+    def close_near(
+        self, ticker: str, target_date: str, max_delta_days: int = 7
+    ) -> tuple[str, float] | None:
+        """Cached (date, close) whose date is closest to target_date, within a tolerance.
+
+        Used to evaluate a decision over a fixed horizon (decision_date + N days)
+        rather than at whatever moment the run happens, so outcomes are
+        comparable. Returns None if the cache has nothing near the target.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT date, close, ABS(JULIANDAY(date) - JULIANDAY(?)) AS delta "
+                "FROM price_cache WHERE ticker = ? AND close IS NOT NULL "
+                "ORDER BY delta ASC LIMIT 1",
+                (target_date, ticker),
+            ).fetchone()
+        if not row or row["delta"] is None or row["delta"] > max_delta_days:
+            return None
+        return row["date"], float(row["close"])
+
     def save_benchmark(self, rows: list[dict]) -> None:
         """rows: list of {date, close}."""
         now = datetime.utcnow().isoformat()

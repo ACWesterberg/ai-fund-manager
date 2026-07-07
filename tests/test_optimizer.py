@@ -10,6 +10,7 @@ from fundmgr.engine.optimizer import (
     build_trainset,
     decision_metric,
     fields_from_snapshot,
+    guidance_fingerprint,
     guidance_path,
     load_guidance,
     price_from_snapshot,
@@ -318,3 +319,30 @@ def test_build_prompt_without_guidance_unchanged(cfg, store):
     snap = PortfolioSnapshot(positions=[], cash_sek=150_000)
     system, _, _ = build_prompt(cfg, snap, {}, store, run_id="r1")
     assert "Decision Guidance" not in system
+
+
+# ── Guidance fingerprint (A/B tracking) ───────────────────────────────────────
+
+def test_guidance_fingerprint_none_without_artifact(cfg):
+    assert guidance_fingerprint(cfg) is None
+
+
+def test_guidance_fingerprint_changes_with_content(cfg):
+    _write_guidance(cfg, "Rule A.")
+    fp_a = guidance_fingerprint(cfg)
+    assert fp_a and len(fp_a) == 12
+    _write_guidance(cfg, "Rule B — different.")
+    assert guidance_fingerprint(cfg) != fp_a
+
+
+def test_snapshot_regime_records_guidance_hash(cfg, store):
+    from fundmgr.engine.prompt import snapshot_to_dict
+
+    snap = PortfolioSnapshot(positions=[], cash_sek=150_000)
+    # No guidance yet → null in the regime
+    plain = json.loads(snapshot_to_dict(snap, "sys", "user", {}, cfg))
+    assert plain["regime"]["guidance_hash"] is None
+
+    _write_guidance(cfg, "Prefer momentum entries.")
+    guided = json.loads(snapshot_to_dict(snap, "sys", "user", {}, cfg))
+    assert guided["regime"]["guidance_hash"] == guidance_fingerprint(cfg)

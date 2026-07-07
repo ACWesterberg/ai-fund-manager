@@ -63,6 +63,20 @@ def load_guidance(cfg: AppConfig) -> str:
         return ""
 
 
+def guidance_fingerprint(cfg: AppConfig) -> str | None:
+    """Short hash of the active guidance instructions, or None when none is applied.
+
+    Recorded in each run's snapshot regime so score-runs can compare guided vs
+    unguided weeks (and which guidance version) — the A/B signal that tells us
+    whether the optimizer actually helps.
+    """
+    guidance = load_guidance(cfg)
+    if not guidance:
+        return None
+    import hashlib
+    return hashlib.sha256(guidance.encode()).hexdigest()[:12]
+
+
 # ── Metric ───────────────────────────────────────────────────────────────────
 
 def decision_metric(example, prediction, trace=None) -> float:

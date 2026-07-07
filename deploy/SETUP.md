@@ -282,11 +282,11 @@ No GitHub secrets or Tailscale required. The Pi needs outbound internet access t
 
 GitHub POSTs to your Pi's FastAPI `/deploy` endpoint on every push.
 
-Requires the Pi's port 8000 to be reachable from the internet — either via port forwarding on your router or a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/).
+Requires the Pi's fund-manager web port (default **8010**) to be reachable from the internet — either via port forwarding on your router or a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/).
 
 1. Add `DEPLOY_WEBHOOK_SECRET` (any random string) to `.env` on the Pi and restart `fundmgr-web`
 2. In GitHub: **Settings → Webhooks → Add webhook**
-   - Payload URL: `http://YOUR_PI_IP:8000/deploy`
+   - Payload URL: `http://YOUR_PI_IP:8010/deploy`
    - Content type: `application/json`
    - Secret: the same random string
    - Event: **Just the push event**
@@ -298,7 +298,8 @@ Requires the Pi's port 8000 to be reachable from the internet — either via por
 
 ```bash
 # Web dashboard
-curl http://localhost:8000/
+curl http://localhost:8010/     # Nordic real fund
+curl http://localhost:8011/sim  # Global sim dashboards
 
 # Telegram bot — send /status from your Telegram app
 
@@ -342,7 +343,7 @@ This lets you access the dashboard at `https://fund.yourdomain.com` from anywher
 4. Under **Public Hostname**, click **Add a public hostname**:
    - Subdomain: `fund` (or whatever you want — e.g. `dashboard`)
    - Domain: your domain
-   - Service Type: `HTTP`, URL: `localhost:8000`
+   - Service Type: `HTTP`, URL: `localhost:8010`
 5. Click **Save hostname**
 
 Your dashboard will be at `https://fund.yourdomain.com` once the tunnel is running.

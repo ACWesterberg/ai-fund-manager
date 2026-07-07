@@ -365,7 +365,7 @@ async def universe(request: Request):
 
 # ── GitHub webhook deploy endpoint ────────────────────────────────────────────
 # Alternative to Tailscale SSH: GitHub sends a POST here on push to `deploy`.
-# Requires DEPLOY_WEBHOOK_SECRET in .env and the Pi's port 8000 accessible
+# Requires DEPLOY_WEBHOOK_SECRET in .env and the fund-manager web port accessible
 # (e.g. via Cloudflare Tunnel or port forwarding).
 
 ROOT_DIR = Path(__file__).resolve().parents[3]

@@ -69,11 +69,11 @@ done
 [ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
 
 log "Restarting services…"
-sudo systemctl restart fundmgr-bot fundmgr-web
+sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
 
 # Verify services came back up
 sleep 2
-for svc in fundmgr-bot fundmgr-web; do
+for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
     if systemctl is-active --quiet "$svc"; then
         log "  ✓ $svc is running"
     else

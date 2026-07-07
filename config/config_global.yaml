@@ -60,7 +60,7 @@ screener:
 
 web:
   host: "0.0.0.0"
-  port: 8001
+  port: 8011
 
 reporting:
   currency: SEK

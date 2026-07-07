@@ -6,9 +6,10 @@ A DSPy re-expression of the weekly decision step that currently lives in
 parsing, N-sample consensus).
 
 Goal of this file: show what the program *shape* looks like so we can decide
-whether to adopt DSPy before committing to it. Nothing here is imported by the
-CLI or the run loop. `dspy` is NOT yet a dependency — add it (`uv add dspy`)
-only if we move forward.
+whether to adopt DSPy before committing to it. The live run path still goes
+through prompt.py + client.py; however, `engine/optimizer.py` (fund optimize)
+now uses WeeklyDecision + build_lm from here to MIPRO-optimize the decision
+instructions offline. `dspy` is an optional extra: uv sync --extra optimize.
 
 What this demonstrates, in order of near-term value:
   1. A typed Signature mirroring build_prompt's inputs -> DecisionRun output.
@@ -129,22 +130,30 @@ if dspy is not None:
 # comparing the models, not two slightly different prompt paths.
 
 
-def build_lm(cfg: "AppConfig"):
-    """Map our AppConfig.llm onto a dspy.LM. Mirrors client.py's per-provider quirks."""
-    if dspy is None:
-        raise RuntimeError("dspy not installed — this is a sketch")
+def build_lm(cfg: "AppConfig", model_id: str | None = None):
+    """Map our AppConfig.llm onto a dspy.LM. Mirrors client.py's per-provider quirks.
 
-    model = f"{cfg.llm.provider}/{cfg.llm.model_id}"  # e.g. "openai/gpt-5.5", "anthropic/claude-opus-4-8"
+    `model_id` overrides cfg.llm.model_id (same provider) — used by the optimizer
+    to run a heavier prompt-writing model next to the decision-tier task model.
+    """
+    if dspy is None:
+        raise RuntimeError("dspy not installed — install with: uv sync --extra optimize")
+
+    model_id = model_id or cfg.llm.model_id
+    model = f"{cfg.llm.provider}/{model_id}"  # e.g. "openai/gpt-5.5", "anthropic/claude-opus-4-8"
     kwargs = {"max_tokens": cfg.llm.max_tokens}
 
     # Reproduce the temperature carve-outs already in client.py.
-    temp_free = cfg.llm.model_id.startswith(
+    temp_free = model_id.startswith(
         ("gpt-5", "o1", "o3", "o4", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")
     )
     if not temp_free:
         kwargs["temperature"] = cfg.llm.temperature
-    if cfg.llm.reasoning_effort and cfg.llm.model_id.startswith(("gpt-5", "o1", "o3", "o4")):
-        kwargs["reasoning_effort"] = cfg.llm.reasoning_effort
+    if model_id.startswith(("gpt-5", "o1", "o3", "o4")):
+        # OpenAI reasoning models reject small completion budgets via litellm.
+        kwargs["max_tokens"] = max(kwargs["max_tokens"], 16000)
+        if cfg.llm.reasoning_effort:
+            kwargs["reasoning_effort"] = cfg.llm.reasoning_effort
 
     return dspy.LM(model, **kwargs)
 

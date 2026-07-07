@@ -44,6 +44,9 @@ dependencies = [
 torch = [
     "torch>=2.2",        # install separately: pip install torch --index-url https://download.pytorch.org/whl/cpu
 ]
+optimize = [
+    "dspy>=2.6",         # MIPROv2 prompt optimization (fund optimize)
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

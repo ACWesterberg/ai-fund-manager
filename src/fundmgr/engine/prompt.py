@@ -201,9 +201,18 @@ def build_prompt(
     """
     mandate = _load_mandate(cfg.mandate_path)
 
+    # Optimized decision guidance (from `fund optimize`, once compiled)
+    from fundmgr.engine.optimizer import load_guidance
+    guidance = load_guidance(cfg)
+    guidance_section = (
+        "\n\n---\n## Decision Guidance (optimized from your realized outcomes)\n" + guidance
+        if guidance else ""
+    )
+
     # Add structured output instruction to mandate
     system = (
         mandate
+        + guidance_section
         + "\n\n---\n"
         + "Return ONLY a valid JSON object matching the DecisionRun schema. "
         + "No markdown, no explanation outside the JSON."

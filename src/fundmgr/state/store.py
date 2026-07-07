@@ -688,16 +688,27 @@ class Store:
 
     # ── Decision outcomes ─────────────────────────────────────────────────────
 
-    def seed_outcomes_for_run(self, run_id: str, actions_json: str) -> None:
-        """Seed unevaluated outcome rows when a run is saved, for later evaluation."""
+    def seed_outcomes_for_run(
+        self,
+        run_id: str,
+        actions_json: str,
+        prices: dict[str, float] | None = None,
+    ) -> None:
+        """Seed unevaluated outcome rows when a run is saved, for later evaluation.
+
+        `prices` maps ticker -> share price (native currency) at decision time.
+        Tickers without a known price get NULL — the evaluator skips them —
+        rather than a wrong value like the trade's SEK estimate.
+        """
         import json as _json
         actions = _json.loads(actions_json)
+        prices = prices or {}
         with self._conn() as conn:
             for a in actions:
                 conn.execute(
                     "INSERT OR IGNORE INTO decision_outcomes "
                     "(run_id, ticker, action, confidence, price_at_decision, thesis) VALUES (?, ?, ?, ?, ?, ?)",
-                    (run_id, a["ticker"], a["side"], a.get("confidence"), a.get("sek_estimate"), a.get("thesis")),
+                    (run_id, a["ticker"], a["side"], a.get("confidence"), prices.get(a["ticker"]), a.get("thesis")),
                 )
 
     def update_outcome(self, outcome: "DecisionOutcome") -> None:
@@ -734,9 +745,82 @@ class Store:
                 id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
                 action=r["action"], confidence=r["confidence"],
                 price_at_decision=r["price_at_decision"], thesis=r["thesis"],
+                decision_date=r["run_ts"][:10],
             )
             for r in rows
         ]
+
+    def get_evaluated_outcomes(self) -> list["DecisionOutcome"]:
+        """Return all retrospectively evaluated outcomes with their run dates (optimizer training data)."""
+        from fundmgr.state.models import DecisionOutcome as DO
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
+                "JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.outperformed IS NOT NULL"
+            ).fetchall()
+        return [
+            DO(
+                id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
+                action=r["action"], confidence=r["confidence"],
+                price_at_decision=r["price_at_decision"],
+                price_at_evaluation=r["price_at_evaluation"],
+                benchmark_return_pct=r["benchmark_return_pct"],
+                position_return_pct=r["position_return_pct"],
+                outperformed=bool(r["outperformed"]),
+                evaluation_date=r["evaluation_date"],
+                thesis=r["thesis"],
+                decision_date=r["run_ts"][:10],
+            )
+            for r in rows
+        ]
+
+    def get_all_outcomes(self) -> list["DecisionOutcome"]:
+        """Every outcome row (evaluated or pending) with its run date — used by repair-outcomes."""
+        from fundmgr.state.models import DecisionOutcome as DO
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
+                "JOIN recommendations r ON do.run_id = r.run_id"
+            ).fetchall()
+        return [
+            DO(
+                id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
+                action=r["action"], confidence=r["confidence"],
+                price_at_decision=r["price_at_decision"],
+                price_at_evaluation=r["price_at_evaluation"],
+                benchmark_return_pct=r["benchmark_return_pct"],
+                position_return_pct=r["position_return_pct"],
+                outperformed=bool(r["outperformed"]) if r["outperformed"] is not None else None,
+                evaluation_date=r["evaluation_date"],
+                thesis=r["thesis"],
+                decision_date=r["run_ts"][:10],
+            )
+            for r in rows
+        ]
+
+    def set_outcome_price_at_decision(self, outcome_id: int, price: float | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE decision_outcomes SET price_at_decision = ? WHERE id = ?",
+                (price, outcome_id),
+            )
+
+    def clear_outcome_evaluation(self, outcome_id: int) -> None:
+        """Reset an evaluated outcome back to pending so it can be re-evaluated."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE decision_outcomes SET price_at_evaluation = NULL, "
+                "benchmark_return_pct = NULL, position_return_pct = NULL, "
+                "outperformed = NULL, evaluation_date = NULL WHERE id = ?",
+                (outcome_id,),
+            )
+
+    def deactivate_all_learnings(self) -> int:
+        """Deactivate every active learning (used after repairing corrupted outcome data)."""
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE learnings SET is_active = 0 WHERE is_active = 1")
+            return cur.rowcount
 
     def get_calibration_stats(self) -> dict:
         """Return accuracy stats by confidence bucket for use in learnings generation."""

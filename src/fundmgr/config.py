@@ -80,6 +80,16 @@ class ScreenerConfig:
 
 
 @dataclass
+class OptimizerConfig:
+    # Heavy model that *writes* candidate instructions (MIPRO prompt_model).
+    # None → derived from llm.provider at run time (anthropic → claude-opus-4-8, openai → gpt-5.5).
+    prompt_model_id: str | None = None
+    min_outcomes: int = 30       # evaluated outcomes required before optimization runs
+    min_examples: int = 8        # usable run-level examples required after reconstruction
+    compiled_dir: Path = field(default_factory=lambda: CONFIG_DIR / "compiled")
+
+
+@dataclass
 class AppConfig:
     capital_sek: float = 50000.0
     cadence: str = "weekly"
@@ -90,6 +100,7 @@ class AppConfig:
     data: DataConfig = field(default_factory=DataConfig)
     web: WebConfig = field(default_factory=WebConfig)
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -222,6 +233,14 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     if screener_raw := raw.get("screener"):
         cfg.screener = ScreenerConfig(**screener_raw)
+
+    if opt_raw := raw.get("optimizer"):
+        compiled = opt_raw.pop("compiled_dir", None)
+        cfg.optimizer = OptimizerConfig(**opt_raw)
+        if compiled:
+            cfg.optimizer.compiled_dir = ROOT / compiled
+    if env_prompt_model := os.getenv("FUND_OPTIMIZER_PROMPT_MODEL"):
+        cfg.optimizer.prompt_model_id = env_prompt_model
 
     DATA_DIR.mkdir(exist_ok=True)
     (DATA_DIR / "reports").mkdir(exist_ok=True)

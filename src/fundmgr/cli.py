@@ -280,9 +280,15 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
             sampling_log=json.dumps(sampling),
         )
         store.save_recommendation(rec)
+        decision_prices = {
+            a.ticker: features[a.ticker].last_price
+            for a in guardrail_result.approved_actions
+            if a.ticker in features and features[a.ticker].last_price
+        }
         store.seed_outcomes_for_run(
             run_id,
             json.dumps([a.model_dump() for a in guardrail_result.approved_actions]),
+            prices=decision_prices,
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
 
@@ -1133,6 +1139,76 @@ def export_dspy(output: str, score_first: bool):
         click.echo("No scored runs available yet — run 'fund score-runs' after at least one full week.")
     else:
         click.echo(f"  Exported {count} example(s) → {output}")
+
+
+@cli.command()
+@click.option("--min-outcomes", type=int, default=None,
+              help="Override the evaluated-outcome threshold from config")
+@click.option("--dry-run", is_flag=True, help="Report trainset stats without running MIPRO")
+def optimize(min_outcomes: int | None, dry_run: bool):
+    """Optimize the decision prompt from evaluated outcomes (DSPy MIPROv2).
+
+    Builds one training example per past run whose 28-day per-ticker outcomes
+    vs the benchmark are known, searches instruction space for the
+    WeeklyDecision signature with an alpha-weighted metric, and saves the
+    winning instructions as guidance injected into every future 'fund run'.
+    """
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    cfg, store = _get_store()
+    from fundmgr.engine.optimizer import build_trainset, guidance_path, run_optimization
+
+    threshold = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
+    evaluated = store.get_evaluated_outcomes()
+    examples = build_trainset(store)
+
+    click.echo("\n─── Prompt Optimizer ───────────────────────────────")
+    click.echo(f"  Evaluated outcomes:   {len(evaluated)} (need {threshold})")
+    click.echo(f"  Usable run examples:  {len(examples)} (need {cfg.optimizer.min_examples})")
+    click.echo(f"  Guidance artifact:    {guidance_path(cfg)}")
+
+    if dry_run:
+        click.echo("  (dry run — MIPRO not executed)")
+        return
+
+    if run_optimization(cfg, store, min_outcomes=min_outcomes):
+        click.echo("\n  ✓ New guidance saved — it will be injected into the next 'fund run'.")
+    else:
+        click.echo("\n  No new guidance produced (threshold not met or optimization failed).")
+
+
+@cli.command("repair-outcomes")
+@click.option("--dry-run", is_flag=True, help="Report what would change without writing")
+@click.option("--deactivate-learnings", is_flag=True,
+              help="Also deactivate all active learnings (they were distilled from the corrupted returns)")
+def repair_outcomes_cmd(dry_run: bool, deactivate_learnings: bool):
+    """Repair decision outcomes poisoned by the price_at_decision seeding bug.
+
+    Historical rows stored the trade's SEK estimate as the entry price (and
+    measured the benchmark from the start of the cache), so every evaluated
+    return was wrong. This re-derives the true entry price from each run's
+    stored prompt snapshot and recomputes the returns over the correct window.
+    """
+    from fundmgr.engine.evaluator import repair_outcomes
+
+    cfg, store = _get_store()
+    stats = repair_outcomes(store, dry_run=dry_run)
+
+    mode = "DRY RUN — nothing written" if dry_run else "applied"
+    click.echo(f"\n─── Outcome Repair ({mode}) ─────────────────────────")
+    click.echo(f"  Rows checked:              {stats['checked']}")
+    click.echo(f"  Entry prices fixed:        {stats['price_fixed']}")
+    click.echo(f"  Evaluations recomputed:    {stats['recomputed']}")
+    click.echo(f"  Reset to pending:          {stats['reset_pending']}")
+    click.echo(f"  Unrecoverable (cleared):   {stats['unrecoverable']}")
+
+    if deactivate_learnings and not dry_run:
+        n = store.deactivate_all_learnings()
+        click.echo(f"  Learnings deactivated:     {n}")
+    elif stats["price_fixed"] or stats["recomputed"]:
+        click.echo("\n  ⚠ Existing learnings were distilled from the corrupted returns —")
+        click.echo("    consider re-running with --deactivate-learnings.")
 
 
 @cli.command("reject-rates")

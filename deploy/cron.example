@@ -54,6 +54,15 @@
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_claude.log 2>&1
 
 
+# ═══ PROMPT OPTIMIZATION (DSPy MIPROv2) — Sunday, markets closed ═════════════
+# Needs the optional dep (uv sync --extra optimize) + 30 evaluated outcomes and
+# 8 scored runs per fund; skips harmlessly until then. Staggered per fund.
+
+0 2 * * 0 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund optimize >> data/logs/optimize.log 2>&1
+30 2 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund optimize >> data/logs/optimize_global.log 2>&1
+0 3 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund optimize >> data/logs/optimize_claude.log 2>&1
+
+
 # ═══ BACKUPS — SQLite DBs → Google Drive (rclone) ════════════════════════════
 # See deploy/BACKUP.md for one-time rclone setup.
 

@@ -46,9 +46,13 @@ def fetch_and_cache_benchmark(
     return True
 
 
-def get_benchmark_return_pct(store: Store, since_date: str) -> float | None:
-    """Return percentage change of benchmark from since_date to latest available."""
+def get_benchmark_return_pct(
+    store: Store, since_date: str, until_date: str | None = None
+) -> float | None:
+    """Return percentage change of benchmark from since_date to until_date (default: latest available)."""
     rows = store.get_benchmark(since_date=since_date)
+    if until_date:
+        rows = [r for r in rows if r["date"] <= until_date]
     if len(rows) < 2:
         return None
     start = rows[0]["close"]

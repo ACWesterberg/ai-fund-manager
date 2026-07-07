@@ -188,10 +188,18 @@ Summary:
 | 🇸🇪 Nordic REAL | Weekly run / news / stops | Mon 09:30 / wkdays / 15-min |
 | 🌍 Global sim GPT-5.5 | Weekly run / news / stops | Mon 16:00 / wkdays / 15-min |
 | 🤖 Global sim Claude | Weekly run / news / stops | Mon 16:30 / wkdays / 15-min |
+| All funds | Prompt optimize (MIPRO) | Sun 02:00 / 02:30 / 03:00 |
 | Backups | DB → Google Drive | Daily 03:00 + post-Mon-run |
 
 The backup cron lines need **rclone + Google Drive** set up once — see
 `deploy/BACKUP.md`. (Without rclone the script still keeps local archives.)
+
+The optimize jobs need the optional DSPy dependency (`uv pip install -e ".[optimize]"`).
+`fund optimize` rebuilds each fund's decision guidance from decisions whose 28-day
+outcome vs the benchmark is known (MIPROv2, alpha-weighted metric); the winning
+instructions land in `config/compiled/<fund-db>_guidance.json` and are appended to
+the mandate on every subsequent `fund run`. Until 30 evaluated outcomes and 8 scored
+runs accumulate, the job logs a skip and exits — safe to install from day one.
 
 ---
 

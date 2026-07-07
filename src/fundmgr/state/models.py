@@ -118,6 +118,7 @@ class DecisionOutcome:
     outperformed: bool | None = None
     evaluation_date: str | None = None
     thesis: str | None = None
+    decision_date: str | None = None  # run date (YYYY-MM-DD), from the recommendation timestamp
     id: int | None = None
 
     @property

@@ -141,11 +141,45 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     bench_ok = fetch_and_cache_benchmark(store, cfg.benchmark, cfg.data.lookback_days, force_refresh)
     click.echo(f"      {'✓ OK' if bench_ok else '✗ Failed'}")
 
-    # ── Step 4: Nordic news + FinBERT sentiment ───────────────────────────────
+    # ── Step 4: Global macro context ─────────────────────────────────────────
     since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+    macro_block = ""
+    if not skip_macro:
+        click.echo(f"\n[4/6] Fetching global macro context…")
+        macro_indicators = fetch_macro_indicators()
+        macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
+        macro_block = build_macro_block(macro_indicators, macro_headlines)
+        ind_ok = sum(1 for i in macro_indicators if i.price is not None)
+        click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
+    else:
+        click.echo(f"\n[4/6] Global macro context skipped.")
+
+    # ── Step 5: Compute features + pre-screen ─────────────────────────────────
+    click.echo(f"\n[5/6] Computing features…")
+    features = build_all_features(tickers, store, cfg, fetch_result)
+    apply_to_features(features, store)
+
+    fund_count = sum(1 for f in features.values() if f.ev_to_ebitda is not None or f.revenue_growth_pct is not None)
+    stale = [sym for sym, f in features.items() if f.is_stale]
+    click.echo(f"      {len(features)} tickers with features  ({fund_count} with fundamentals data)")
+    if stale:
+        click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
+
+    held_tickers = {p.ticker for p in store.get_positions()}
+    screened_features, screened_out = screen(features, held_tickers, top_n=cfg.screener.top_n)
+    if screened_out > 0:
+        click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
+                   f"({screened_out} filtered out, held positions always included)")
+
+    # ── Step 6: News + FinBERT — screener candidates only (not full universe) ─
     if not skip_news and cfg.data.news_feeds:
-        click.echo(f"\n[4/6] Fetching Nordic news from {len(cfg.data.news_feeds)} feeds…")
-        ticker_news = fetch_news(cfg.data.news_feeds, tickers, max_age_hours=72)
+        news_symbols = set(screened_features.keys()) | held_tickers
+        news_tickers = [t for t in tickers if t.yahoo_ticker in news_symbols]
+        click.echo(
+            f"\n[6/6] Fetching news for {len(news_tickers)} screener candidates "
+            f"(from {len(cfg.data.news_feeds)} feeds)…"
+        )
+        ticker_news = fetch_news(cfg.data.news_feeds, news_tickers, max_age_hours=72)
         total_headlines = sum(len(v) for v in ticker_news.values())
         click.echo(f"      {total_headlines} matched headlines across {len(ticker_news)} tickers")
         if total_headlines > 0 and cfg.data.sentiment.enabled:
@@ -154,38 +188,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
                 ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device
             )
     else:
-        click.echo(f"\n[4/6] Nordic news skipped.")
+        click.echo(f"\n[6/6] News skipped.")
 
-    # ── Step 5: Global macro context ─────────────────────────────────────────
-    macro_block = ""
-    if not skip_macro:
-        click.echo(f"\n[5/6] Fetching global macro context…")
-        macro_indicators = fetch_macro_indicators()
-        macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
-        macro_block = build_macro_block(macro_indicators, macro_headlines)
-        ind_ok = sum(1 for i in macro_indicators if i.price is not None)
-        click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
-    else:
-        click.echo(f"\n[5/6] Global macro context skipped.")
-
-    # ── Step 6: Compute features + attach fundamentals & sentiment ────────────
-    click.echo(f"\n[6/6] Computing features…")
-    features = build_all_features(tickers, store, cfg, fetch_result)
-    apply_to_features(features, store)
     attach_sentiment_to_features(features, store, since_date=since_news)
-
-    fund_count = sum(1 for f in features.values() if f.ev_to_ebitda is not None or f.revenue_growth_pct is not None)
-    stale = [sym for sym, f in features.items() if f.is_stale]
-    click.echo(f"      {len(features)} tickers with features  ({fund_count} with fundamentals data)")
-    if stale:
-        click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
-
-    # ── Pre-screen: cut to top_n candidates before LLM ───────────────────────
-    held_tickers = {p.ticker for p in store.get_positions()}
-    screened_features, screened_out = screen(features, held_tickers, top_n=cfg.screener.top_n)
-    if screened_out > 0:
-        click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
-                   f"({screened_out} filtered out, held positions always included)")
 
     # ── Data quality summary ──────────────────────────────────────────────────
     click.echo(f"\n{'─'*56}")

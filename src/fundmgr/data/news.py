@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from financedata import get_news as fd_get_news, score_sentiment, score_and_save, get_cache as fd_cache_getter
+from financedata import get_news_cached, score_sentiment, score_and_save, get_cache as fd_cache_getter
 
 from fundmgr.config import SentimentConfig, UniverseTicker
 from fundmgr.state.store import Store
@@ -17,11 +17,29 @@ def fetch_news(
     feeds: list[str],
     tickers: list[UniverseTicker],
     max_age_hours: int = 72,
+    ttl_hours: float = 6.0,
+    use_fallback: bool = True,
+    force_refresh: bool = False,
 ) -> dict[str, list[dict]]:
-    """Pull RSS feeds and match headlines to tickers via financedata."""
+    """Fetch headlines matched to tickers via financedata's shared read-through cache.
+
+    Only stale/missing tickers hit the network; the rest are served from the shared
+    SQLite cache (so this fetch also warms the cache for DeepSwing's intraday scans,
+    and vice-versa). When RSS/NewsAPI find nothing for a ticker, yfinance fills in
+    (Finnhub is skipped for the Nordic fund). Set force_refresh=True for freshness-
+    sensitive callers such as the news-trigger scan."""
     symbols = [t.yahoo_ticker for t in tickers]
     names = {t.yahoo_ticker: t.name for t in tickers}
-    return fd_get_news(symbols, feeds=feeds, names=names, max_age_hours=max_age_hours)
+    return get_news_cached(
+        symbols,
+        feeds=feeds,
+        names=names,
+        max_age_hours=max_age_hours,
+        ttl_hours=ttl_hours,
+        market="nordic",
+        use_fallback=use_fallback,
+        force_refresh=force_refresh,
+    )
 
 
 def score_and_cache_sentiment(
@@ -62,7 +80,11 @@ def check_news_triggers(
     if not cfg.enabled:
         return []
 
-    ticker_news = fetch_news(feeds, tickers, max_age_hours=max_age_hours)
+    # Triggers must reflect the very latest headlines, so bypass the cache and skip
+    # the per-ticker yfinance fallback (too costly across the whole universe here).
+    ticker_news = fetch_news(
+        feeds, tickers, max_age_hours=max_age_hours, use_fallback=False, force_refresh=True
+    )
     if not ticker_news:
         return []
 

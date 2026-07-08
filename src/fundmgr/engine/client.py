@@ -130,6 +130,15 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
     _TEMPERATURE_FREE = ("claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")
     use_temperature = not any(cfg.llm.model_id.startswith(p) for p in _TEMPERATURE_FREE)
 
+    # Reasoning parity with the OpenAI funds: Opus/Sonnet 4.6+ and Fable/Sonnet 5
+    # use adaptive thinking + an `effort` level (their equivalent of the
+    # gpt-5 `reasoning_effort` knob) rather than a reasoning_effort string.
+    _EFFORT_MODELS = (
+        "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+        "claude-sonnet-4-6", "claude-sonnet-5", "claude-fable-5",
+    )
+    supports_effort = any(cfg.llm.model_id.startswith(p) for p in _EFFORT_MODELS)
+
     try:
         kwargs = dict(
             model=cfg.llm.model_id,
@@ -139,11 +148,18 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
         )
         if use_temperature:
             kwargs["temperature"] = cfg.llm.temperature
+        if cfg.llm.reasoning_effort and supports_effort:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": cfg.llm.reasoning_effort}
         response = client.messages.create(**kwargs)
     except Exception as e:
         raise LLMError(f"Anthropic API call failed: {e}") from e
 
-    raw_text = response.content[0].text if response.content else ""
+    # With thinking enabled the first block is a thinking block — take the text.
+    raw_text = next(
+        (b.text for b in response.content if getattr(b, "type", None) == "text"),
+        "",
+    )
 
     # Strip markdown code fences if present
     clean = raw_text.strip()

@@ -11,6 +11,7 @@ llm:
   provider: anthropic
   model_id: "claude-opus-4-8"
   max_tokens: 16000
+  reasoning_effort: "high"  # low | medium | high — maps to Opus adaptive thinking + effort (parity with the GPT funds)
   n_samples: 3
 
 risk:

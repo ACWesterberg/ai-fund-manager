@@ -113,15 +113,21 @@ def index(request: Request):
     nav_history = store.get_nav_history()
     stats = compute_stats(nav_history, cfg.capital_sek)
 
-    # Fetch live prices for held positions
+    universe = load_universe(cfg.universe_path)
+    name_map = {t.yahoo_ticker: t.name for t in universe}
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in universe}
+
+    # Fetch live prices for held positions (native currency), then convert to SEK
+    # so they're comparable to the SEK cost basis. Foreign holdings (NOK/DKK/…)
+    # would otherwise be valued as if their native price were already SEK.
     live_prices = _fetch_live_prices([p.ticker for p in positions])
+    if cfg.fx_to_sek:
+        from fundmgr.data.fx import convert_prices_to_sek
+        live_prices = convert_prices_to_sek(live_prices, cur_by_ticker, store)
 
     # NAV: live if available, else cost-basis fallback
     live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
     nav = live_market_value + cash
-
-    universe = load_universe(cfg.universe_path)
-    name_map = {t.yahoo_ticker: t.name for t in universe}
 
     # Pull website domains from fundamentals cache for logo resolution
     fund_domains: dict[str, str | None] = {}

@@ -86,3 +86,29 @@ def to_sek(amount: float, currency: str, store: "Store | None" = None) -> float 
     """Convert `amount` in `currency` to SEK. None if the rate is unavailable."""
     rate = rate_to_sek(currency, store)
     return None if rate is None else amount * rate
+
+
+def convert_prices_to_sek(
+    prices: dict[str, float],
+    cur_by_ticker: dict[str, str],
+    store: "Store | None" = None,
+) -> dict[str, float]:
+    """Convert a {ticker: native_price} map to {ticker: SEK_price}.
+
+    Each ticker's currency comes from `cur_by_ticker` (SEK / unknown pass through
+    unchanged). Rates are fetched once per currency. If a rate is unavailable the
+    native price is kept as-is (degrade rather than drop the position), matching
+    the CLI's `... or 1.0` fallback."""
+    out: dict[str, float] = {}
+    rate_cache: dict[str, float] = {}
+    for ticker, price in prices.items():
+        cur = (cur_by_ticker.get(ticker) or "SEK").upper()
+        if cur == "SEK":
+            out[ticker] = price
+            continue
+        rate = rate_cache.get(cur)
+        if rate is None:
+            rate = rate_to_sek(cur, store) or 1.0
+            rate_cache[cur] = rate
+        out[ticker] = price * rate
+    return out

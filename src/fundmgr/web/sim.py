@@ -114,12 +114,16 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
         nav_history = store.get_nav_history()
         stats = compute_stats(nav_history, cfg.capital_sek)
 
-        live_prices = _fetch_live_prices([p.ticker for p in positions])
-        live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
-        nav = live_market_value + cash
-
         universe = load_universe(cfg.universe_path)
         name_map = {t.yahoo_ticker: t.name for t in universe}
+        cur_by_ticker = {t.yahoo_ticker: t.currency for t in universe}
+
+        live_prices = _fetch_live_prices([p.ticker for p in positions])
+        if cfg.fx_to_sek:
+            from fundmgr.data.fx import convert_prices_to_sek
+            live_prices = convert_prices_to_sek(live_prices, cur_by_ticker, store)
+        live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
+        nav = live_market_value + cash
 
         fund_domains: dict[str, str | None] = {}
         if positions:

@@ -151,7 +151,12 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
         if cfg.llm.reasoning_effort and supports_effort:
             kwargs["thinking"] = {"type": "adaptive"}
             kwargs["output_config"] = {"effort": cfg.llm.reasoning_effort}
-        response = client.messages.create(**kwargs)
+        # Stream: with adaptive thinking on, thinking tokens share the max_tokens
+        # budget, so the budget is set high; the SDK requires streaming above
+        # ~21k non-streaming (10-min guard). Streaming accumulates the same
+        # Message and sidesteps that guard.
+        with client.messages.stream(**kwargs) as stream:
+            response = stream.get_final_message()
     except Exception as e:
         raise LLMError(f"Anthropic API call failed: {e}") from e
 

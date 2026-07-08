@@ -25,14 +25,21 @@ def captured_anthropic(monkeypatch):
     """Inject a fake `anthropic` module; capture the create() kwargs."""
     captured = {}
 
+    _final = types.SimpleNamespace(content=[
+        # Mimic Opus-with-thinking: a thinking block precedes the text block.
+        _Block("thinking", thinking="...reasoning..."),
+        _Block("text", text=_VALID_JSON),
+    ])
+
+    class _StreamCtx:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get_final_message(self): return _final
+
     class _Messages:
-        def create(self, **kwargs):
+        def stream(self, **kwargs):
             captured.update(kwargs)
-            # Mimic Opus-with-thinking: a thinking block precedes the text block.
-            return types.SimpleNamespace(content=[
-                _Block("thinking", thinking="...reasoning..."),
-                _Block("text", text=_VALID_JSON),
-            ])
+            return _StreamCtx()
 
     class _Anthropic:
         def __init__(self, api_key=None):
@@ -45,10 +52,10 @@ def captured_anthropic(monkeypatch):
     return captured
 
 
-def _cfg(model_id, reasoning_effort):
+def _cfg(model_id, reasoning_effort, max_tokens=32000):
     cfg = AppConfig()
     cfg.llm = LLMConfig(provider="anthropic", model_id=model_id,
-                        reasoning_effort=reasoning_effort, max_tokens=16000)
+                        reasoning_effort=reasoning_effort, max_tokens=max_tokens)
     return cfg
 
 
@@ -57,6 +64,7 @@ def test_opus_gets_adaptive_thinking_and_effort(captured_anthropic):
         "sys", "user", _cfg("claude-opus-4-8", "high"))
     assert captured_anthropic["thinking"] == {"type": "adaptive"}
     assert captured_anthropic["output_config"] == {"effort": "high"}
+    assert captured_anthropic["max_tokens"] == 32000        # streamed, thinking shares the budget
     assert "temperature" not in captured_anthropic          # Claude 4+ is temperature-free
     # Text is extracted from behind the leading thinking block
     assert decision.actions[0].ticker == "AAA.ST"

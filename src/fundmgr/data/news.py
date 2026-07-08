@@ -137,12 +137,20 @@ def check_news_triggers(
     return triggers
 
 
+# Max headlines per ticker forwarded to the LLM. Keeps the prompt bounded while
+# giving the model the actual news text to interpret rather than only a label.
+MAX_HEADLINES_PER_TICKER = 6
+
+
 def attach_sentiment_to_features(
     features: dict[str, "TickerFeatures"],
     store: Store,
     since_date: str,
 ) -> None:
-    """Pull cached sentiment for each ticker and attach to its TickerFeatures in-place."""
+    """Pull cached news for each ticker and attach to its TickerFeatures in-place.
+
+    Attaches both the aggregated FinBERT sentiment (a hint) and the raw recent
+    headlines + content snippets (the primary signal the LLM interprets itself)."""
     for ticker, feat in features.items():
         rows = store.get_recent_news(ticker, since_date=since_date)
         if not rows:
@@ -158,3 +166,21 @@ def attach_sentiment_to_features(
             avg = sum(scores) / len(scores)
             feat.sentiment_label = "positive" if avg > 0.1 else "negative" if avg < -0.1 else "neutral"
             feat.sentiment_score = round(abs(avg), 3)
+
+        # Dedupe by headline (rows are newest-first) and cap for prompt size.
+        seen: set[str] = set()
+        headlines: list[dict] = []
+        for r in rows:
+            headline = (r.get("headline") or "").strip()
+            if not headline or headline in seen:
+                continue
+            seen.add(headline)
+            headlines.append({
+                "headline": headline,
+                "summary": r.get("summary"),
+                "published_at": r.get("published_at"),
+                "sentiment_label": r.get("sentiment_label"),
+            })
+            if len(headlines) >= MAX_HEADLINES_PER_TICKER:
+                break
+        feat.headlines = headlines

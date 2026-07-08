@@ -59,6 +59,9 @@ class TickerFeatures:
     sentiment_label: str | None = None    # positive | negative | neutral
     sentiment_score: float | None = None
     news_count: int = 0
+    # Recent headlines (+ optional content snippet) for the LLM to interpret
+    # directly, rather than relying only on the aggregated FinBERT label above.
+    headlines: list[dict] = field(default_factory=list)
     # FX
     currency: str = "SEK"
     needs_fx: bool = False
@@ -162,14 +165,28 @@ class TickerFeatures:
         if self.sector:
             lines.append(f"  Sector: {self.sector}")
 
-        # Sentiment
+        # Sentiment + recent headlines (raw text for the LLM to interpret directly).
+        # The FinBERT label is a hint; the headlines/snippets are the primary signal.
         if self.sentiment_label:
             lines.append(
-                f"  Sentiment: {self.sentiment_label} ({self.sentiment_score:.2f}) "
+                f"  Sentiment (FinBERT): {self.sentiment_label} ({self.sentiment_score:.2f}) "
                 f"from {self.news_count} headlines"
             )
         else:
-            lines.append("  Sentiment: no recent news")
+            lines.append("  Sentiment (FinBERT): no recent news")
+
+        if self.headlines:
+            lines.append("  Recent headlines:")
+            for h in self.headlines:
+                date = (h.get("published_at") or "")[:10]
+                label = h.get("sentiment_label")
+                tag = f"[{label[:3].upper()}] " if label else ""
+                date_str = f"{date} " if date else ""
+                headline = (h.get("headline") or "").strip()
+                lines.append(f"    - {date_str}{tag}{headline}")
+                summary = (h.get("summary") or "").strip()
+                if summary:
+                    lines.append(f"      {summary}")
 
         if self.is_stale:
             lines.append(f"  ⚠ DATA STALE ({self.data_age_trading_days}d old)")

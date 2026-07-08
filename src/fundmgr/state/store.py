@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS news_cache (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker          TEXT NOT NULL,
     headline        TEXT NOT NULL,
+    summary         TEXT,
     source_url      TEXT,
     published_at    TEXT,
     sentiment_label TEXT,   -- positive | negative | neutral
@@ -181,6 +182,7 @@ class Store:
             "ALTER TABLE recommendations ADD COLUMN score REAL",
             "ALTER TABLE recommendations ADD COLUMN sampling_log TEXT",
             "ALTER TABLE transactions ADD COLUMN currency TEXT",
+            "ALTER TABLE news_cache ADD COLUMN summary TEXT",
         ]:
             with self._conn() as conn:
                 try:
@@ -970,6 +972,7 @@ class Store:
             {
                 "ticker": ticker,
                 "headline": item.get("headline") or item.get("title") or "",
+                "summary": item.get("summary") or item.get("description"),
                 "source_url": item.get("source_url") or item.get("url") or item.get("link"),
                 "published_at": item.get("published_at") or item.get("published"),
                 "sentiment_label": item.get("sentiment_label") or item.get("label"),
@@ -980,15 +983,15 @@ class Store:
         ]
         with self._conn() as conn:
             conn.executemany(
-                "INSERT INTO news_cache (ticker, headline, source_url, published_at, sentiment_label, sentiment_score, fetched_at) "
-                "VALUES (:ticker, :headline, :source_url, :published_at, :sentiment_label, :sentiment_score, :fetched_at)",
+                "INSERT INTO news_cache (ticker, headline, summary, source_url, published_at, sentiment_label, sentiment_score, fetched_at) "
+                "VALUES (:ticker, :headline, :summary, :source_url, :published_at, :sentiment_label, :sentiment_score, :fetched_at)",
                 rows,
             )
 
     def get_recent_news(self, ticker: str, since_date: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT headline, published_at, sentiment_label, sentiment_score FROM news_cache "
+                "SELECT headline, summary, published_at, sentiment_label, sentiment_score FROM news_cache "
                 "WHERE ticker = ? AND fetched_at >= ? ORDER BY fetched_at DESC",
                 (ticker, since_date),
             ).fetchall()

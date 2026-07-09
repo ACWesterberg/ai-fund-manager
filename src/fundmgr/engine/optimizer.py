@@ -63,6 +63,37 @@ def load_guidance(cfg: AppConfig) -> str:
         return ""
 
 
+def guidance_versions(cfg: AppConfig) -> dict:
+    """Current + archived optimized guidance for this fund, for the web view.
+
+    Returns {"current": {...}|None, "history": [{...}, ...]} where each entry is
+    the guidance JSON (instructions + metadata: created_at, models, run counts).
+    History is newest-first, parsed from the timestamped archive files.
+    """
+    def _read(path: Path) -> dict | None:
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not str(data.get("instructions", "")).strip():
+            return None
+        data["_filename"] = path.name
+        return data
+
+    current = _read(guidance_path(cfg)) if guidance_path(cfg).exists() else None
+
+    history: list[dict] = []
+    compiled_dir = cfg.optimizer.compiled_dir
+    if compiled_dir.exists():
+        stem = cfg.db_path.stem
+        for p in sorted(compiled_dir.glob(f"{stem}_guidance_*.json"), reverse=True):
+            entry = _read(p)
+            if entry:
+                history.append(entry)
+
+    return {"current": current, "history": history}
+
+
 def guidance_fingerprint(cfg: AppConfig) -> str | None:
     """Short hash of the active guidance instructions, or None when none is applied.
 

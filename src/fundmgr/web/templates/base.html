@@ -159,6 +159,12 @@
       <a href="/universe" class="nav-link {% if active_page == 'universe' %}active{% endif %}">
         <span class="material-symbols-outlined">format_list_bulleted</span>Universe
       </a>
+      <a href="/learnings" class="nav-link {% if sim_prefix is not defined and active_page == 'learnings' %}active{% endif %}">
+        <span class="material-symbols-outlined">lightbulb</span>Learnings
+      </a>
+      <a href="/prompt" class="nav-link {% if sim_prefix is not defined and active_page == 'prompt' %}active{% endif %}">
+        <span class="material-symbols-outlined">tune</span>Prompt
+      </a>
 
       <div class="my-3 border-t border-slate-800/50"></div>
       <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Simulation</p>
@@ -172,6 +178,14 @@
          style="color:#78716c">
         <span class="material-symbols-outlined" style="color:#78716c">history</span>Decisions
       </a>
+      <a href="/sim/learnings" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'learnings' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">lightbulb</span>Learnings
+      </a>
+      <a href="/sim/prompt" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'prompt' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">tune</span>Prompt
+      </a>
 
       <p class="px-2 mt-2 mb-0.5 text-[10px] font-medium" style="color:#6d28d9">Claude Opus</p>
       <a href="/sim-claude" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'portfolio' %}active{% endif %}"
@@ -181,6 +195,14 @@
       <a href="/sim-claude/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'history' %}active{% endif %}"
          style="color:#7c3aed">
         <span class="material-symbols-outlined" style="color:#7c3aed">history</span>Decisions
+      </a>
+      <a href="/sim-claude/learnings" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'learnings' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">lightbulb</span>Learnings
+      </a>
+      <a href="/sim-claude/prompt" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'prompt' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">tune</span>Prompt
       </a>
     </nav>
 

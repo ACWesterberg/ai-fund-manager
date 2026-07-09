@@ -286,6 +286,22 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
             **_sim_base_ctx(),
         })
 
+    @router.get("/learnings", response_class=HTMLResponse)
+    def sim_learnings(request: Request):
+        from fundmgr.web.views import learnings_context
+        cfg, store = _get_deps()
+        return _render("learnings.html", {
+            "request": request, **learnings_context(cfg, store), **_sim_base_ctx(),
+        })
+
+    @router.get("/prompt", response_class=HTMLResponse)
+    def sim_prompt(request: Request):
+        from fundmgr.web.views import prompt_context
+        cfg, _ = _get_deps()
+        return _render("prompt.html", {
+            "request": request, **prompt_context(cfg), **_sim_base_ctx(),
+        })
+
     @router.get("/api/nav")
     def sim_api_nav():
         cfg, store = _get_deps()

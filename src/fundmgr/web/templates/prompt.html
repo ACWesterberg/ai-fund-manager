@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Prompt & Guidance — {{ fund_label }}{% endblock %}
+{% block page_title %}Prompt{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Prompt &amp; Guidance</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      {{ fund_label }} · the instructions this fund's model runs on — the fixed
+      mandate plus the guidance the optimizer has learned from its own outcomes
+    </p>
+  </div>
+</div>
+
+<!-- Optimized guidance (MIPRO) -->
+<section class="card mb-4">
+  <div class="card-header mb-3">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-emerald-400" style="font-size:17px">tune</span>
+      <h2 class="card-title">Optimized guidance</h2>
+    </div>
+    <span class="text-xs text-slate-600">from <code>fund optimize</code></span>
+  </div>
+
+  {% if guidance.current %}
+  <p class="text-[10px] text-slate-600 mb-2">
+    Compiled {{ guidance.current.created_at }}
+    {% if guidance.current.prompt_model %} · written by {{ guidance.current.prompt_model }}{% endif %}
+    {% if guidance.current.n_train_runs is defined %} · {{ guidance.current.n_train_runs }} train / {{ guidance.current.n_val_runs }} val runs{% endif %}
+    {% if guidance.current.n_outcomes is defined %} · {{ guidance.current.n_outcomes }} evaluated outcomes{% endif %}
+  </p>
+  <pre class="text-xs text-emerald-200/90 leading-relaxed whitespace-pre-wrap bg-slate-950/50 rounded-lg p-3">{{ guidance.current.instructions }}</pre>
+  {% else %}
+  <p class="text-sm text-slate-500">
+    No optimized guidance yet. It's produced by <code>fund optimize</code> once this
+    fund has ≥30 evaluated outcomes and ≥8 scored runs. Until then the model runs on
+    the mandate alone (below).
+  </p>
+  {% endif %}
+
+  {% if guidance.history %}
+  <details class="mt-3">
+    <summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-300">
+      {{ guidance.history|length }} archived version{{ '' if guidance.history|length == 1 else 's' }}
+    </summary>
+    <div class="space-y-3 mt-2">
+      {% for v in guidance.history %}
+      <div class="border-l-2 border-slate-800 pl-3">
+        <p class="text-[10px] text-slate-600 mb-1">{{ v.created_at }} · {{ v._filename }}</p>
+        <pre class="text-[11px] text-slate-400 leading-relaxed whitespace-pre-wrap">{{ v.instructions }}</pre>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<!-- Mandate (fixed base prompt) -->
+<section class="card">
+  <div class="card-header mb-3">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-blue-400" style="font-size:17px">description</span>
+      <h2 class="card-title">Mandate</h2>
+    </div>
+    <span class="text-xs text-slate-600">{{ mandate_filename }}</span>
+  </div>
+  <pre class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-slate-950/50 rounded-lg p-3">{{ mandate }}</pre>
+</section>
+
+{% endblock %}

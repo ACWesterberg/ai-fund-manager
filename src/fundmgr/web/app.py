@@ -339,6 +339,20 @@ async def api_positions():
     }
 
 
+@app.get("/learnings", response_class=HTMLResponse)
+async def learnings(request: Request):
+    from fundmgr.web.views import learnings_context
+    cfg, store = _get_deps()
+    return _render("learnings.html", {"request": request, **learnings_context(cfg, store)})
+
+
+@app.get("/prompt", response_class=HTMLResponse)
+async def prompt(request: Request):
+    from fundmgr.web.views import prompt_context
+    cfg, _ = _get_deps()
+    return _render("prompt.html", {"request": request, **prompt_context(cfg)})
+
+
 @app.get("/universe", response_class=HTMLResponse)
 async def universe(request: Request):
     cfg, store = _get_deps()

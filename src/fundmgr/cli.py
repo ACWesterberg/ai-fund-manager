@@ -1086,10 +1086,156 @@ def check_news(auto_run: bool, max_age_hours: int):
         click.echo("\n  (--no-auto-run set — skipping automatic run)")
 
 
+def _parse_holdings_snapshot(path: str) -> tuple[dict[str, tuple[float, float | None]], float | None]:
+    """Parse a broker snapshot file → ({ticker: (shares, avg_cost|None)}, cash|None).
+
+    One entry per line: 'TICKER SHARES [AVG_COST]', or 'CASH AMOUNT' for the
+    balance. Blank lines and '#' comments ignored; commas are thousands seps.
+    """
+    holdings: dict[str, tuple[float, float | None]] = {}
+    cash: float | None = None
+    for lineno, raw in enumerate(open(path).read().splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        key = parts[0].upper()
+        try:
+            if key == "CASH":
+                cash = float(parts[1].replace(",", ""))
+            else:
+                shares = float(parts[1].replace(",", ""))
+                avg = float(parts[2].replace(",", "")) if len(parts) > 2 else None
+                holdings[key] = (shares, avg)
+        except (IndexError, ValueError):
+            raise click.ClickException(f"{path}:{lineno}: cannot parse '{raw.strip()}'")
+    return holdings, cash
+
+
 @cli.command()
-def reconcile():
-    """Sync read-only holdings from Montrose MCP and flag drift."""
-    click.echo("[ Reconciliation with Montrose — implemented in Phase 4 ]")
+@click.option("--holdings", "holdings_path", type=click.Path(exists=True, dir_okay=False),
+              default=None, metavar="PATH",
+              help="Broker snapshot: lines 'TICKER SHARES [AVG_COST]' and optional 'CASH AMOUNT'.")
+@click.option("--cash", "cash_actual", type=float, default=None,
+              help="Actual broker cash (SEK). Reconciles cash alone, or overrides the file's CASH line.")
+@click.option("--full", is_flag=True,
+              help="Snapshot is the COMPLETE holdings list — book tickers missing from it are zeroed.")
+@click.option("--apply", "do_apply", is_flag=True, help="Write the corrections (default is a dry-run report).")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt when applying.")
+def reconcile(holdings_path: str | None, cash_actual: float | None,
+              full: bool, do_apply: bool, yes: bool):
+    """Diff the book against the broker's real holdings + cash and flag drift.
+
+    There is no live broker feed, so you supply the truth: read your broker
+    statement into a --holdings file and/or pass --cash. This catches dividends,
+    splits, and un-logged fills in one pass. Dry-run by default; --apply syncs
+    the book (positions + cash) to the snapshot.
+    """
+    cfg, store = _get_store()
+    if not store.is_initialised():
+        click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
+        sys.exit(1)
+    if holdings_path is None and cash_actual is None:
+        click.echo("Nothing to reconcile — pass --holdings and/or --cash.", err=True)
+        sys.exit(1)
+
+    actual_holdings: dict[str, tuple[float, float | None]] = {}
+    file_cash: float | None = None
+    if holdings_path:
+        actual_holdings, file_cash = _parse_holdings_snapshot(holdings_path)
+    actual_cash = cash_actual if cash_actual is not None else file_cash
+
+    book = {p.ticker: p for p in store.get_positions()}
+    book_cash = store.get_cash()
+
+    # Which tickers to reconcile: everything in the snapshot; book tickers only
+    # if the snapshot is declared complete (--full), else leave them untouched.
+    reconcile_shares = holdings_path is not None
+    tickers = set(actual_holdings)
+    if full:
+        tickers |= set(book)
+
+    rows: list[tuple[str, float, float | None, float | None]] = []  # ticker, book, actual, avg
+    for t in sorted(tickers):
+        book_shares = book[t].shares if t in book else 0.0
+        if t in actual_holdings:
+            actual_shares, avg = actual_holdings[t]
+        elif full:  # in book, missing from a complete snapshot → zeroed
+            actual_shares, avg = 0.0, None
+        else:
+            continue
+        rows.append((t, book_shares, actual_shares, avg))
+
+    drift_rows = [r for r in rows if abs(r[1] - (r[2] or 0.0)) > 1e-6]
+    cash_drift = actual_cash is not None and abs(actual_cash - book_cash) > 0.005
+
+    click.echo("\n─── Reconciliation ─────────────────────────────────")
+    if reconcile_shares:
+        if drift_rows:
+            click.echo(f"  {'Ticker':<16} {'Book':>10} {'Broker':>10} {'Drift':>10}")
+            click.echo(f"  {'─'*16} {'─'*10} {'─'*10} {'─'*10}")
+            for t, bshares, ashares, _avg in drift_rows:
+                delta = (ashares or 0.0) - bshares
+                tag = "  NEW" if t not in book else ("  GONE" if (ashares or 0.0) == 0 else "")
+                click.echo(f"  {t:<16} {bshares:>10.2f} {(ashares or 0.0):>10.2f} {delta:>+10.2f}{tag}")
+        else:
+            click.echo("  Positions: in sync ✓")
+        if not full and set(book) - set(actual_holdings):
+            untouched = ", ".join(sorted(set(book) - set(actual_holdings)))
+            click.echo(f"  (not in snapshot, left untouched: {untouched} — use --full to zero them)")
+
+    if actual_cash is not None:
+        if cash_drift:
+            click.echo(f"\n  Cash:  book {book_cash:,.2f} → broker {actual_cash:,.2f} "
+                       f"({actual_cash - book_cash:+,.2f} SEK)")
+        else:
+            click.echo("\n  Cash: in sync ✓")
+
+    if not drift_rows and not cash_drift:
+        click.echo("\n  ✓ Book matches the broker — nothing to apply.")
+        return
+
+    if not do_apply:
+        click.echo("\n  Dry run — re-run with --apply to write these corrections.")
+        return
+
+    # New tickers with no cost basis can't be added without inventing a basis.
+    unpriced = [r[0] for r in drift_rows if r[0] not in book and r[3] is None and (r[2] or 0.0) > 0]
+    if unpriced:
+        click.echo(f"\n  ⚠ New holdings with no AVG_COST given: {', '.join(unpriced)}")
+        click.echo("    Add a third column (cost basis) or record them with 'fund fill'; skipping.")
+
+    if not yes and not click.confirm("\n  Apply these corrections to the book?"):
+        click.echo("  Aborted — nothing written.")
+        return
+
+    for t, bshares, ashares, avg in drift_rows:
+        ashares = ashares or 0.0
+        if t not in book and avg is None and ashares > 0:
+            continue  # unpriced new holding — skipped above
+        new_avg = avg if avg is not None else (book[t].avg_cost_sek if t in book else 0.0)
+        store.upsert_position(t, ashares, new_avg)
+        click.echo(f"  ✓ {t}: {bshares:.2f} → {ashares:.2f} shares")
+    if cash_drift:
+        store.set_cash(actual_cash)
+        click.echo(f"  ✓ Cash set to {actual_cash:,.2f} SEK")
+
+    # Record a cost-basis NAV snapshot so the chart reflects the reconciled book.
+    try:
+        bench_rows = store.get_benchmark()
+        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
+        positions_after = store.get_positions()
+        cash_after = store.get_cash()
+        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash_after
+        store.upsert_nav(NavPoint(
+            date=datetime.utcnow().strftime("%Y-%m-%d"),
+            portfolio_nav_sek=nav_cost,
+            benchmark_value=bench_val,
+            cash_sek=cash_after,
+        ))
+    except Exception:
+        pass
+    click.echo("\n  Reconciliation applied.")
 
 
 @cli.command()

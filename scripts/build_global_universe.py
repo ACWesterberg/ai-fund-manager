@@ -1,7 +1,8 @@
 """
-Generate config/universe_global.csv by combining the existing Nordic universe
-with a curated list of global large/mid-cap names across US, UK, Europe,
-Japan, Canada, and Australia.
+Legacy: generate config/universe_global.csv from a hand-curated global list.
+
+Superseded by scripts/sync_universe_from_financedata.py, which pulls the full
+broker universe from FinanceData (EODHD snapshot). Kept for reference only.
 
 Run: uv run python scripts/build_global_universe.py
 """

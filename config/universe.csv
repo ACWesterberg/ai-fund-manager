@@ -1,1120 +1,1607 @@
 name,yahoo_ticker,isin,country,exchange,sector,enabled
-Volvo B,VOLV-B.ST,SE0000115446,SE,OMXS,Industrials,true
-Sandvik,SAND.ST,SE0000667891,SE,OMXS,Industrials,true
-ABB,ABB.ST,CH0012221716,SE,OMXS,Industrials,true
-Ericsson B,ERIC-B.ST,SE0000108656,SE,OMXS,Technology,true
-Alfa Laval,ALFA.ST,SE0000695876,SE,OMXS,Industrials,true
-ASSA ABLOY B,ASSA-B.ST,SE0007100581,SE,OMXS,Industrials,true
-Atlas Copco A,ATCO-A.ST,SE0011166610,SE,OMXS,Industrials,true
-Atlas Copco B,ATCO-B.ST,SE0011166628,SE,OMXS,Industrials,true
-H&M B,HM-B.ST,SE0000106270,SE,OMXS,Consumer Discretionary,true
-Investor B,INVE-B.ST,SE0015811955,SE,OMXS,Financials,true
-Nordea,NDA-SE.ST,FI4000297767,SE,OMXS,Financials,true
-SEB A,SEB-A.ST,SE0000148884,SE,OMXS,Financials,true
-Swedbank A,SWED-A.ST,SE0000242455,SE,OMXS,Financials,true
-Handelsbanken A,SHB-A.ST,SE0007100599,SE,OMXS,Financials,true
-Hexagon B,HEXA-B.ST,SE0015961909,SE,OMXS,Technology,true
-Essity B,ESSITY-B.ST,SE0009922164,SE,OMXS,Consumer Staples,true
-NIBE Industrier B,NIBE-B.ST,SE0015988019,SE,OMXS,Industrials,true
-Electrolux B,ELUX-B.ST,SE0000103814,SE,OMXS,Consumer Discretionary,true
-Telia,TELIA.ST,SE0000667925,SE,OMXS,Communication Services,true
-Tele2 B,TEL2-B.ST,SE0005190238,SE,OMXS,Communication Services,true
-Skanska B,SKA-B.ST,SE0000113250,SE,OMXS,Industrials,true
-Boliden,BOL.ST,SE0015811751,SE,OMXS,Materials,true
-SCA B,SCA-B.ST,SE0000112724,SE,OMXS,Materials,true
-SKF B,SKF-B.ST,SE0000108227,SE,OMXS,Industrials,true
-SSAB A,SSAB-A.ST,SE0008321755,SE,OMXS,Materials,true
-Trelleborg B,TREL-B.ST,SE0000114837,SE,OMXS,Industrials,true
-Getinge B,GETI-B.ST,SE0000202624,SE,OMXS,Health Care,true
-Evolution,EVO.ST,SE0012673267,SE,OMXS,Consumer Discretionary,true
-AstraZeneca,AZN.ST,GB0009895292,SE,OMXS,Health Care,true
-Lifco B,LIFCO-B.ST,SE0008320200,SE,OMXS,Industrials,true
-Latour B,LATO-B.ST,SE0002575729,SE,OMXS,Financials,true
-Bure Equity,BURE.ST,SE0000195810,SE,OMXS,Financials,true
-Industrivärden C,INDU-C.ST,SE0000190126,SE,OMXS,Financials,true
-Husqvarna B,HUSQ-B.ST,SE0001662230,SE,OMXS,Consumer Discretionary,true
-Sweco B,SWEC-B.ST,SE0014960373,SE,OMXS,Industrials,true
-PEAB B,PEAB-B.ST,SE0000106205,SE,OMXS,Industrials,true
-Mycronic,MYCR.ST,SE0000688795,SE,OMXS,Technology,true
-NCAB Group,NCAB.ST,SE0011167956,SE,OMXS,Technology,true
-Castellum,CAST.ST,SE0000379190,SE,OMXS,Real Estate,true
-Sagax B,SAGA-B.ST,SE0005127818,SE,OMXS,Real Estate,true
-Sinch,SINCH.ST,SE0016101844,SE,OMXS,Technology,true
-Clas Ohlson B,CLAS-B.ST,SE0000584948,SE,OMXS,Consumer Discretionary,true
-OEM International B,OEM-B.ST,SE0000537838,SE,OMXS,Industrials,true
-Nyfosa,NYF.ST,SE0011426428,SE,OMXS,Real Estate,true
-Betsson B,BETS-B.ST,SE0015671997,SE,OMXS,Consumer Discretionary,true
-Fabege,FABG.ST,SE0011166787,SE,OMXS,Real Estate,true
-JM,JM.ST,SE0000507185,SE,OMXS,Real Estate,true
-XVIVO Perfusion,XVIVO.ST,SE0002575340,SE,OMXS,Health Care,true
-Lagercrantz B,LAGR-B.ST,SE0014990966,SE,OMXS,Industrials,true
-Addtech B,ADDT-B.ST,SE0005568136,SE,OMXS,Industrials,true
-Novo Nordisk B,NOVO-B.CO,DK0060534915,DK,OMXC,Health Care,true
-DSV,DSV.CO,DK0060079531,DK,OMXC,Industrials,true
-Ørsted,ORSTED.CO,DK0060094928,DK,OMXC,Utilities,true
-AP Møller-Mærsk B,MAERSK-B.CO,DK0010244508,DK,OMXC,Industrials,true
-Carlsberg B,CARL-B.CO,DK0010181759,DK,OMXC,Consumer Staples,true
-Coloplast B,COLO-B.CO,DK0060448595,DK,OMXC,Health Care,true
+Aalborg Boldspilklub A/S,AAB.CO,DK0060868966,DK,OMXC,Unknown,true
+Agat Ejendomme A/S,AGAT.CO,DK0010258995,DK,OMXC,Unknown,true
+AGF A/S,AGF-B.CO,DK0010263722,DK,OMXC,Unknown,true
+Agillic A/S,AGILC.CO,DK0060955854,DK,OMXC,Unknown,true
+Alefarm Brewing AS,ALEFRM.CO,DK0061407699,DK,OMXC,Unknown,true
+ALK-Abelló A/S,ALK-B.CO,DK0061802139,DK,OMXC,Health Care,true
+Alm. Brand,ALMB.CO,DK0015250344,DK,OMXC,Financials,true
+AL Sydbank A/S,ALSYDB.CO,DK0010311471,DK,OMXC,Unknown,true
+Ambu A/S,AMBU-B.CO,DK0060946788,DK,OMXC,Health Care,true
+Broedrene A&O Johansen A/S Series B,AOJ-B.CO,DK0061686714,DK,OMXC,Unknown,true
+P/F Atlantic Petroleum,ATLA-DKK.CO,FO000A0DN9X4,DK,OMXC,Unknown,true
+Bactiquant AS,BACTIQ.CO,DK0061417730,DK,OMXC,Unknown,true
+Bavarian Nordic,BAVA.CO,DK0015998017,DK,OMXC,Health Care,true
+Better Collective A/S,BETCO-DKK.CO,DK0060952240,DK,OMXC,Unknown,true
+Broendbyernes IF Fodbold AS,BIF.CO,DK0010247956,DK,OMXC,Unknown,true
+BioMar Group A/S,BIOMAR.CO,DK0064867972,DK,OMXC,Unknown,true
+BioPorto,BIOPOR.CO,DK0011048619,DK,OMXC,Unknown,true
+Bang & Olufsen,BO.CO,DK0010218429,DK,OMXC,Consumer Discretionary,true
+Boozt AB (publ),BOOZT-DKK.CO,SE0009888738,DK,OMXC,Consumer Discretionary,true
+BIX USA Aktier Indeks Akk,BXIUSAAKTAKK.CO,,DK,OMXC,Unknown,true
+Carlsberg A/S,CARL-A.CO,DK0010181676,DK,OMXC,Unknown,true
+Carlsberg A/S,CARL-B.CO,DK0010181759,DK,OMXC,Consumer Staples,true
+cBrain A/S,CBRAIN.CO,DK0060030286,DK,OMXC,Unknown,true
+Cemat A/S,CEMAT.CO,DK0010271584,DK,OMXC,Unknown,true
+ChemoMetec A/S,CHEMM.CO,DK0060055861,DK,OMXC,Health Care,true
+Coloplast A/S,COLO-B.CO,DK0060448595,DK,OMXC,Health Care,true
+Columbus A/S,COLUM.CO,DK0010268366,DK,OMXC,Unknown,true
+Copenhagen Capital A/S 40% Pfd.,CPHCAP-PREF32.CO,DK0061930641,DK,OMXC,Unknown,true
+Copenhagen Capital A/S,CPHCAP-ST.CO,DK0060093607,DK,OMXC,Unknown,true
+Curasight A/S,CURAS.CO,,DK,OMXC,Unknown,true
+Danske Andelskassers Bank A/S,DAB.CO,DK0060299063,DK,OMXC,Unknown,true
+Danske Bank A/S,DANSKE.CO,DK0010274414,DK,OMXC,Unknown,true
+Dantax,DANT.CO,DK0015205637,DK,OMXC,Unknown,true
+Dataproces Group A/S,DATA.CO,DK0061408580,DK,OMXC,Unknown,true
+Demant A/S,DEMANT.CO,DK0060738599,DK,OMXC,Health Care,true
+DFDS A/S,DFDS.CO,DK0060655629,DK,OMXC,Industrials,true
+Djurslands Bank,DJUR.CO,DK0060136273,DK,OMXC,Unknown,true
+Dampskibsselskabet Norden AS,DNORD.CO,DK0060083210,DK,OMXC,Industrials,true
+Donkeyrepublic Holding AS,DONKEY.CO,DK0061540770,DK,OMXC,Unknown,true
+DSV Panalpina A/S,DSV.CO,DK0060079531,DK,OMXC,Industrials,true
+EgnsINVEST Ejendomme Tyskland A/S,EGNETY.CO,DK0060118453,DK,OMXC,Unknown,true
+Embla Medical hf,EMBLA.CO,IS0000000040,DK,OMXC,Unknown,true
+Erria A/S,ERRIA.CO,DK0060101483,DK,OMXC,Unknown,true
+Ennogie Solar Group A/S,ESG.CO,DK0010305077,DK,OMXC,Unknown,true
+Fastpasscorp A/S,FASTPC.CO,DK0060568145,DK,OMXC,Unknown,true
+Fast Ejendom,FED.CO,DK0060522746,DK,OMXC,Unknown,true
+First Farms A/S,FFARMS.CO,DK0060056166,DK,OMXC,Unknown,true
+FLSmidth & Co.,FLS.CO,DK0010234467,DK,OMXC,Industrials,true
+Flügger group A/S,FLUG-B.CO,DK0010218189,DK,OMXC,Unknown,true
+FOBANK,FOBANK.CO,FO0000000088,DK,OMXC,Unknown,true
+FOM Technologies A/S,FOM.CO,,DK,OMXC,Unknown,true
+Formuepleje Better Wld Environ Lead akk,FPIBWELA.CO,,DK,OMXC,Unknown,true
+Formuepleje Better WldGlob Opportunit ak,FPIBWGOA.CO,,DK,OMXC,Unknown,true
+Formuepleje Global Future akk,FPIGFUA.CO,,DK,OMXC,Unknown,true
+Formuepleje LimiTTellus akk,FPILIMA.CO,,DK,OMXC,Unknown,true
+Formuepleje Mix High akk,FPIMHA.CO,,DK,OMXC,Unknown,true
+Formuepleje Mix Low akk,FPIMLA.CO,,DK,OMXC,Unknown,true
+Formuepleje Mix Medium akk,FPIMMA.CO,,DK,OMXC,Unknown,true
+Fynske Bank A/S,FYNBK.CO,DK0060520377,DK,OMXC,Unknown,true
+Gabriel Holding,GABR.CO,DK0060124691,DK,OMXC,Unknown,true
+German High Street Properties A/S Class B,GERHSP.CO,DK0060093524,DK,OMXC,Unknown,true
+Glunz & Jensen,GJ.CO,DK0010249309,DK,OMXC,Unknown,true
+Genmab A/S,GMAB.CO,DK0010272202,DK,OMXC,Health Care,true
 GN Store Nord,GN.CO,DK0010272632,DK,OMXC,Health Care,true
-Demant,DEMANT.CO,DK0060738599,DK,OMXC,Health Care,true
-Tryg,TRYG.CO,DK0060477503,DK,OMXC,Financials,true
-Nokia,NOKIA.HE,FI0009000681,FI,OMXH,Technology,true
-Neste,NESTE.HE,FI0009013296,FI,OMXH,Energy,true
-Fortum,FORTUM.HE,FI0009007132,FI,OMXH,Utilities,true
-Sampo A,SAMPO.HE,FI0009003305,FI,OMXH,Financials,true
-UPM-Kymmene,UPM.HE,FI0009005987,FI,OMXH,Materials,true
-Stora Enso R,STERV.HE,FI0009005961,FI,OMXH,Materials,true
-KONE B,KNEBV.HE,FI0009013403,FI,OMXH,Industrials,true
-Wärtsilä,WRT1V.HE,FI0009003727,FI,OMXH,Industrials,true
-Metso,METSO.HE,FI4000291245,FI,OMXH,Industrials,true
-Equinor,EQNR.OL,NO0010096985,NO,OSLO,Energy,true
-DNB Bank,DNB.OL,NO0010161896,NO,OSLO,Financials,true
-Telenor,TEL.OL,NO0010063308,NO,OSLO,Communication Services,true
-Mowi,MOWI.OL,NO0003054108,NO,OSLO,Consumer Staples,true
-Yara International,YAR.OL,NO0010208051,NO,OSLO,Materials,true
-Norsk Hydro,NHY.OL,NO0005052605,NO,OSLO,Materials,true
-Orkla,ORK.OL,NO0003733800,NO,OSLO,Consumer Staples,true
-Aker BP,AKRBP.OL,NO0010345853,NO,OSLO,Energy,true
-Schibsted A,SCHA.OL,NO0003028904,NO,OSLO,Communication Services,false
-Subsea 7,SUBC.OL,LU0075646355,NO,OSLO,Energy,true
-Securitas B,SECU-B.ST,,SE,OMXS,Industrials,true
-Axfood,AXFO.ST,,SE,OMXS,Consumer Staples,true
-Volvo Cars B,VOLCAR-B.ST,,SE,OMXS,Consumer Discretionary,true
-Indutrade,INDT.ST,,SE,OMXS,Industrials,true
-Beijer Ref B,BEIJ-B.ST,,SE,OMXS,Industrials,true
-Hexpol B,HPOL-B.ST,,SE,OMXS,Materials,true
-Thule Group,THULE.ST,,SE,OMXS,Consumer Discretionary,true
-Lindab International,LIAB.ST,,SE,OMXS,Industrials,true
-Coor Service Management,COOR.ST,,SE,OMXS,Industrials,true
-Medicover B,MCOV-B.ST,,SE,OMXS,Health Care,true
-Vitrolife,VITR.ST,,SE,OMXS,Health Care,true
-Mekonomen,MEKO.ST,,SE,OMXS,Consumer Discretionary,true
-Wihlborgs,WIHL.ST,,SE,OMXS,Real Estate,true
-Hufvudstaden A,HUFV-A.ST,,SE,OMXS,Real Estate,true
-Lime Technologies,LIME.ST,SE0011870195,SE,OMXS,Technology,true
-Paradox Interactive,PDX.ST,,SE,OMXS,Consumer Discretionary,true
-Note AB,NOTE.ST,,SE,OMXS,Industrials,true
-Tobii,TOBII.ST,,SE,OMXS,Technology,true
-Embracer Group B,EMBRAC-B.ST,,SE,OMXS,Consumer Discretionary,true
-Pandora,PNDORA.CO,,DK,OMXC,Consumer Discretionary,true
-Vestas Wind Systems,VWS.CO,,DK,OMXC,Utilities,true
-Genmab,GMAB.CO,,DK,OMXC,Health Care,true
-Ambu B,AMBU-B.CO,,DK,OMXC,Health Care,true
-Zealand Pharma,ZEAL.CO,,DK,OMXC,Health Care,true
-Kongsberg Gruppen,KOG.OL,,NO,OSLO,Industrials,true
-Tomra Systems,TOM.OL,,NO,OSLO,Industrials,true
-SalMar,SALM.OL,,NO,OSLO,Consumer Staples,true
-Gjensidige Forsikring,GJF.OL,,NO,OSLO,Financials,true
-Nordic Semiconductor,NOD.OL,,NO,OSLO,Technology,true
-Storebrand,STB.OL,,NO,OSLO,Financials,true
-Borregaard,BRG.OL,,NO,OSLO,Materials,true
-Elisa,ELISA.HE,,FI,OMXH,Communication Services,true
-Huhtamäki,HUH1V.HE,,FI,OMXH,Materials,true
-Valmet,VALMT.HE,,FI,OMXH,Industrials,true
-Kemira,KEMIRA.HE,,FI,OMXH,Materials,true
-Orion B,ORNAV.HE,,FI,OMXH,Health Care,true
-Holmen B,HOLM-B.ST,,SE,OMXS,Materials,true
-Billerud,BILL.ST,,SE,OMXS,Materials,true
-Lundbergföretagen B,LUND-B.ST,,SE,OMXS,Financials,true
-Dometic Group,DOM.ST,,SE,OMXS,Consumer Discretionary,true
-Intrum,INTRUM.ST,,SE,OMXS,Financials,true
-Kinnevik B,KINV-B.ST,,SE,OMXS,Financials,true
-Ratos B,RATO-B.ST,,SE,OMXS,Financials,true
-AFRY,AFRY.ST,,SE,OMXS,Industrials,true
-Nolato B,NOLA-B.ST,,SE,OMXS,Industrials,true
-Addlife B,ALIF-B.ST,,SE,OMXS,Health Care,true
-Bravida,BRAV.ST,,SE,OMXS,Industrials,true
-Catena,CATE.ST,,SE,OMXS,Real Estate,true
-Fastighets AB Balder B,BALD-B.ST,,SE,OMXS,Real Estate,true
-Dustin Group,DUST.ST,,SE,OMXS,Technology,true
-Bufab,BUFAB.ST,,SE,OMXS,Industrials,true
-Inwido,INWI.ST,,SE,OMXS,Industrials,true
-Troax Group,TROAX.ST,,SE,OMXS,Industrials,true
-Momentum Group B,MMGR-B.ST,,SE,OMXS,Industrials,true
-Platzer Fastigheter B,PLAZ-B.ST,,SE,OMXS,Real Estate,true
-Sdiptech B,SDIP-B.ST,,SE,OMXS,Industrials,true
-Ambea,AMBEA.ST,,SE,OMXS,Health Care,true
-Hoist Finance,HOFI.ST,,SE,OMXS,Financials,true
-BioArctic B,BIOA-B.ST,,SE,OMXS,Health Care,true
-Surgical Science,SUS.ST,,SE,OMXS,Health Care,true
-Mips,MIPS.ST,,SE,OMXS,Consumer Discretionary,true
-Eolus Vind B,EOLU-B.ST,,SE,OMXS,Utilities,true
-BTS Group B,BTS-B.ST,,SE,OMXS,Industrials,true
-Invisio,IVSO.ST,,SE,OMXS,Technology,true
-RaySearch Labs B,RAY-B.ST,,SE,OMXS,Health Care,true
-Catella B,CAT-B.ST,,SE,OMXS,Financials,true
-Elanders B,ELAN-B.ST,,SE,OMXS,Industrials,true
-Hansa Biopharma,HNSA.ST,,SE,OMXS,Health Care,true
-ISS A/S,ISS.CO,,DK,OMXC,Industrials,true
-NKT,NKT.CO,,DK,OMXC,Industrials,true
-Novonesis B,NSIS-B.CO,,DK,OMXC,Health Care,true
-FLSmidth,FLS.CO,,DK,OMXC,Industrials,true
-DFDS,DFDS.CO,,DK,OMXC,Industrials,true
-Royal Unibrew,RBREW.CO,,DK,OMXC,Consumer Staples,true
-Netcompany,NETC.CO,,DK,OMXC,Technology,true
-Bavarian Nordic,BAVA.CO,,DK,OMXC,Health Care,true
-ALK-Abelló B,ALK-B.CO,,DK,OMXC,Health Care,true
-Jyske Bank,JYSK.CO,,DK,OMXC,Financials,true
-H+H International,HH.CO,,DK,OMXC,Materials,true
-AutoStore,AUTO.OL,,NO,OSLO,Industrials,true
-Aker ASA,AKER.OL,,NO,OSLO,Financials,true
-Lerøy Seafood,LSG.OL,,NO,OSLO,Consumer Staples,true
-Elkem,ELK.OL,,NO,OSLO,Materials,true
-Aker Solutions,AKSO.OL,,NO,OSLO,Energy,true
-Scatec,SCATC.OL,,NO,OSLO,Utilities,true
-Wallenius Wilhelmsen,WAWI.OL,,NO,OSLO,Industrials,true
-Nel ASA,NEL.OL,,NO,OSLO,Industrials,true
-Grieg Seafood,GSF.OL,,NO,OSLO,Consumer Staples,true
-Pexip Holding,PEXIP.OL,,NO,OSLO,Technology,true
-Multiconsult,MULTI.OL,,NO,OSLO,Industrials,true
-LINK Mobility,LINK.OL,,NO,OSLO,Technology,true
-Outokumpu,OUT1V.HE,,FI,OMXH,Materials,true
-Nokian Tyres,TYRES.HE,,FI,OMXH,Consumer Discretionary,true
-Tokmanni,TOKMAN.HE,,FI,OMXH,Consumer Staples,true
-Fiskars,FSKRS.HE,,FI,OMXH,Consumer Discretionary,true
-Harvia,HARVIA.HE,,FI,OMXH,Consumer Discretionary,true
-Olvi A,OLVAS.HE,,FI,OMXH,Consumer Staples,true
-Hemnet Group,HEM.ST,,SE,OMXS,Technology,true
-Truecaller B,TRUE-B.ST,,SE,OMXS,Technology,true
-BICO Group,BICO.ST,,SE,OMXS,Health Care,true
-Camurus,CAMX.ST,,SE,OMXS,Health Care,true
-Pandox B,PNDX-B.ST,,SE,OMXS,Real Estate,true
-Addnode Group B,ANOD-B.ST,,SE,OMXS,Technology,true
-Rejlers B,REJL-B.ST,,SE,OMXS,Industrials,true
-Vimian Group,VIMIAN.ST,,SE,OMXS,Health Care,true
-Boozt,BOOZT.ST,,SE,OMXS,Consumer Discretionary,true
-Matas A/S,MATAS.CO,,DK,OMXC,Consumer Staples,true
-Entra,ENTRA.OL,,NO,OSLO,Real Estate,true
-Europris,EPR.OL,,NO,OSLO,Consumer Staples,true
-Bakkafrost,BAKKA.OL,,NO,OSLO,Consumer Staples,true
-Bouvet,BOUV.OL,,NO,OSLO,Technology,true
-SATS,SATS.OL,,NO,OSLO,Consumer Discretionary,true
-SpareBank 1 SMN,MING.OL,,NO,OSLO,Financials,true
-Veidekke,VEI.OL,,NO,OSLO,Industrials,true
-REC Silicon,RECSI.OL,,NO,OSLO,Technology,true
-Wilh. Wilhelmsen,WWI.OL,,NO,OSLO,Industrials,true
-Konecranes,KCR.HE,,FI,OMXH,Industrials,true
-Revenio Group,REG1V.HE,,FI,OMXH,Health Care,true
-Rockwool B,ROCK-B.CO,,DK,OMXC,Materials,true
-Austevoll Seafood,AUSS.OL,,NO,OSLO,Consumer Staples,true
-BioGaia B,BIOG-B.ST,,SE,OMXS,Health Care,true
-Nordnet B,SAVE.ST,,SE,OMXS,Financials,true
-CTEK,CTEK.ST,,SE,OMXS-FN,Consumer Discretionary,true
-Engcon B,ENGCON-B.ST,,SE,OMXS-FN,Industrials,true
-Enea,ENEA.ST,,SE,OMXS-FN,Technology,true
-HANZA,HANZA.ST,,SE,OMXS-FN,Industrials,true
-GARO,GARO.ST,,SE,OMXS-FN,Industrials,true
-Qliro,QLIRO.ST,,SE,OMXS-FN,Financials,true
-CDON,CDON.ST,,SE,OMXS-FN,Consumer Discretionary,true
-Moment Group,MOMENT.ST,,SE,OMXS-FN,Industrials,true
-Xspray Pharma,XSPRAY.ST,,SE,OMXS-FN,Healthcare,true
-Stillfront,SF.ST,,SE,OMXS-FN,Consumer Discretionary,true
-AcadeMedia,ACAD.ST,,SE,OMXS-FN,Consumer Discretionary,true
-Dedicare,DEDI.ST,,SE,OMXS-FN,Industrials,true
-Acast,ACAST.ST,,SE,OMXS-FN,Technology,true
-Instalco,INSTAL.ST,,SE,OMXS,Industrials,true
-Cellavision,CEVI.ST,,SE,OMXS,Healthcare,true
-Duni,DUNI.ST,,SE,OMXS,Consumer Staples,true
-Alm. Brand,ALMB.CO,,DK,OMXC,Financials,true
-Komplett,KOMPL.OL,,NO,OSLO,Consumer Discretionary,true
-Stolt-Nielsen,SNI.OL,,NO,OSLO,Industrials,true
-Selvaag Bolig,SBO.OL,,NO,OSLO,Real Estate,true
-Atea,ATEA.OL,,NO,OSLO,Technology,true
-Vistin Pharma,VISTN.OL,,NO,OSLO,Healthcare,true
-Nekkar,NKR.OL,,NO,OSLO,Industrials,true
-Cloudberry Clean Energy,CLOUD.OL,,NO,OSLO,Energy,true
-Aker Horizons,AKH.OL,,NO,OSLO,Energy,false
-A.P. Moller - Maersk A,MAERSK-A.CO,,DK,OMXC,Industrials,true
-Bang & Olufsen,BO.CO,,DK,OMXC,Consumer Discretionary,true
-Boozt,BOOZT-DKK.CO,,DK,OMXC,Consumer Discretionary,true
-Brdr. Hartmann,HART.CO,,DK,OMXC,Materials,false
-ChemoMetec,CHEMM.CO,,DK,OMXC,Health Care,true
-D/S Norden,DNORD.CO,,DK,OMXC,Industrials,true
-HusCompagniet,HUSCO.CO,,DK,OMXC,Consumer Discretionary,true
-NTG Nordic Transport Group,NTG.CO,,DK,OMXC,Industrials,true
-Nilfisk Holding,NLFSK.CO,,DK,OMXC,Industrials,false
-Per Aarsleff B,PAAL-B.CO,,DK,OMXC,Industrials,true
-Ringkjoebing Landbobank,RILBA.CO,,DK,OMXC,Financials,true
-Scandinavian Tobacco Group,STG.CO,,DK,OMXC,Consumer Staples,true
-Schouw & Co,SCHO.CO,,DK,OMXC,Industrials,true
-Solar B,SOLAR-B.CO,,DK,OMXC,Industrials,true
-Spar Nord Bank,SPNO.CO,,DK,OMXC,Financials,false
-Sydbank,SYDB.CO,,DK,OMXC,Financials,false
-Tivoli,TIV.CO,,DK,OMXC,Consumer Discretionary,true
-Afry,AFRY.HE,,FI,OMXH,Industrials,false
-Aspo,ASPO.HE,,FI,OMXH,Industrials,true
-Atria A,ATRAV.HE,,FI,OMXH,Consumer Staples,true
-Bittium,BITTI.HE,,FI,OMXH,Technology,true
-CapMan,CAPMAN.HE,,FI,OMXH,Financials,true
-Citycon,CTY1S.HE,,FI,OMXH,Real Estate,true
-Digitalist Group,DIGIGR.HE,,FI,OMXH,Technology,true
-Duell,DUELL.HE,,FI,OMXH,Consumer Discretionary,true
-Enento Group,ENENTO.HE,,FI,OMXH,Industrials,true
-Exel Composites,EXL1V.HE,,FI,OMXH,Industrials,false
-F-Secure,FSECURE.HE,,FI,OMXH,Technology,true
-Glaston,GLA1V.HE,,FI,OMXH,Industrials,true
-Incap,ICP1V.HE,,FI,OMXH,Industrials,true
-Innofactor,IFA1V.HE,,FI,OMXH,Technology,false
-Kamux,KAMUX.HE,,FI,OMXH,Consumer Discretionary,true
-Kempower,KEMPOWR.HE,,FI,OMXH,Industrials,true
-Marimekko,MEKKO.HE,,FI,OMXH,Consumer Discretionary,true
-Musti Group,MUSTI.HE,,FI,OMXH,Consumer Discretionary,true
-NoHo Partners,NOHO.HE,,FI,OMXH,Consumer Discretionary,true
-Nurminen Logistics,NLG1V.HE,,FI,OMXH,Industrials,true
-Oma Savings Bank,OMASP.HE,,FI,OMXH,Financials,true
-Orthex,ORTHEX.HE,,FI,OMXH,Consumer Discretionary,true
-Ponsse,PON1V.HE,,FI,OMXH,Industrials,true
-Puuilo,PUUILO.HE,,FI,OMXH,Consumer Discretionary,true
-Qt Group,QTCOM.HE,,FI,OMXH,Technology,true
-Rapala VMC,RAP1V.HE,,FI,OMXH,Consumer Discretionary,true
-Robit,ROBIT.HE,,FI,OMXH,Industrials,true
-Scanfil,SCANFL.HE,,FI,OMXH,Industrials,true
-Siili Solutions,SIILI.HE,,FI,OMXH,Technology,true
-Sitowise Group,SITOWS.HE,,FI,OMXH,Industrials,true
-Solteq,SOLTEQ.HE,,FI,OMXH,Technology,true
-Tecnotree,TEM1V.HE,,FI,OMXH,Technology,true
-Terveystalo,TTALO.HE,,FI,OMXH,Health Care,true
-Vaisala A,VAIAS.HE,,FI,OMXH,Technology,true
-Verkkokauppa.com,VERK.HE,,FI,OMXH,Consumer Discretionary,true
-WithSecure,WITH.HE,,FI,OMXH,Technology,false
-Arion Banki,ARION.IC,,IS,OMXI,Financials,true
-Brim,BRIM.IC,,IS,OMXI,Consumer Staples,true
-Eimskipafelag Islands,EIM.IC,,IS,OMXI,Industrials,true
-Festarfelagid Eik,EIK.IC,,IS,OMXI,Real Estate,true
-Hagar,HAGA.IC,,IS,OMXI,Consumer Staples,true
-Hampidjan,HAMP.IC,,IS,OMXI,Consumer Discretionary,true
-Icelandair Group,ICEAIR.IC,,IS,OMXI,Industrials,true
-Islandsbanki,ISB.IC,,IS,OMXI,Financials,true
-Kvika Banki,KVIKA.IC,,IS,OMXI,Financials,true
-Nova Klubburinn,NOVA.IC,,IS,OMXI,Communication Services,true
-Origo,ORIGO.IC,,IS,OMXI,Technology,false
-Reginn,REGINN.IC,,IS,OMXI,Real Estate,false
-Reitir fasteignafelag,REITIR.IC,,IS,OMXI,Real Estate,true
-Sildarvinnslan,SVN.IC,,IS,OMXI,Consumer Staples,true
-Siminn,SIMINN.IC,,IS,OMXI,Communication Services,true
-Skel fjarfestingafelag,SKEL.IC,,IS,OMXI,Financials,true
-Solid Clouds,SOLID.IC,,IS,OMXI,Technology,true
-Syn,SYN.IC,,IS,OMXI,Communication Services,true
-ABG Sundal Collier,ABG.OL,,NO,OSLO,Financials,true
-Akastor,AKAST.OL,,NO,OSLO,Energy,true
-ArcticZymes Technologies,AZT.OL,,NO,OSLO,Health Care,true
-Atlantic Sapphire,ASA.OL,,NO,OSLO,Consumer Staples,true
-Avance Gas Holding,AGAS.OL,,NO,OSLO,Energy,false
-BW Energy,BWE.OL,,NO,OSLO,Energy,true
-BW LPG,BWLPG.OL,,NO,OSLO,Energy,true
-BW Offshore,BWO.OL,,NO,OSLO,Energy,true
-Belships,BELCO.OL,,NO,OSLO,Industrials,false
-Bonheur,BONHR.OL,,NO,OSLO,Industrials,true
-Borr Drilling,BORR.OL,,NO,OSLO,Energy,true
-Crayon Group Holding,CRAYN.OL,,NO,OSLO,Technology,false
-DNO,DNO.OL,,NO,OSLO,Energy,true
-DOF Group,DOFG.OL,,NO,OSLO,Energy,true
-Elmera Group,ELMRA.OL,,NO,OSLO,Utilities,true
-Fjordkraft Holding,FKRAFT.OL,,NO,OSLO,Utilities,false
-Flex LNG,FLNG.OL,,NO,OSLO,Energy,false
-Hafnia,HAFNI.OL,,NO,OSLO,Energy,true
-Hexagon Composites,HEX.OL,,NO,OSLO,Industrials,true
-Hexagon Purus,HPUR.OL,,NO,OSLO,Industrials,true
-Höegh Autoliners,HAUTO.OL,,NO,OSLO,Industrials,true
-Kid,KID.OL,,NO,OSLO,Consumer Discretionary,true
-Kitron,KIT.OL,,NO,OSLO,Technology,true
-Komplett Bank,KOMP.OL,,NO,OSLO,Financials,false
-Norsk Titanium,NTI.OL,,NO,OSLO,Industrials,true
-Norwegian Air Shuttle,NAS.OL,,NO,OSLO,Industrials,true
-OKEA,OKEA.OL,,NO,OSLO,Energy,true
-Odfjell Drilling,ODL.OL,,NO,OSLO,Energy,true
-Odfjell SE A,ODF.OL,,NO,OSLO,Industrials,true
-Otovo,OTOVO.OL,,NO,OSLO,Energy,true
-Protector Forsikring,PROT.OL,,NO,OSLO,Financials,true
-Seadrill,SDRL.OL,,NO,OSLO,Energy,false
-SpareBank 1 Nord-Norge,NONG.OL,,NO,OSLO,Financials,true
-SpareBank 1 SR-Bank,SRBNK.OL,,NO,OSLO,Financials,false
-TGS,TGS.OL,,NO,OSLO,Energy,true
-Webstep,WSTEP.OL,,NO,OSLO,Technology,true
-XXL,XXL.OL,,NO,OSLO,Consumer Discretionary,false
-Zaptec,ZAP.OL,,NO,OSLO,Industrials,true
-Agtira B,AGTIRA-B.ST,,SE,NGM,Consumer Staples,true
-Archelon Natural Resources,ALONNR-B.ST,,SE,NGM,Materials,true
-Arctic Blue Beverages,ARCTIC.ST,,SE,NGM,Consumer Staples,true
-Argo Defence Group,ARGO.ST,,SE,NGM,Industrials,true
-Audientes,AUDNTS.ST,,SE,NGM,Health Care,false
-Bonzun,BONZUN.ST,,SE,NGM,Health Care,false
-By MHGard,BYMGARD.ST,,SE,NGM,Consumer Discretionary,false
-Cardeon,CARD.ST,,SE,NGM,Health Care,false
+Groenlandsbanken AS,GRLA.CO,DK0010230630,DK,OMXC,Unknown,true
+Gubra A/S,GUBRA.CO,DK0062266474,DK,OMXC,Unknown,true
+Gyldendal A/S,GYLD-A.CO,DK0010247527,DK,OMXC,Unknown,true
+Gyldendal A/S,GYLD-B.CO,DK0010247600,DK,OMXC,Unknown,true
+Harboes Bryggeri A/S,HARB-B.CO,DK0060014751,DK,OMXC,Unknown,true
+H+H International A/S,HH.CO,DK0015202451,DK,OMXC,Materials,true
+H Lundbeck A/S,HLUN-A.CO,DK0061804697,DK,OMXC,Unknown,true
+H Lundbeck A/S,HLUN-B.CO,DK0061804770,DK,OMXC,Health Care,true
+Hove AS,HOVE.CO,DK0061675279,DK,OMXC,Unknown,true
+HusCompagniet AS,HUSCO.CO,DK0061412855,DK,OMXC,Consumer Discretionary,true
+Hvidbjerg Bank,HVID.CO,DK0060135978,DK,OMXC,Unknown,true
+IA Invest TA Globale Aktier,IAITAGA.CO,,DK,OMXC,Unknown,true
+IA Invest TA Globale Obligationer,IAITAGO.CO,,DK,OMXC,Unknown,true
+ISS A/S,ISS.CO,DK0060542181,DK,OMXC,Industrials,true
+Jeudan,JDAN.CO,DK0061282464,DK,OMXC,Unknown,true
+Jyske Bank A/S,JYSK.CO,DK0010307958,DK,OMXC,Financials,true
+Copenhagen Airports AS,KBHL.CO,DK0010201102,DK,OMXC,Unknown,true
+Brd. Klee A/S,KLEE-B.CO,DK0010129089,DK,OMXC,Unknown,true
+Konsolidator AS,KONSOL.CO,DK0061113511,DK,OMXC,Unknown,true
+Kreditbanken A/S,KRE.CO,DK0010253764,DK,OMXC,Unknown,true
+Laan & Spar Bank AS,LASP.CO,DK0010201532,DK,OMXC,Unknown,true
+Lollands Bank,LOLB.CO,DK0060000107,DK,OMXC,Unknown,true
+Investeringsselskabet Luxor A/S,LUXOR-B.CO,DK0010213628,DK,OMXC,Unknown,true
+A.P. Møller - Mærsk A/S,MAERSK-A.CO,DK0010244425,DK,OMXC,Industrials,true
+A.P. Møller - Mærsk A/S,MAERSK-B.CO,DK0010244508,DK,OMXC,Industrials,true
+Matas A/S,MATAS.CO,DK0060497295,DK,OMXC,Consumer Staples,true
+Mendole A/S,MENDO.CO,,DK,OMXC,Unknown,true
+Moens Bank A/S,MNBA.CO,DK0060133841,DK,OMXC,Unknown,true
+Monsenso AS,MONSO.CO,DK0061277977,DK,OMXC,Unknown,true
+Movinn AS,MOVINN.CO,DK0061555539,DK,OMXC,Unknown,true
+MT Hoejgaard Holding A/S,MTHH.CO,DK0010255975,DK,OMXC,Unknown,true
+Nordea Bank Abp,NDA-DK.CO,FI4000297767,DK,OMXC,Unknown,true
+Netcompany Group A/S,NETC.CO,DK0060952919,DK,OMXC,Technology,true
+Newcap Holding A/S,NEWCAP.CO,DK0064983373,DK,OMXC,Unknown,true
+NKT A/S,NKT.CO,DK0010287663,DK,OMXC,Industrials,true
+Nnit AS,NNIT.CO,DK0060580512,DK,OMXC,Unknown,true
+Nord.investments A/S,NORD.CO,,DK,OMXC,Unknown,true
+North Media A/S,NORTHM.CO,DK0010270347,DK,OMXC,Unknown,true
+Novo Nordisk A/S,NOVO-B.CO,DK0062498333,DK,OMXC,Health Care,true
+Novonesis (Novozymes) A/S,NSIS-B.CO,DK0060336014,DK,OMXC,Health Care,true
+NTG Nordic Transport Group A/S,NTG.CO,DK0061141215,DK,OMXC,Industrials,true
+Ostasiatiske Kompagni A/S,OKEAC.CO,DK0061277894,DK,OMXC,Unknown,true
+Orsted A/S,ORSTED.CO,DK0060094928,DK,OMXC,Utilities,true
+Per Aarsleff Holding A/S,PAAL-B.CO,DK0060700516,DK,OMXC,Industrials,true
+PARKEN Sport & Entertainment,PARKEN.CO,DK0010237643,DK,OMXC,Unknown,true
+Park Street A/S,PARKST-A.CO,DK0010158500,DK,OMXC,Unknown,true
+Pharma Equity Group A/S Cl A,PEG.CO,DK0061155009,DK,OMXC,Unknown,true
+Papirfabrikken Invest A/S,PFINV.CO,DK0010128008,DK,OMXC,Unknown,true
+PortfolioManager Marselis Core kl n,PMIMARCORE.CO,DK0064869754,DK,OMXC,Unknown,true
+PortfolioManager Marselis CorpBonds kl n,PMIMARCORPB.CO,DK0064869671,DK,OMXC,Unknown,true
+PortfolioManager Optimal - DK Akt kl n,PMIOPDA.CO,DK0064869838,DK,OMXC,Unknown,true
+Pandora A/S,PNDORA.CO,DK0060252690,DK,OMXC,Consumer Discretionary,true
+Prime Office A/S,PRIMOF.CO,DK0060137594,DK,OMXC,Unknown,true
+Roblon A/S,RBLN-B.CO,DK0060485019,DK,OMXC,Unknown,true
+Royal Unibrew A/S,RBREW.CO,DK0060634707,DK,OMXC,Consumer Staples,true
+RIAS A/S,RIAS-B.CO,DK0010125848,DK,OMXC,Unknown,true
+Ringkjoebing Landbobank A/S,RILBA.CO,DK0060854669,DK,OMXC,Financials,true
+ROCKWOOL International A/S,ROCK-A.CO,DK0063855085,DK,OMXC,Unknown,true
+ROCKWOOL International A/S,ROCK-B.CO,DK0063855168,DK,OMXC,Materials,true
+Rovsing A/S T-ret,ROV-T.CO,,DK,OMXC,Unknown,true
+Rovsing A/S,ROV.CO,DK0061152170,DK,OMXC,Unknown,true
+RTX A/S,RTX.CO,DK0010267129,DK,OMXC,Unknown,true
+Sampo Plc A,SAMPO-DKK.CO,FI4000552500,DK,OMXC,Unknown,true
+Schouw & Co.,SCHO.CO,DK0010253921,DK,OMXC,Industrials,true
+Shape Robotics AS,SHAPE.CO,DK0061273125,DK,OMXC,Unknown,true
+Scandinavian Investment Group A/S,SIG.CO,DK0060038933,DK,OMXC,Unknown,true
+SJF Bank A/S,SJF.CO,DK0060670776,DK,OMXC,Unknown,true
+Skjern Bank A/S,SKJE.CO,DK0010295922,DK,OMXC,Unknown,true
+Solar A/S,SOLAR-B.CO,DK0010274844,DK,OMXC,Industrials,true
+SP Group A/S,SPG.CO,DK0061027356,DK,OMXC,Unknown,true
+Sparinvest INDEX MSCI ACWI,SPIIMA.CO,DK0064866222,DK,OMXC,Unknown,true
+Sparinvest INDEX STOXX Europe 600,SPIISE.CO,DK0064866149,DK,OMXC,Unknown,true
+Scandinavian Tobacco Group A/S,STG.CO,DK0060696300,DK,OMXC,Consumer Staples,true
+STRAP,STRAP.CO,DK0062502894,DK,OMXC,Unknown,true
+Strategic Investments A/S,STRINV.CO,DK0010271238,DK,OMXC,Unknown,true
+Swiss Properties Invest A/S,SWISS.CO,DK0061805660,DK,OMXC,Unknown,true
+TCM Group,TCM.CO,DK0060915478,DK,OMXC,Consumer Discretionary,true
+Tivoli A/S,TIV.CO,DK0060726743,DK,OMXC,Consumer Discretionary,true
+Trifork Holding AG,TRIFOR.CO,CH1111227810,DK,OMXC,Unknown,true
+TORM plc,TRMD-A.CO,GB00BZ3CNK81,DK,OMXC,Unknown,true
+Tryg A/S,TRYG.CO,DK0060636678,DK,OMXC,Financials,true
+UIE PLC,UIE.CO,MT0002400118,DK,OMXC,Unknown,true
+Unlimit Group A/S,UNLGRP.CO,,DK,OMXC,Unknown,true
+ViroGates A/S,VIRO.CO,DK0061030574,DK,OMXC,Unknown,true
+Vestas Wind Systems A/S,VWS.CO,DK0061539921,DK,OMXC,Utilities,true
+Wealth Invest Coop Bank Balanceret,WEICBB.CO,,DK,OMXC,Unknown,true
+Wealth Invest Coop Bank Stabil,WEICBS.CO,,DK,OMXC,Unknown,true
+Wealth Invest Coop Bank Vækst,WEICBV.CO,,DK,OMXC,Unknown,true
+Wealth Invest Othania Stabil UCITS,WEIOSU.CO,,DK,OMXC,Unknown,true
+Wealth Invest SEB Balance Defensiv P,WEISBD.CO,,DK,OMXC,Unknown,true
+Wealth Invest SEB Balance Vækst P,WEISBV.CO,,DK,OMXC,Unknown,true
+Wealth Invest AKL SEB Danske Aktier P,WEISDA.CO,,DK,OMXC,Unknown,true
+Wealth Invest AKL SEB Danske Akt Akk P,WEISDAA.CO,,DK,OMXC,Unknown,true
+Wealth Invest SEB Europa Small Cap Akk,WEISESCA.CO,,DK,OMXC,Unknown,true
+Wealth Invest SEB Lange Obligationer,WEISLO.CO,,DK,OMXC,Unknown,true
+Wirtek A/S,WIRTEK.CO,DK0060040913,DK,OMXC,Unknown,true
+WindowMaster International AS,WMA.CO,DK0061278355,DK,OMXC,Unknown,true
+Zealand Pharma A/S,ZEAL.CO,DK0060257814,DK,OMXC,Health Care,true
+Cessatech A/S,CESSA.CO,,DK,OMXC-FN,Unknown,true
+GreenMobility A/S,GREENM.CO,DK0060817898,DK,OMXC-FN,Unknown,true
+Impero AS,IMPERO.CO,DK0061536828,DK,OMXC-FN,Unknown,true
+Mdundo Com As,MDUNDO.CO,DK0061286101,DK,OMXC-FN,Unknown,true
+Nexcom AS,NEXCOM.CO,DK0061417144,DK,OMXC-FN,Unknown,true
+Q Interline AS,QINTER.CO,DK0061677135,DK,OMXC-FN,Unknown,true
+Risk Intelligence A/S,RISK.CO,,DK,OMXC-FN,Unknown,true
+Scandinavian Medical Solutions AS,SMSMED.CO,DK0061675006,DK,OMXC-FN,Unknown,true
+Stenocare AS,STENO.CO,DK0061078425,DK,OMXC-FN,Unknown,true
+TROPHY GAMES Development AS,TGAMES.CO,DK0061537206,DK,OMXC-FN,Unknown,true
+Admicom Oyj,ADMCM.HE,FI4000251830,FI,HELSINKI,Technology,true
+Orion Oyj B,ORNBV.HE,FI0009014377,FI,HELSINKI,Healthcare,true
+Aallon Group Oyj,AALLON.HE,FI4000369608,FI,OMXH,Unknown,true
+Aspocomp Group Oyj,ACG1V.HE,FI0009008080,FI,OMXH,Unknown,true
+Administer Oyj,ADMIN.HE,,FI,OMXH,Unknown,true
+Afarak Group Oyj,AFAGR.HE,FI0009800098,FI,OMXH,Unknown,true
+Aiforia Technologies Oyj,AIFORIA.HE,,FI,OMXH,Unknown,true
+Aktia Bank Abp,AKTIA.HE,FI4000058870,FI,OMXH,Unknown,true
+Alandsbanken Abp A,ALBAV.HE,FI0009000103,FI,OMXH,Unknown,true
+Alandsbanken Abp B,ALBBV.HE,FI0009001127,FI,OMXH,Unknown,true
+Alexandria Group Oyj,ALEX.HE,,FI,OMXH,Unknown,true
+Alisa Pankki Oyj,ALISA.HE,FI4000170915,FI,OMXH,Unknown,true
+Alma Media Oyj,ALMA.HE,FI0009013114,FI,OMXH,Unknown,true
+Anora Group Oyj,ANORA.HE,FI4000292438,FI,OMXH,Unknown,true
+Apetit Oyj,APETIT.HE,FI0009003503,FI,OMXH,Consumer Staples,true
+Pohjanmaan Arvo Sijoitusosuuskunta,ARVOSK.HE,,FI,OMXH,Unknown,true
+Aspo Oyj,ASPO.HE,FI0009008072,FI,OMXH,Industrials,true
+Asuntosalkku Oyj,ASUNTO.HE,,FI,OMXH,Unknown,true
+Atria Oyj A,ATRAV.HE,FI0009006548,FI,OMXH,Consumer Staples,true
+Auroora Group Oyj,AUROORA.HE,,FI,OMXH,Unknown,true
+Nokian Panimo Oyj,BEER.HE,,FI,OMXH,Unknown,true
+Betolar Oyj,BETOLAR.HE,,FI,OMXH,Unknown,true
+Biohit Oyj B,BIOBV.HE,FI0009005482,FI,OMXH,Unknown,true
+Bittium Oyj,BITTI.HE,FI0009007264,FI,OMXH,Technology,true
+Boreo Oyj,BOREO.HE,FI0009900724,FI,OMXH,Unknown,true
+Bioretec Oy,BRETEC.HE,,FI,OMXH,Unknown,true
+Canatu Oyj A,CANATU.HE,,FI,OMXH,Unknown,true
+CapMan Oyj B,CAPMAN.HE,FI0009009377,FI,OMXH,Financials,true
+CITYVA,CITYVA.HE,,FI,OMXH,Unknown,true
+Consti Yhtiot Oy,CONSTI.HE,FI4000178256,FI,OMXH,Unknown,true
+Componenta Corp,CTH1V.HE,FI4000476783,FI,OMXH,Unknown,true
+Citycon Oyj,CTY1S.HE,FI4000369947,FI,OMXH,Real Estate,true
+Detection Technology OY,DETEC.HE,FI4000115464,FI,OMXH,Technology,true
+Digia Oyj,DIGIA.HE,FI0009007983,FI,OMXH,Unknown,true
+Digitalist Group Oyj,DIGIGR.HE,FI4000591698,FI,OMXH,Technology,true
+Dovre Group Plc,DOV1V.HE,FI0009008098,FI,OMXH,Unknown,true
+Duell Oyj,DUELL.HE,,FI,OMXH,Consumer Discretionary,true
+Digital Workforce Services Oyj,DWF.HE,,FI,OMXH,Technology,true
+Eagle Filters Group Oyj,EAGLE.HE,,FI,OMXH,Unknown,true
+EcoUp Oyj,ECOUP.HE,,FI,OMXH,Unknown,true
+Eezy PLC,EEZY.HE,FI4000322326,FI,OMXH,Industrials,true
+Elecster Oyj A,ELEAV.HE,FI0009900658,FI,OMXH,Unknown,true
+Elisa Oyj,ELISA.HE,FI0009007884,FI,OMXH,Communication Services,true
+Enento Group Plc,ENENTO.HE,FI4000123195,FI,OMXH,Industrials,true
+eQ Oyj,EQV1V.HE,FI0009009617,FI,OMXH,Unknown,true
+Telefonaktiebolaget LM Ericsson Class B,ERIBR.HE,SE0000108656,FI,OMXH,Unknown,true
+Enersense International Oyj,ESENSE.HE,FI4000301585,FI,OMXH,Industrials,true
+Etteplan Oyj,ETTE.HE,FI0009008650,FI,OMXH,Unknown,true
+Evli Pankki Oyj,EVLI.HE,FI4000513437,FI,OMXH,Unknown,true
+Exel Composites Oyj,EXEL.HE,FI4000602172,FI,OMXH,Unknown,true
+Faron Pharmaceuticals Oy,FARON.HE,,FI,OMXH,Unknown,true
+Finnair Oyj,FIA1S.HE,FI4000567029,FI,OMXH,Unknown,true
+Foamit Oyj,FOAMIT.HE,FI0009009559,FI,OMXH,Unknown,true
+Fodelia,FODELIA.HE,FI4000400262,FI,OMXH,Consumer Staples,true
+Fondia Oyj,FONDIA.HE,FI4000232913,FI,OMXH,Unknown,true
+Fortum Oyj,FORTUM.HE,FI0009007132,FI,OMXH,Utilities,true
+Framery Group,FRAMERY.HE,FI4000595756,FI,OMXH,Unknown,true
+F-SECURE OYJ,FSECURE.HE,FI4000519236,FI,OMXH,Technology,true
+Fiskars Oyj Abp,FSKRS.HE,FI0009000400,FI,OMXH,Consumer Discretionary,true
+Glaston Oyj Abp,GLA1V.HE,FI4000587340,FI,OMXH,Industrials,true
+Gofore Oyj,GOFORE.HE,FI4000283130,FI,OMXH,Unknown,true
+GRK Infra,GRK.HE,FI4000517966,FI,OMXH,Unknown,true
+Harvia Oyj,HARVIA.HE,FI4000306873,FI,OMXH,Consumer Discretionary,true
+Nightingale Health Oyj B,HEALTH.HE,FI4000490875,FI,OMXH,Unknown,true
+Hiab B,HIAB.HE,FI4000571013,FI,OMXH,Unknown,true
+HKFoods Oyj A,HKFOODS.HE,FI0009006308,FI,OMXH,Unknown,true
+Honkarakenne Oyj B,HONBS.HE,FI0009900104,FI,OMXH,Unknown,true
+Herantis Pharma Oyj,HRTIS.HE,FI4000087861,FI,OMXH,Unknown,true
+Huhtamaki Oyj,HUH1V.HE,FI0009000459,FI,OMXH,Materials,true
+Incap Oyj,ICP1V.HE,FI0009006407,FI,OMXH,Industrials,true
+Ilkka Oyj 2,ILKKA2.HE,FI0009800205,FI,OMXH,Unknown,true
+Inderes Oyj,INDERES.HE,FI4000348651,FI,OMXH,Unknown,true
+Investors House,INVEST.HE,FI0009900559,FI,OMXH,Unknown,true
+IQM Quantum Computers Oyj,IQMX.HE,,FI,OMXH,Unknown,true
+Kalmar,KALMAR.HE,FI4000571054,FI,OMXH,Unknown,true
+Kamux Suomi Oy,KAMUX.HE,FI4000206750,FI,OMXH,Consumer Discretionary,true
+Konecranes Plc,KCR.HE,FI0009005870,FI,OMXH,Industrials,true
+Kesla Oyj A,KELAS.HE,FI0009900237,FI,OMXH,Unknown,true
+Kemira Oyj,KEMIRA.HE,FI0009004824,FI,OMXH,Materials,true
+Kempower Oyj,KEMPOWR.HE,FI4000513593,FI,OMXH,Industrials,true
+Kesko Oyj,KESKOA.HE,FI0009007900,FI,OMXH,Unknown,true
+Kesko Oyj,KESKOB.HE,FI0009000202,FI,OMXH,Unknown,true
+KH Group Oyj,KHG.HE,FI0009008924,FI,OMXH,Unknown,true
+KONE Oyj,KNEBV.HE,FI0009013403,FI,OMXH,Industrials,true
+Koskisen,KOSKI.HE,FI4000533005,FI,OMXH,Materials,true
+Kreate Group Oyj,KREATE.HE,FI4000476866,FI,OMXH,Unknown,true
+Keskisuomalainen Oyj,KSL.HE,FI0009007546,FI,OMXH,Unknown,true
+Lamor Corporation Oyj,LAMOR.HE,FI4000512488,FI,OMXH,Unknown,true
+LapWall Oyj,LAPWALL.HE,FI4000511597,FI,OMXH,Unknown,true
+Lassila & Tikanoja,LASTIK.HE,FI4000592472,FI,OMXH,Unknown,true
+LeadDesk Oyj,LEADD.HE,,FI,OMXH,Unknown,true
+Lemonsoft Oyj,LEMON.HE,FI4000512678,FI,OMXH,Unknown,true
+Lindex Group,LINDEX.HE,FI0009000251,FI,OMXH,Unknown,true
+Loihde Oyj,LOIHDE.HE,,FI,OMXH,Unknown,true
+LUMO KODIT OYJ,LUMO.HE,,FI,OMXH,Unknown,true
+Luotea,LUOTEA.HE,FI4000592464,FI,OMXH,Unknown,true
+Mandatum Oyj,MANTA.HE,FI4000552526,FI,OMXH,Unknown,true
+Martela Oyj A,MARAS.HE,FI0009900385,FI,OMXH,Unknown,true
+Marimekko Oyj,MEKKO.HE,FI0009007660,FI,OMXH,Consumer Discretionary,true
+Merus Power Oyj,MERUS.HE,,FI,OMXH,Unknown,true
+Metsa Board Oyj A,METSA.HE,FI0009000640,FI,OMXH,Unknown,true
+Metsa Board Oyj B,METSB.HE,FI0009000665,FI,OMXH,Unknown,true
+Metso Oyj,METSO.HE,FI0009014575,FI,OMXH,Industrials,true
+Modulight Oyj,MODU.HE,,FI,OMXH,Health Care,true
+Musti Group Oyj,MUSTI.HE,FI4000410758,FI,OMXH,Consumer Discretionary,true
+Nanoform Finland Plc,NANOFH.HE,FI4000330972,FI,OMXH,Unknown,true
+Nordea Bank Abp,NDA-FI.HE,FI4000297767,FI,OMXH,Unknown,true
+Neste Oil Oyj,NESTE.HE,FI0009013296,FI,OMXH,Energy,true
+Netum Group Oyj,NETUM.HE,,FI,OMXH,Unknown,true
+Nurminen Logistics Oyj,NLG1V.HE,FI0009900187,FI,OMXH,Industrials,true
+NoHo Partners Oyj,NOHO.HE,FI4000064332,FI,OMXH,Consumer Discretionary,true
+Nokia Oyj,NOKIA.HE,FI0009000681,FI,OMXH,Technology,true
+Norrhydro Group Oyj,NORRH.HE,,FI,OMXH,Unknown,true
+Nexstim Oyj,NXTMH.HE,FI4000506811,FI,OMXH,Unknown,true
+Olvi Oyj A,OLVAS.HE,FI0009900401,FI,OMXH,Consumer Staples,true
+Oma Saastopankki Oyj,OMASP.HE,FI4000306733,FI,OMXH,Financials,true
+Optomed PLC,OPTOMED.HE,FI4000410881,FI,OMXH,Unknown,true
+Oriola,ORIOLA.HE,FI0009014351,FI,OMXH,Unknown,true
+Orion Oyj A,ORNAV.HE,FI0009014369,FI,OMXH,Health Care,true
+Orthex Oyj,ORTHEX.HE,FI4000480504,FI,OMXH,Consumer Discretionary,true
+Outokumpu Oyj,OUT1V.HE,FI0009002422,FI,OMXH,Materials,true
+Ovaro Kiinteistosijoitus Oyj,OVARO.HE,FI4000349113,FI,OMXH,Unknown,true
+Endomines Finland Oyj,PAMPALO.HE,FI4000508023,FI,OMXH,Unknown,true
+Pihlajalinna Oy,PIHLIS.HE,FI4000092556,FI,OMXH,Unknown,true
+Piippo OYJ,PIIPPO.HE,FI4000123070,FI,OMXH,Unknown,true
+Panostaja Oyj,PNA1V.HE,FI0009800379,FI,OMXH,Unknown,true
+Ponsse Oyj 1,PON1V.HE,FI0009005078,FI,OMXH,Industrials,true
+Posti Group Oyj,POSTI.HE,FI4000592159,FI,OMXH,Unknown,true
+Puuilo Oyj,PUUILO.HE,FI4000507124,FI,OMXH,Consumer Discretionary,true
+QPR Software Oyj,QPR1V.HE,FI0009008668,FI,OMXH,Unknown,true
+Qt Group Oyj,QTCOM.HE,FI4000198031,FI,OMXH,Technology,true
+Raisio Oyj,RAIKV.HE,FI0009800395,FI,OMXH,Unknown,true
+Raisio Oyj Vaihto-osake,RAIVV.HE,FI0009002943,FI,OMXH,Unknown,true
+Rapala VMC Oyj,RAP1V.HE,FI0009007355,FI,OMXH,Consumer Discretionary,true
+Raute Oyj,RAUTE.HE,FI0009004741,FI,OMXH,Industrials,true
+Reaktor Group Oyj,REAKTOR.HE,FI4000603105,FI,OMXH,Unknown,true
+Rebl Group,REBL.HE,FI0009900468,FI,OMXH,Unknown,true
+Revenio Group Corporation,REG1V.HE,FI0009010912,FI,OMXH,Health Care,true
+Reka Industrial Oyj,REKA.HE,FI0009800296,FI,OMXH,Unknown,true
+Relais Group Oyj,RELAIS.HE,FI4000391487,FI,OMXH,Unknown,true
+Remedy Entertainment Oyj,REMEDY.HE,FI4000251897,FI,OMXH,Unknown,true
+Robit Oyj,ROBIT.HE,FI4000150016,FI,OMXH,Industrials,true
+Saga Furs Oyj C,SAGCV.HE,FI0009800551,FI,OMXH,Unknown,true
+Sampo Oyj A,SAMPO.HE,FI4000552500,FI,OMXH,Financials,true
+Sanoma Oyj,SANOMA.HE,FI0009007694,FI,OMXH,Unknown,true
+SBI,SBI.HE,,FI,OMXH,Unknown,true
+Scanfil Oyj,SCANFL.HE,FI4000029905,FI,OMXH,Industrials,true
+SFOODS,SFOODS.HE,,FI,OMXH,Unknown,true
+Siili Solutions Oyj,SIILI.HE,FI4000043435,FI,OMXH,Technology,true
+Sitowise Group Oyj,SITOWS.HE,FI4000480215,FI,OMXH,Industrials,true
+Solteq PLC,SOLTEQ.HE,FI0009007991,FI,OMXH,Technology,true
+Solwers Oyj,SOLWERS.HE,,FI,OMXH,Unknown,true
+Sotkamo Silver AB,SOSI1.HE,SE0001057910,FI,OMXH,Unknown,true
+Spinnova Oy,SPINN.HE,FI4000507595,FI,OMXH,Materials,true
+Springvest Oyj,SPRING.HE,,FI,OMXH,Unknown,true
+SRV Group plc,SRV1V.HE,FI4000523675,FI,OMXH,Unknown,true
+SSAB AB ser. A,SSABAH.HE,SE0000171100,FI,OMXH,Unknown,true
+SSAB AB ser. B,SSABBH.HE,SE0000120669,FI,OMXH,Unknown,true
+SSH Communications Security Oyj,SSH1V.HE,FI0009008270,FI,OMXH,Unknown,true
+Stora Enso Oyj A,STEAV.HE,FI0009005953,FI,OMXH,Unknown,true
+Stora Enso Oyj R,STERV.HE,FI0009005961,FI,OMXH,Materials,true
+Summa Defence Oyj,SUMMA.HE,,FI,OMXH,Unknown,true
+Suominen Oyj,SUY1V.HE,FI0009010862,FI,OMXH,Unknown,true
+Taaleri Oyj,TAALA.HE,FI4000062195,FI,OMXH,Financials,true
+AS Tallink Grupp,TALLINK.HE,FI4000349378,FI,OMXH,Unknown,true
+Tamtron Group Oyj,TAMTRON.HE,,FI,OMXH,Unknown,true
+TEKOVA,TEKOVA.HE,,FI,OMXH,Unknown,true
+Telia Company AB,TELIA1.HE,SE0000667925,FI,OMXH,Unknown,true
+Tecnotree Oyj,TEM1V.HE,FI4000570890,FI,OMXH,Technology,true
+TietoEVRY Corp,TIETO.HE,FI0009000277,FI,OMXH,Unknown,true
+Titanium Oyj,TITAN.HE,FI4000270350,FI,OMXH,Unknown,true
+Teleste Oyj,TLT1V.HE,FI0009007728,FI,OMXH,Unknown,true
+Talenom Oyj,TNOM.HE,FI4000598149,FI,OMXH,Industrials,true
+Toivo Group Oyj,TOIVO.HE,FI4000496716,FI,OMXH,Unknown,true
+Tokmanni Group Oyj,TOKMAN.HE,FI4000197934,FI,OMXH,Consumer Staples,true
+Trainers House Oyj,TRH1V.HE,FI4000519202,FI,OMXH,Unknown,true
+Terveystalo Oy,TTALO.HE,FI4000252127,FI,OMXH,Health Care,true
+Tulikivi Oyj A,TULAV.HE,FI0009900583,FI,OMXH,Unknown,true
+Nokian Renkaat Oyj,TYRES.HE,FI0009005318,FI,OMXH,Consumer Discretionary,true
+United Bankers Oyj,UNITED.HE,FI4000081427,FI,OMXH,Unknown,true
+UPM-Kymmene Oyj,UPM.HE,FI0009005987,FI,OMXH,Materials,true
+Vaisala Oyj A,VAIAS.HE,FI0009900682,FI,OMXH,Technology,true
+Valmet Oyj,VALMT.HE,FI4000074984,FI,OMXH,Industrials,true
+Verkkokauppa.com Oyj,VERK.HE,FI4000049812,FI,OMXH,Consumer Discretionary,true
+Viafin Service Oyj,VIAFIN.HE,,FI,OMXH,Unknown,true
+Viking Line Abp,VIK1V.HE,FI0009005250,FI,OMXH,Unknown,true
+Vincit Group Oyj,VINCIT.HE,FI4000185533,FI,OMXH,Unknown,true
+Wetteri,WETTERI.HE,FI0009012793,FI,OMXH,Unknown,true
+Witted Megacorp Oyj,WITTED.HE,,FI,OMXH,Unknown,true
+Wartsila Oyj Abp,WRT1V.HE,FI0009003727,FI,OMXH,Industrials,true
+Wulff-Yhtiot Oy,WUF1V.HE,FI0009008452,FI,OMXH,Unknown,true
+YIT Oyj,YIT.HE,FI0009800643,FI,OMXH,Unknown,true
+MPC Container Ships ASA,MPCC.OL,NO0010791353,NO,OMXS-FN,Industrials,true
+Norse Atlantic ASA,NORSE.OL,NO0010946445,NO,OMXS-FN,Industrials,true
+2020 Bulkers Ltd,2020.OL,BMG9156K1018,NO,OSLO,Unknown,true
+5Th Planet Games A/S,5PG.OL,DK0060945467,NO,OSLO,Unknown,true
+Aasen Sparebank,AASB.OL,NO0010672181,NO,OSLO,Unknown,true
+ABG Sundal Collier Holding ASA,ABG.OL,NO0003021909,NO,OSLO,Financials,true
+ABL Group ASA,ABL.OL,NO0010715394,NO,OSLO,Unknown,true
+Arctic Bioscience AS,ABS.OL,,NO,OSLO,Unknown,true
+Aqua Bio Technology ASA,ABTEC.OL,,NO,OSLO,Unknown,true
+Ace Digital AS,ACED.OL,NO0013531616,NO,OSLO,Unknown,true
+Axactor SE,ACR.OL,NO0010840515,NO,OSLO,Unknown,true
+ADS Maritime Holding Plc,ADS.OL,CY0108052115,NO,OSLO,Unknown,true
+AF Gruppen ASA,AFG.OL,NO0003078107,NO,OSLO,Industrials,true
+Arctic Fish Holding AS,AFISH.OL,,NO,OSLO,Unknown,true
+Arendals Fossekompani ASA,AFK.OL,NO0003572802,NO,OSLO,Utilities,true
+Agilyx AS,AGLX.OL,NO0010872468,NO,OSLO,Materials,true
+Ayfie International AS,AIX.OL,,NO,OSLO,Unknown,true
+Akastor ASA,AKAST.OL,NO0010215684,NO,OSLO,Energy,true
+Aker Biomarine AS,AKBM.OL,NO0010886625,NO,OSLO,Consumer Staples,true
+Aker ASA,AKER.OL,NO0010234552,NO,OSLO,Financials,true
+Akobo Minerals AB (publ),AKOBO.OL,SE0015193412,NO,OSLO,Materials,true
+Aker BP ASA,AKRBP.OL,NO0010345853,NO,OSLO,Energy,true
+Aker Solutions ASA,AKSO.OL,NO0010716582,NO,OSLO,Energy,true
+Akva Group,AKVA.OL,NO0003097503,NO,OSLO,Unknown,true
+Awilco LNG ASA,ALNG.OL,NO0010607971,NO,OSLO,Energy,true
+Andfjord Salmon AS,ANDF.OL,NO0010829765,NO,OSLO,Unknown,true
+Appear ASA,APR.OL,NO0013683821,NO,OSLO,Unknown,true
+Aqualis ASA,AQUA.OL,NO0010715394,NO,OSLO,Unknown,true
+Archer Limited,ARCH.OL,,NO,OSLO,Unknown,true
+Arribatec Solutions ASA,ARR.OL,NO0003108102,NO,OSLO,Unknown,true
+Atlantic Sapphire As,ASA.OL,NO0010768500,NO,OSLO,Consumer Staples,true
+Atea ASA,ATEA.OL,NO0004822503,NO,OSLO,Technology,true
+Aurskog Sparebank,AURG.OL,NO0006001601,NO,OSLO,Unknown,true
+Austevoll Seafood ASA,AUSS.OL,NO0010073489,NO,OSLO,Consumer Staples,true
+AutoStore Holdings Ltd,AUTO.OL,BMG0670A1099,NO,OSLO,Industrials,true
+Arcticzymes Technologies ASA,AZT.OL,NO0010014632,NO,OSLO,Health Care,true
+B2 Impact ASA,B2I.OL,,NO,OSLO,Financials,true
+P/f Bakkafrost,BAKKA.OL,FO0000000179,NO,OSLO,Consumer Staples,true
+Baltic Sea Properties AS,BALT.OL,NO0010810476,NO,OSLO,Unknown,true
+Barramundi Group Ltd,BARRA.OL,SGXZ33675836,NO,OSLO,Unknown,true
+Bergen Carbon Solutions A/S,BCS.OL,NO0010950249,NO,OSLO,Unknown,true
+Bewi Asa,BEWI.OL,NO0010890965,NO,OSLO,Unknown,true
+Bien Sparebank ASA,BIEN.OL,NO0012706763,NO,OSLO,Unknown,true
+Byggma,BMA.OL,NO0003087603,NO,OSLO,Unknown,true
+BlueNord ASA,BNOR.OL,NO0010379266,NO,OSLO,Energy,true
+Bonheur,BONHR.OL,NO0003110603,NO,OSLO,Industrials,true
+Borgestad A,BOR.OL,NO0003111700,NO,OSLO,Unknown,true
+BORR,BORR.OL,,NO,OSLO,Energy,true
+Bouvet,BOUV.OL,NO0010360266,NO,OSLO,Technology,true
+Borregaard ASA,BRG.OL,NO0010657505,NO,OSLO,Materials,true
+Bruton Limited,BRUT.OL,,NO,OSLO,Unknown,true
+Black Sea Property A/S,BSP.OL,,NO,OSLO,Unknown,true
+BW Energy Ltd,BWE.OL,BMG0702P1086,NO,OSLO,Energy,true
+BW LPG Ltd,BWLPG.OL,BMG173841013,NO,OSLO,Energy,true
+BW Offshore Ltd,BWO.OL,BMG1738J1247,NO,OSLO,Energy,true
+Cadeler As,CADLR.OL,DK0061412772,NO,OSLO,Energy,true
+Cambi ASA,CAMBI.OL,NO0010078850,NO,OSLO,Unknown,true
+Co2 Capsol AS,CAPSL.OL,NO0010923121,NO,OSLO,Unknown,true
+Capital Tankers Corp.,CAPT.OL,,NO,OSLO,Unknown,true
+Cavendish Hydrogen ASA,CAVEN.OL,NO0013219535,NO,OSLO,Unknown,true
+Cloudberry Clean Energy As,CLOUD.OL,NO0010876642,NO,OSLO,Energy,true
+Cmb.Tech NV,CMBTO.OL,,NO,OSLO,Energy,true
+CodeLab Capital A/S,CODE.OL,NO0010895667,NO,OSLO,Unknown,true
+ContextVision AB,CONTX.OL,SE0014731154,NO,OSLO,Unknown,true
+Constellation Oil Services Holding S.A.,COSH.OL,,NO,OSLO,Unknown,true
+Circio Holding ASA,CRNA.OL,NO0013033795,NO,OSLO,Unknown,true
+Cyviz AS,CYVIZ.OL,NO0010015175,NO,OSLO,Unknown,true
+Dolphin Drilling AS,DDRIL.OL,NO0012595950,NO,OSLO,Unknown,true
+Dellia Grp ASA,DELIA.OL,,NO,OSLO,Unknown,true
+Fjord Defence Group ASA,DFENS.OL,,NO,OSLO,Unknown,true
+DnB ASA,DNB.OL,NO0010161896,NO,OSLO,Financials,true
+Dno ASA,DNO.OL,NO0003921009,NO,OSLO,Energy,true
+DOF Group ASA,DOFG.OL,NO0012851874,NO,OSLO,Energy,true
+Desert Control AS,DSRT.OL,NO0010963275,NO,OSLO,Unknown,true
+Deep Value Driller AS,DVD.OL,NO0010955917,NO,OSLO,Unknown,true
+EAM Solar ASA,EAM.OL,NO0010607781,NO,OSLO,Unknown,true
+Eidesvik Offshore ASA,EIOF.OL,NO0010263023,NO,OSLO,Unknown,true
+EIENDOMSSPAR,EISP.OL,,NO,OSLO,Unknown,true
+Elliptic Laboratories AS,ELABS.OL,NO0010722283,NO,OSLO,Unknown,true
+Elektroimportoren As,ELIMP.OL,NO0010911902,NO,OSLO,Unknown,true
+Elkem ASA,ELK.OL,NO0010816093,NO,OSLO,Materials,true
+Elmera Group ASA,ELMRA.OL,NO0010815673,NO,OSLO,Utilities,true
+Elopak AS,ELO.OL,NO0011002586,NO,OSLO,Industrials,true
+Elopak ASA,ELOO.OL,,NO,OSLO,Unknown,true
+Electromagnetic Geoservices ASA,EMGS.OL,NO0010358484,NO,OSLO,Unknown,true
+Endur ASA,ENDUR.OL,NO0012555459,NO,OSLO,Industrials,true
+Energeia A/S,ENERG.OL,,NO,OSLO,Unknown,true
+SED Energy Holdings Plc,ENH.OL,,NO,OSLO,Energy,true
+Ensurge Micropower ASA,ENSU.OL,NO0012450008,NO,OSLO,Unknown,true
+Entra ASA,ENTRA.OL,NO0010716418,NO,OSLO,Real Estate,true
+Envipco Holding NV,ENVIP.OL,NL0015000GX8,NO,OSLO,Unknown,true
+Europris ASA,EPR.OL,NO0010735343,NO,OSLO,Consumer Staples,true
+Equinor ASA,EQNR.OL,NO0010096985,NO,OSLO,Energy,true
+Eqva ASA,EQVA.OL,NO0010708605,NO,OSLO,Unknown,true
+Exact Therapeutics AS,EXTX.OL,NO0010852213,NO,OSLO,Unknown,true
+Flekkefjord Sparebank,FFSB.OL,,NO,OSLO,Unknown,true
+Frontline Ltd,FRO.OL,CY0200352116,NO,OSLO,Energy,true
+Green Minerals AS,GEM.OL,NO0010907744,NO,OSLO,Unknown,true
+General Oceans ASA,GENO.OL,NO0013713115,NO,OSLO,Unknown,true
+Gentian Diagnostics AS,GENT.OL,NO0010748866,NO,OSLO,Unknown,true
+Golden Energy Offshore Services AS,GEOS.OL,NO0010813843,NO,OSLO,Unknown,true
+Gigante Salmon AS,GIGA.OL,NO0011013765,NO,OSLO,Unknown,true
+Gjensidige Forsikring ASA,GJF.OL,NO0010582521,NO,OSLO,Financials,true
+Goodtech,GOD.OL,NO0004913609,NO,OSLO,Unknown,true
+Grong Sparebank,GRONG.OL,NO0010636491,NO,OSLO,Unknown,true
+Grieg Seafood ASA,GSF.OL,NO0010365521,NO,OSLO,Consumer Staples,true
+Gyldendal ASA,GYL.OL,NO0004288200,NO,OSLO,Unknown,true
+Hafnia Ltd,HAFNI.OL,BMG4233B1090,NO,OSLO,Energy,true
+Hoegh Autoliners ASA,HAUTO.OL,NO0011082075,NO,OSLO,Industrials,true
+HAV Group ASA,HAV.OL,,NO,OSLO,Unknown,true
+Havila Shipping ASA,HAVI.OL,NO0010257728,NO,OSLO,Industrials,true
+Hofseth Biocare ASA,HBC.OL,NO0010598683,NO,OSLO,Consumer Staples,true
+Huddly AS,HDLY.OL,NO0010776990,NO,OSLO,Unknown,true
+Helgeland Sparebank,HELG.OL,NO0010029804,NO,OSLO,Financials,true
+Hermana Holding ASA,HERMA.OL,NO0013401380,NO,OSLO,Unknown,true
+Hexagon Composites ASA,HEX.OL,NO0003067902,NO,OSLO,Industrials,true
+Haugesund Sparebank,HGSB.OL,NO0010764053,NO,OSLO,Unknown,true
+Havila Kystruten AS,HKY.OL,NO0011045429,NO,OSLO,Unknown,true
+Hoegh LNG Partners LP,HLNG.OL,BMG454221059,NO,OSLO,Unknown,true
+Hexagon Purus As,HPUR.OL,NO0010904923,NO,OSLO,Industrials,true
+Himalaya Shipping Ltd,HSHP.OL,BMG4660A1036,NO,OSLO,Industrials,true
+Holand og Setskog Sparebank,HSPG.OL,NO0010012636,NO,OSLO,Unknown,true
+Huddlestock Fintech As,HUDL.OL,NO0010859648,NO,OSLO,Unknown,true
+Hunter Group ASA,HUNT.OL,NO0010283211,NO,OSLO,Unknown,true
+Hynion AS,HYN.OL,NO0010920945,NO,OSLO,Unknown,true
+HydrogenPro AS,HYPRO.OL,NO0010892359,NO,OSLO,Industrials,true
+Idex ASA,IDEX.OL,NO0003070609,NO,OSLO,Technology,true
+Ice Fish Farm AS,IFISH.OL,NO0010884794,NO,OSLO,Unknown,true
+Induct AS,INDCT.OL,NO0010536048,NO,OSLO,Unknown,true
+INIFY Laboratories AB,INIFY.OL,,NO,OSLO,Unknown,true
+Inin Group A/S,ININ.OL,,NO,OSLO,Unknown,true
+Instabank ASA,INSTA.OL,NO0010762792,NO,OSLO,Unknown,true
+Interoil Exploration and Production ASA,IOX.OL,NO0010284318,NO,OSLO,Energy,true
+Icelandic Salmon As,ISLAX.OL,NO0010724701,NO,OSLO,Unknown,true
+Itera ASA,ITERA.OL,NO0010001118,NO,OSLO,Unknown,true
+Integrated Wind Solutions AS,IWS.OL,NO0010955883,NO,OSLO,Industrials,true
+Jacktel AS,JACK.OL,NO0012477704,NO,OSLO,Unknown,true
+Jaeren Sparebank,JAREN.OL,NO0010359433,NO,OSLO,Unknown,true
+Jinhui Shipping and Transportation Limited,JIN.OL,BMG5137R1088,NO,OSLO,Unknown,true
+Klaveness Combination Carriers ASA,KCC.OL,NO0010833262,NO,OSLO,Industrials,true
+Kid ASA,KID.OL,NO0010743545,NO,OSLO,Consumer Discretionary,true
+Kingfish Company Nv,KING.OL,NL00150001S5,NO,OSLO,Unknown,true
+Kitron ASA,KIT.OL,NO0003079709,NO,OSLO,Technology,true
+Oncoinvent ASA,KLDVK.OL,NO0010884794,NO,OSLO,Unknown,true
+KONGSBERG MARITIME ASA,KMAR.OL,NO0013697029,NO,OSLO,Unknown,true
+Kmc Properties ASA,KMCP.OL,NO0010360175,NO,OSLO,Unknown,true
+Kongsberg Automotive Holding ASA,KOA.OL,NO0003033102,NO,OSLO,Consumer Discretionary,true
+Kongsberg Gruppen ASA,KOG.OL,NO0013536151,NO,OSLO,Industrials,true
+Komplett AS,KOMPL.OL,NO0011016040,NO,OSLO,Consumer Discretionary,true
+Kraft Bank Asa,KRAB.OL,NO0010815103,NO,OSLO,Unknown,true
+Lifecare AS,LIFE.OL,NO0010591191,NO,OSLO,Health Care,true
+Link Mobility Group Holding ASA,LINK.OL,NO0010894231,NO,OSLO,Technology,true
+Lokotech Group AS,LOKO.OL,NO0010921299,NO,OSLO,Unknown,true
+Lerøy Seafood Group ASA,LSG.OL,NO0003096208,NO,OSLO,Consumer Staples,true
+Lumi Gruppen AS,LUMI.OL,NO0010927288,NO,OSLO,Consumer Discretionary,true
+Lytix Biopharma AS,LYTIX.OL,NO0010405780,NO,OSLO,Unknown,true
+Masoval AS,MAS.OL,NO0010974983,NO,OSLO,Unknown,true
+Medistim ASA,MEDI.OL,NO0010159684,NO,OSLO,Health Care,true
+Melhus Sparebank,MELG.OL,NO0006001908,NO,OSLO,Financials,true
+Magnora ASA,MGN.OL,NO0010187032,NO,OSLO,Energy,true
+Sparebank 1 SMN,MING.OL,NO0006390301,NO,OSLO,Financials,true
+Sparebanken Møre,MORG.OL,NO0006390004,NO,OSLO,Financials,true
+MORELD AS,MORLD.OL,,NO,OSLO,Unknown,true
+Mowi ASA,MOWI.OL,NO0003054108,NO,OSLO,Consumer Staples,true
+MPC Energy Solutions NV,MPCES.OL,NL0015268814,NO,OSLO,Unknown,true
+Multiconsult AS,MULTI.OL,NO0010734338,NO,OSLO,Industrials,true
+Matvareexpressen As,MVE.OL,,NO,OSLO,Unknown,true
+M Vest Water A/S,MVW.OL,,NO,OSLO,Unknown,true
+Napatech A/S,NAPA.OL,DK0060520450,NO,OSLO,Technology,true
+Norwegian Air Shuttle ASA,NAS.OL,NO0010196140,NO,OSLO,Industrials,true
+Navamedic ASA,NAVA.OL,NO0010205966,NO,OSLO,Health Care,true
+Norwegian Block Exchange AS,NBX.OL,NO0010984966,NO,OSLO,Unknown,true
+Norcod As,NCOD.OL,NO0010892912,NO,OSLO,Unknown,true
+Nel ASA,NEL.OL,NO0010081235,NO,OSLO,Industrials,true
+Next Biometrics Group ASA,NEXT.OL,NO0010629108,NO,OSLO,Unknown,true
+Norsk Hydro ASA,NHY.OL,NO0005052605,NO,OSLO,Materials,true
+Nidaros Sparebank,NISB.OL,NO0010733082,NO,OSLO,Unknown,true
+Nekkar Asa,NKR.OL,NO0003049405,NO,OSLO,Industrials,true
+Nordic Aqua Partners As,NOAP.OL,DK0061414638,NO,OSLO,Unknown,true
+Nordic Semiconductor ASA,NOD.OL,NO0003055501,NO,OSLO,Technology,true
+Nordic Financials ASA,NOFIN.OL,,NO,OSLO,Unknown,true
+Nordic Halibut AS,NOHAL.OL,NO0003058109,NO,OSLO,Unknown,true
+Northern Ocean Ltd,NOL.OL,BMG6682J1036,NO,OSLO,Energy,true
+Nordic Mining ASA,NOM.OL,NO0013162693,NO,OSLO,Unknown,true
+Sparebank 1 Nord-Norge,NONG.OL,NO0006000801,NO,OSLO,Financials,true
+NorAm Drilling AS,NORAM.OL,NO0010360019,NO,OSLO,Unknown,true
+Norbit ASA,NORBT.OL,NO0010856511,NO,OSLO,Technology,true
+Norconsult ASA,NORCO.OL,NO0013052209,NO,OSLO,Industrials,true
+Nordhealth AS,NORDH.OL,NO0011002651,NO,OSLO,Unknown,true
+North Energy ASA,NORTH.OL,NO0010550056,NO,OSLO,Unknown,true
+NRC Group ASA,NRC.OL,NO0003679102,NO,OSLO,Industrials,true
+Norske Skog Asa,NSKOG.OL,NO0010861115,NO,OSLO,Materials,true
+Nordic Technology Group A/S,NTG.OL,,NO,OSLO,Unknown,true
+Norsk Titanium AS,NTI.OL,NO0010969108,NO,OSLO,Industrials,true
+Nykode Therapeutics ASA,NYKD.OL,NO0010714785,NO,OSLO,Health Care,true
+Observe Medical Asa,OBSRV.OL,NO0010865009,NO,OSLO,Unknown,true
+Ocean GeoLoop A/S,OCEAN.OL,,NO,OSLO,Unknown,true
+Odfjell SE,ODF.OL,NO0003399909,NO,OSLO,Industrials,true
+Odfjell B,ODFB.OL,NO0003399917,NO,OSLO,Unknown,true
+Odfjell Drilling Ltd,ODL.OL,BMG671801022,NO,OSLO,Energy,true
+Okeanis Eco Tankers Corp,OET.OL,MHY641771016,NO,OSLO,Energy,true
+Okea ASA,OKEA.OL,NO0010816895,NO,OSLO,Energy,true
+Omda AS,OMDA.OL,,NO,OSLO,Unknown,true
+Oncoinvent ASA,ONCIN.OL,NO0013251173,NO,OSLO,Health Care,true
+Orkla ASA,ORK.OL,NO0003733800,NO,OSLO,Consumer Staples,true
+Ocean Sun As,OSUN.OL,NO0010887565,NO,OSLO,Unknown,true
+Otello Corporation ASA,OTEC.OL,NO0010040611,NO,OSLO,Technology,true
+Odfjell Technology Ltd,OTL.OL,BMG6716L1081,NO,OSLO,Energy,true
+Otovo AS,OTOVO.OL,NO0010809783,NO,OSLO,Energy,true
+Pareto Bank ASA,PARB.OL,NO0010397581,NO,OSLO,Financials,true
+Panoro Energy ASA,PEN.OL,NO0010564701,NO,OSLO,Unknown,true
+Pexip Holding ASA,PEXIP.OL,NO0010840507,NO,OSLO,Technology,true
+Photocure,PHO.OL,NO0010000045,NO,OSLO,Health Care,true
+PARATUS ENERGY SERVICES LTD,PLSV.OL,BMG6904D1083,NO,OSLO,Energy,true
+Polight ASA,PLT.OL,NO0012535832,NO,OSLO,Technology,true
+Petronor E&P Ltd,PNOR.OL,NO0011157232,NO,OSLO,Energy,true
+Polaris Media,POL.OL,NO0010466022,NO,OSLO,Communication Services,true
+Pioneer Property Group ASA,PPG.OL,,NO,OSLO,Unknown,true
+Protector Forsikring ASA,PROT.OL,NO0010209331,NO,OSLO,Financials,true
+Proximar Seafood AS,PROXI.OL,NO0010893902,NO,OSLO,Unknown,true
+Prosafe SE,PRS.OL,NO0010861990,NO,OSLO,Energy,true
+Pryme BV,PRYME.OL,NL00150005Z1,NO,OSLO,Unknown,true
+Petrolia SE,PSE.OL,CY0102630916,NO,OSLO,Unknown,true
+Public Property Invest AS,PUBLI.OL,,NO,OSLO,Real Estate,true
+Pyrum Innovations AG,PYRUM.OL,DE000A2G8ZX8,NO,OSLO,Unknown,true
+Questerre Energy Corporation,QEC.OL,CA74836K1003,NO,OSLO,Energy,true
+Reach Subsea,REACH.OL,NO0003117202,NO,OSLO,Energy,true
+REC Silicon ASA,RECSI.OL,NO0010112675,NO,OSLO,Technology,true
+ReFuels N.V.,REFL.OL,NL0015001BF4,NO,OSLO,Unknown,true
+Sparebank 1 Ringerike Hadeland,RING.OL,NO0006390400,NO,OSLO,Financials,true
+River Tech plc,RIVER.OL,MT0001710103,NO,OSLO,Consumer Discretionary,true
+Rogaland Sparebank,ROGS.OL,,NO,OSLO,Unknown,true
+RomReal Limited,ROM.OL,BMG763301022,NO,OSLO,Unknown,true
+Romerike Sparebank,ROMER.OL,NO0010808405,NO,OSLO,Unknown,true
+Saga Pure ASA,SAGA.OL,NO0010572589,NO,OSLO,Financials,true
+SalMar ASA,SALM.OL,NO0010310956,NO,OSLO,Consumer Staples,true
+Salmon Evolution Holding AS,SALME.OL,NO0010892094,NO,OSLO,Unknown,true
+Sats ASA,SATS.OL,NO0010863285,NO,OSLO,Consumer Discretionary,true
+SpareBank 1 Sør-Norge ASA,SB1NO.OL,NO0006000207,NO,OSLO,Financials,true
+Sparebank 68 Grader Nord,SB68.OL,NO0010887110,NO,OSLO,Unknown,true
+Sparebanken Vest,SBNOR.OL,,NO,OSLO,Financials,true
+Selvaag Bolig ASA,SBO.OL,NO0010612450,NO,OSLO,Real Estate,true
+Scana ASA,SCANA.OL,NO0003053308,NO,OSLO,Unknown,true
+Scatec Solar OL,SCATC.OL,NO0010715139,NO,OSLO,Utilities,true
+StandardCoin AS,SCOIN.OL,,NO,OSLO,Unknown,true
+SD Standard Drilling PLC,SDSD.OL,CY0101550917,NO,OSLO,Energy,true
+Sea1 Offshore Inc.,SEA1.OL,,NO,OSLO,Unknown,true
+Skandia Greenpower AS,SKAND.OL,NO0010931207,NO,OSLO,Unknown,true
+Skue Sparebank,SKUE.OL,NO0006001809,NO,OSLO,Unknown,true
+Smartoptics Group AS,SMOP.OL,NO0011012502,NO,OSLO,Technology,true
+Stolt-Nielsen Limited,SNI.OL,BMG850801025,NO,OSLO,Industrials,true
+Sparebank 1 Nordvest,SNOR.OL,NO0010691660,NO,OSLO,Unknown,true
+Sentia Asa,SNTIA.OL,NO0013573014,NO,OSLO,Financials,true
+Sparebank 1 Ostfold Akershus,SOAG.OL,NO0010285562,NO,OSLO,Financials,true
+Solstad Offsho,SOFF.OL,NO0003080608,NO,OSLO,Unknown,true
+SoftOx Solutions AS,SOFTX.OL,NO0010811961,NO,OSLO,Unknown,true
+Sogn Sparebank,SOGN.OL,NO0006000603,NO,OSLO,Unknown,true
+Solstad Maritime ASA,SOMA.OL,,NO,OSLO,Energy,true
+Sparebanken Ost,SPOG.OL,NO0006222009,NO,OSLO,Financials,true
+SpareBank 1 Østlandet,SPOL.OL,NO0010751910,NO,OSLO,Financials,true
+Storebrand ASA,STB.OL,NO0003053605,NO,OSLO,Financials,true
+Soiltech ASA,STECH.OL,,NO,OSLO,Unknown,true
+Strongpoint ASA,STRO.OL,NO0010098247,NO,OSLO,Unknown,true
+Stainless Tankers ASA,STST.OL,,NO,OSLO,Unknown,true
+Subsea 7 S.A.,SUBC.OL,LU0075646355,NO,OSLO,Energy,true
+SoftwareOne Holding,SWON.OL,CH0496451508,NO,OSLO,Technology,true
+Techstep ASA,TECH.OL,NO0003095309,NO,OSLO,Unknown,true
+Tekna Holding AS,TEKNA.OL,NO0010951577,NO,OSLO,Unknown,true
+Telenor ASA,TEL.OL,NO0010063308,NO,OSLO,Communication Services,true
+TGS NOPEC Geophysical Company ASA,TGS.OL,NO0003078800,NO,OSLO,Energy,true
+TietoEVRY Oyj,TIETO.OL,,NO,OSLO,Technology,true
+Tinde Sparebank,TINDE.OL,,NO,OSLO,Unknown,true
+Tomra Systems ASA,TOM.OL,NO0012470089,NO,OSLO,Industrials,true
+Thor Medical ASA,TRMED.OL,NO0010597883,NO,OSLO,Unknown,true
+TrÃ¸ndelag Sparebank,TRSB.OL,,NO,OSLO,Unknown,true
+Var Energi ASA,VAR.OL,NO0011202772,NO,OSLO,Energy,true
+Veidekke ASA,VEI.OL,NO0005806802,NO,OSLO,Industrials,true
+VEND MARKETPLACES ASA,VEND.OL,NO0010736879,NO,OSLO,Unknown,true
+Vistin Pharma ASA,VISTN.OL,NO0010734122,NO,OSLO,Healthcare,true
+Vow ASA,VOW.OL,NO0010708068,NO,OSLO,Unknown,true
+Ventura Offshore Holding Ltd.,VTURA.OL,,NO,OSLO,Unknown,true
+Voss Veksel og Landmandsbank ASA,VVL.OL,NO0003025009,NO,OSLO,Unknown,true
+Wallenius Wilhelmsen Logistics ASA,WAWI.OL,NO0010571680,NO,OSLO,Industrials,true
+Western Bulk Chartering AS,WEST.OL,NO0010768096,NO,OSLO,Unknown,true
+Webstep ASA,WSTEP.OL,NO0010609662,NO,OSLO,Technology,true
+Wilh Wilhelmsen Holding ASA A,WWI.OL,NO0010571698,NO,OSLO,Industrials,true
+Wilh Wilhelmsen Holding ASA B,WWIB.OL,NO0010576010,NO,OSLO,Industrials,true
+Xplora Technologies As,XPLRA.OL,NO0010895782,NO,OSLO,Unknown,true
+Yara International ASA,YAR.OL,NO0010208051,NO,OSLO,Materials,true
+Zalaris ASA,ZAL.OL,NO0010708910,NO,OSLO,Unknown,true
+Zaptec AS,ZAP.OL,NO0010713936,NO,OSLO,Industrials,true
+Zenith Energy Ltd,ZENA.OL,CA98936C1068,NO,OSLO,Unknown,true
+Zelluna ASA,ZLNA.OL,,NO,OSLO,Unknown,true
+Agtira AB,AGTIRA-B.ST,SE0008588354,SE,NGM,Consumer Staples,true
+Arctic Blue Beverages AB,ARCTIC.ST,SE0017769136,SE,NGM,Consumer Staples,true
+Argo Defence Grp AB,ARGO.ST,,SE,NGM,Industrials,true
+Scandinavian Astor Group AB,ASTOR.ST,SE0019175274,SE,NGM,Industrials,true
 Coegin Pharma,COEGIN.ST,,SE,NGM,Health Care,true
 Creturner Group,CRET.ST,,SE,NGM,Technology,true
-Dividend Sweden B,DIVI-B.ST,,SE,NGM,Financials,false
-Eevia Health,EEVIA.ST,,SE,NGM,Health Care,false
-Episurf Medical B,EPIS-B.ST,,SE,NGM,Health Care,true
-Fram Skandinavien B,FRAM-B.ST,,SE,NGM,Financials,true
-H&D Wireless Sweden Holding B,HDW-B.ST,,SE,NGM,Technology,false
-Insplorion,INSP.ST,,SE,NGM,Industrials,true
-JonDeTech Sensors,JDT.ST,,SE,NGM,Technology,true
-Kontigo Care,KONT.ST,,SE,NGM,Health Care,true
-Lifeclean International,LCLEAN.ST,,SE,NGM,Consumer Staples,true
-Maven Wireless Sweden,MAVEN.ST,,SE,NGM,Technology,true
+Episurf Medical AB (publ),EPIS-B.ST,SE0003491562,SE,NGM,Health Care,true
+Fram Skandinavien AB Series B,FRAM-B.ST,SE0010296269,SE,NGM,Financials,true
+Hedera Group publ AB,HEGR.ST,SE0007815113,SE,NGM,Unknown,true
+Insplorion AB,INSP.ST,SE0006994943,SE,NGM,Industrials,true
+JonDeTech Sensors,JDT.ST,SE0009662554,SE,NGM,Technology,true
+Kontigo Care AB,KONT.ST,SE0007075247,SE,NGM,Health Care,true
+Lifeclean International AB,LCLEAN.ST,SE0014829271,SE,NGM,Consumer Staples,true
+Maven Wireless Sweden AB,MAVEN.ST,SE0015961180,SE,NGM,Technology,true
 Medclair,MCLR.ST,,SE,NGM,Health Care,true
-NFO Drives,NFO.ST,,SE,NGM,Industrials,true
-NOSIUM,NOSIUM.ST,,SE,NGM,Financials,false
 Obducat B,OBDU-B.ST,,SE,NGM,Technology,true
-Orgo Tech,ORGO.ST,,SE,NGM,Technology,false
-Plejd,PLEJD.ST,,SE,NGM,Industrials,true
-RanLOS,RLOS.ST,,SE,NGM,Technology,false
-Raytelligence,RAYTL.ST,,SE,NGM,Health Care,false
-Referring Pages,RPAG.ST,,SE,NGM,Technology,false
-Scandinavian Astor Group,ASTOR.ST,,SE,NGM,Industrials,true
-SealWacs,SEALW.ST,,SE,NGM,Technology,false
-Sensys Gatso Group,SENS.ST,,SE,NGM,Technology,true
-Sivers Semiconductors,SIVE.ST,,SE,NGM,Technology,true
-TC Connect,TCC-A.ST,,SE,NGM,Technology,true
-TCECUR Sweden,TCC-B.ST,,SE,NGM,Industrials,false
-Trophy Games Development,TGAMES.ST,,SE,NGM,Communication Services,false
-Vadsbo SwitchTech,VADS.ST,,SE,NGM,Industrials,false
-Alleima,ALLEI.ST,,SE,OMXS,Industrials,true
-Alligator Bioscience,ATORX.ST,,SE,OMXS,Health Care,true
-Anoto Group,ANOT.ST,,SE,OMXS,Technology,true
-Arjo B,ARJO-B.ST,,SE,OMXS,Health Care,true
-Bambuser,BUSER.ST,,SE,OMXS,Technology,true
-BeammWave,BEAMMW-B.ST,,SE,OMXS,Technology,true
-Bergs Timber B,BRG-B.ST,,SE,OMXS,Materials,false
-Better Collective,BETCO.ST,,SE,OMXS,Communication Services,true
-BioInvent International,BINV.ST,,SE,OMXS,Health Care,true
-Bonava B,BONAV-B.ST,,SE,OMXS,Real Estate,true
-Boule Diagnostics,BOUL.ST,,SE,OMXS,Health Care,true
-Calliditas Therapeutics,CALTX.ST,,SE,OMXS,Health Care,false
-Cibus Nordic Real Estate,CIBUS.ST,,SE,OMXS,Real Estate,true
-Cint Group,CINT.ST,,SE,OMXS,Technology,true
-Climeon B,CLIME-B.ST,,SE,OMXS,Industrials,true
-Cloetta B,CLA-B.ST,,SE,OMXS,Consumer Staples,true
-Corem Property B,CORE-B.ST,,SE,OMXS,Real Estate,true
-Creades A,CRED-A.ST,,SE,OMXS,Financials,true
-Dios Fastigheter,DIOS.ST,,SE,OMXS,Real Estate,true
-Egetis Therapeutics,EGTX.ST,,SE,OMXS,Health Care,true
-Electrolux Professional B,EPRO-B.ST,,SE,OMXS,Industrials,true
-Exsitec Holding,EXS.ST,,SE,OMXS,Technology,true
-G5 Entertainment,G5EN.ST,,SE,OMXS,Communication Services,true
-Genovis,GENO.ST,,SE,OMXS,Health Care,true
-Granges,GRNG.ST,,SE,OMXS,Materials,true
-Humana,HUM.ST,,SE,OMXS,Health Care,true
-IAR Systems Group,IAR-B.ST,,SE,OMXS,Technology,false
-Isofol Medical,ISOFOL.ST,,SE,OMXS,Health Care,true
-Kabe Group B,KABE-B.ST,,SE,OMXS,Consumer Discretionary,true
-Karnov Group,KAR.ST,,SE,OMXS,Industrials,true
-KlaraBo B,KLARA-B.ST,,SE,OMXS,Real Estate,true
-Loomis,LOOMIS.ST,,SE,OMXS,Industrials,true
-Mentice,MNTC.ST,,SE,OMXS,Health Care,true
-MilDef Group,MILDEF.ST,,SE,OMXS,Industrials,true
-Modern Times Group B,MTG-B.ST,,SE,OMXS,Communication Services,true
-Munters Group,MTRS.ST,,SE,OMXS,Industrials,true
-NP3 Fastigheter,NP3.ST,,SE,OMXS,Real Estate,true
-Nederman Holding,NMAN.ST,,SE,OMXS,Industrials,true
-Netel Holding,NETEL.ST,,SE,OMXS,Industrials,true
-New Wave Group B,NEWA-B.ST,,SE,OMXS,Consumer Discretionary,true
-Nivika Fastigheter B,NIVI-B.ST,,SE,OMXS,Real Estate,true
-Nobia,NOBI.ST,,SE,OMXS,Consumer Discretionary,true
-Oncopeptides,ONCO.ST,,SE,OMXS,Health Care,true
-Pierce Group,PIERCE.ST,,SE,OMXS,Consumer Discretionary,true
-Proact IT Group,PACT.ST,,SE,OMXS,Technology,true
-Samhallsbyggnadsbolaget i Norden B,SBB-B.ST,,SE,OMXS,Real Estate,true
-Scandic Hotels Group,SHOT.ST,,SE,OMXS,Consumer Discretionary,true
-Sedana Medical,SEDANA.ST,,SE,OMXS,Health Care,true
-Sobi,SOBI.ST,,SE,OMXS,Health Care,true
-Storskogen Group B,STOR-B.ST,,SE,OMXS,Industrials,true
-Storytel B,STORY-B.ST,,SE,OMXS,Communication Services,true
-Systemair,SYSR.ST,,SE,OMXS,Industrials,true
-TF Bank,TFBANK.ST,,SE,OMXS,Financials,False
-Tobii Dynavox,TDVOX.ST,,SE,OMXS,Technology,false
-VNV Global,VNV.ST,,SE,OMXS,Financials,true
-Volati,VOLO.ST,,SE,OMXS,Industrials,true
-Yubico,YUBICO.ST,,SE,OMXS,Technology,true
-Zinzino B,ZZ-B.ST,,SE,OMXS,Consumer Staples,true
-24SevenOffice Group,247.ST,,SE,OMXS-FN,Technology,false
-4C Group,4C.ST,,SE,OMXS-FN,Technology,true
-AAC Clyde Space,AAC.ST,,SE,OMXS-FN,Industrials,true
-Acconeer,ACCON.ST,,SE,OMXS-FN,Technology,true
-AcouSort,ACOU.ST,,SE,OMXS-FN,Health Care,true
-Adtraction Group,ADTR.ST,,SE,OMXS-FN,Communication Services,true
-Adventure Box Technology,ADVBOX.ST,,SE,OMXS-FN,Communication Services,false
-Alcadon Group,ALCA.ST,,SE,OMXS-FN,Technology,true
-AroCell,AROC.ST,,SE,OMXS-FN,Health Care,false
-Aros Bostadsutveckling,AROS.ST,,SE,OMXS-FN,Real Estate,false
-Ascelia Pharma,ACE.ST,,SE,OMXS-FN,Health Care,true
-Bactiguard Holding B,BACTI-B.ST,,SE,OMXS-FN,Health Care,true
-BiBBInstruments,BIBB.ST,,SE,OMXS-FN,Health Care,true
-Bioservo Technologies,BIOS.ST,,SE,OMXS-FN,Health Care,false
-Bonesupport Holding,BONEX.ST,,SE,OMXS-FN,Health Care,true
-C Security Systems,CSEC.ST,,SE,OMXS-FN,Technology,false
-Cantargia,CANTA.ST,,SE,OMXS-FN,Health Care,true
-Clemondo Group,CLEM.ST,,SE,OMXS-FN,Consumer Staples,true
-Crunchfish,CFISH.ST,,SE,OMXS-FN,Technology,true
-Desenio Group,DSNO.ST,,SE,OMXS-FN,Consumer Discretionary,true
-DistIT,DIST.ST,,SE,OMXS-FN,Technology,true
-Elicera Therapeutics,ELIC.ST,,SE,OMXS-FN,Health Care,true
-Enad Global 7,EG7.ST,,SE,OMXS-FN,Communication Services,true
-Enzymatica,ENZY.ST,,SE,OMXS-FN,Health Care,true
-Fasadgruppen Group,FG.ST,,SE,OMXS-FN,Industrials,true
-FlexQube,FLEXQ.ST,,SE,OMXS-FN,Industrials,true
-Freemelt Holding,FREEM.ST,,SE,OMXS-FN,Industrials,true
-GomSpace Group,GOMX.ST,,SE,OMXS-FN,Industrials,true
-Humble Group,HUMBLE.ST,,SE,OMXS-FN,Consumer Staples,true
-I-Tech,ITECH.ST,,SE,OMXS-FN,Materials,true
-Implantica,IMP-A-SDB.ST,,SE,OMXS-FN,Health Care,true
-Kjell Group,KJELL.ST,,SE,OMXS-FN,Consumer Discretionary,true
-Lipigon Pharmaceuticals,LPGO.ST,,SE,OMXS-FN,Health Care,false
-Lyko Group A,LYKO-A.ST,,SE,OMXS-FN,Consumer Discretionary,true
-M.O.B.A. Network,MOBA.ST,,SE,OMXS-FN,Communication Services,true
-MPC Container Ships,MPCC.OL,,SE,OMXS-FN,Industrials,true
-Maha Energy,MAHA-A.ST,,SE,OMXS-FN,Energy,true
-Minesto,MINEST.ST,,SE,OMXS-FN,Energy,true
-MyFirstApp Sweden,MFA.ST,,SE,OMXS-FN,Communication Services,false
-Net Insight B,NETI-B.ST,,SE,OMXS-FN,Technology,true
-Nordic Paper Holding,NPAPER.ST,,SE,OMXS-FN,Materials,false
-Norrlands Online,NOL.ST,,SE,OMXS-FN,Technology,false
-Norse Atlantic,NORSE.OL,,SE,OMXS-FN,Industrials,true
-Norva24 Group,NORVA.ST,,SE,OMXS-FN,Industrials,false
-OptiCept Technologies,OPTI.ST,,SE,OMXS-FN,Industrials,true
-OssDsign,OSSD.ST,,SE,OMXS-FN,Health Care,true
-Paxman,PAX.ST,,SE,OMXS-FN,Health Care,true
-Physitrack,PTRK.ST,,SE,OMXS-FN,Health Care,true
-Pricer B,PRIC-B.ST,,SE,OMXS-FN,Technology,true
-Promimic,PRO.ST,,SE,OMXS-FN,Health Care,true
-Qlucore,QLIFE.ST,,SE,OMXS-FN,Health Care,true
-Railcare Group,RAIL.ST,,SE,OMXS-FN,Industrials,true
-Rugvista Group,RUG.ST,,SE,OMXS-FN,Consumer Discretionary,true
-S2Medical,S2M.ST,,SE,OMXS-FN,Health Care,true
-Scandion Oncology,SCOL.ST,,SE,OMXS-FN,Health Care,false
-Scout Gaming Group,SCOUT.ST,,SE,OMXS-FN,Communication Services,false
-Seamless Distribution Systems,SDS.ST,,SE,OMXS-FN,Technology,true
-Smart Eye,SEYE.ST,,SE,OMXS-FN,Technology,true
-Soltech Energy Sweden,SOLT.ST,,SE,OMXS-FN,Energy,true
-SynAct Pharma,SYNACT.ST,,SE,OMXS-FN,Health Care,true
-Viva Wine Group,VIVA.ST,,SE,OMXS-FN,Consumer Staples,true
-W5 Solutions,W5.ST,,SE,OMXS-FN,Industrials,true
-AB Igrene,ABI.ST,,SE,SPOTLIGHT,Energy,true
-ABAS Protect,ABAS.ST,,SE,SPOTLIGHT,Industrials,true
-Abera Bioscience,ABERA.ST,,SE,SPOTLIGHT,Health Care,true
-Absolicon Solar Collector,ABSL.ST,,SE,SPOTLIGHT,Energy,false
-AcuCort,ACUC.ST,,SE,SPOTLIGHT,Health Care,true
-Aerowash,AERW-B.ST,,SE,SPOTLIGHT,Industrials,true
-Aixia Group,AIXIA-B.ST,,SE,SPOTLIGHT,Technology,true
-BPC Instruments,BPCINS.ST,,SE,SPOTLIGHT,Industrials,true
-Biofrigas Sweden,BIOF.ST,,SE,SPOTLIGHT,Energy,true
-Blick Global Group,BLICK.ST,,SE,SPOTLIGHT,Technology,true
-C100,C100.ST,,SE,SPOTLIGHT,Technology,true
-CHOSA Oncology,CHOSA.ST,,SE,SPOTLIGHT,Health Care,true
-Comintelli,COMINT.ST,,SE,SPOTLIGHT,Technology,true
-Cyclezyme,CYCLE.ST,,SE,SPOTLIGHT,Industrials,true
-DexTech Medical,DEX.ST,,SE,SPOTLIGHT,Health Care,true
-Double Bond Pharmaceutical,DBP-B.ST,,SE,SPOTLIGHT,Health Care,true
-EasyFill B,EASY-B.ST,,SE,SPOTLIGHT,Industrials,true
-EatGood Sweden,EATG.ST,,SE,SPOTLIGHT,Consumer Discretionary,true
-EcoRub B,ECO-B.ST,,SE,SPOTLIGHT,Materials,true
-Edyoutec,EDYOU.ST,,SE,SPOTLIGHT,Technology,true
-Envirologic,ENVI-B.ST,,SE,SPOTLIGHT,Industrials,true
-Gosol Energy Group,GOSOL.ST,,SE,SPOTLIGHT,Energy,true
-Gullberg & Jansson,GJAB.ST,,SE,SPOTLIGHT,Industrials,true
-Hamlet BioPharma B,HAMLET-B.ST,,SE,SPOTLIGHT,Health Care,true
-HomeMaid B,HOMEMAID-B.ST,,SE,SPOTLIGHT,Consumer Discretionary,false
-Hoodin,HOODIN.ST,,SE,SPOTLIGHT,Technology,true
-Hunter Capital,HUNT.ST,,SE,SPOTLIGHT,Financials,false
-Spermosens,SPERM.ST,,SE,SPOTLIGHT,Health Care,true
-Spotlight Group,SPGR.ST,,SE,SPOTLIGHT,Financials,true
-Suntrade Group,SUN.ST,,SE,SPOTLIGHT,Energy,false
-Sustainion Group,SUSG.ST,,SE,SPOTLIGHT,Industrials,true
-SyntheticMR,SYNT.ST,,SE,SPOTLIGHT,Health Care,true
-Tessin Nordic Holding,TESSIN.ST,,SE,SPOTLIGHT,Technology,true
-ABER,ABER.ST,,SE,OMXS-FN,Industrials,false
-ABSO,ABSO.ST,,SE,OMXS-FN,Technology,true
-AERO,AERO.ST,,SE,OMXS-FN,Consumer Discretionary,true
-AIXIA,AIXIA.ST,,SE,OMXS-FN,Energy,false
-ALZCUR,ALZCUR.ST,,SE,OMXS-FN,Real Estate,true
-APTR,APTR.ST,,SE,OMXS-FN,Utilities,false
-ARCANE,ARCANE.ST,,SE,OMXS-FN,Health Care,false
-ARCOMA,ARCOMA.ST,,SE,OMXS-FN,Financials,true
-ASCE,ASCE.ST,,SE,OMXS-FN,Consumer Staples,false
-ASPIRE,ASPIRE.ST,,SE,OMXS-FN,Materials,false
-AURANT,AURANT.ST,,SE,OMXS-FN,Communication Services,false
-AYIMA,AYIMA.ST,,SE,OMXS-FN,Industrials,false
-BACTI,BACTI.ST,,SE,OMXS-FN,Technology,false
-BALT,BALT.ST,,SE,OMXS-FN,Consumer Discretionary,false
-BBS,BBS.ST,,SE,OMXS-FN,Energy,false
-BIOVICA,BIOVICA.ST,,SE,OMXS-FN,Real Estate,false
-BRAIN,BRAIN.ST,,SE,OMXS-FN,Utilities,true
-BRIGHT,BRIGHT.ST,,SE,OMXS-FN,Health Care,true
-CALLID,CALLID.ST,,SE,OMXS-FN,Financials,false
-CARBIOS,CARBIOS.ST,,SE,OMXS-FN,Consumer Staples,false
-CATENA,CATENA.ST,,SE,OMXS-FN,Materials,false
-CELLINK,CELLINK.ST,,SE,OMXS-FN,Communication Services,false
-CLIME,CLIME.ST,,SE,OMXS-FN,Industrials,false
-COGN,COGN.ST,,SE,OMXS-FN,Technology,false
-CORLINE,CORLINE.ST,,SE,OMXS-FN,Consumer Discretionary,false
-DIGNIT,DIGNIT.ST,,SE,OMXS-FN,Energy,false
-DOXA,DOXA.ST,,SE,OMXS-FN,Real Estate,true
-DRONE,DRONE.ST,,SE,OMXS-FN,Utilities,false
-EBLITZ,EBLITZ.ST,,SE,OMXS-FN,Health Care,true
-ECOMB,ECOMB.ST,,SE,OMXS-FN,Financials,false
-ELLWEE,ELLWEE.ST,,SE,OMXS-FN,Consumer Staples,false
-ENER,ENER.ST,,SE,OMXS-FN,Materials,false
-ENIRO,ENIRO.ST,,SE,OMXS-FN,Communication Services,false
-EPIS,EPIS.ST,,SE,OMXS-FN,Industrials,false
-ETTEPLAN,ETTEPLAN.ST,,SE,OMXS-FN,Technology,false
-EXSALT,EXSALT.ST,,SE,OMXS-FN,Consumer Discretionary,false
-FABLE,FABLE.ST,,SE,OMXS-FN,Energy,true
-FINW,FINW.ST,,SE,OMXS-FN,Real Estate,false
-FORTNOX,FORTNOX.ST,,SE,OMXS-FN,Utilities,false
-GAPWAV,GAPWAV.ST,,SE,OMXS-FN,Health Care,false
-GIGSEK,GIGSEK.ST,,SE,OMXS-FN,Financials,false
-GOMERO,GOMERO.ST,,SE,OMXS-FN,Consumer Staples,true
-GREENM,GREENM.ST,,SE,OMXS-FN,Materials,false
-HELIOS,HELIOS.ST,,SE,OMXS-FN,Communication Services,false
-HEMNET,HEMNET.ST,,SE,OMXS-FN,Industrials,false
-HILBERT,HILBERT.ST,,SE,OMXS-FN,Technology,false
-HUMB,HUMB.ST,,SE,OMXS-FN,Consumer Discretionary,false
-KANAL,KANAL.ST,,SE,OMXS-FN,Energy,false
-KEBNI,KEBNI.ST,,SE,OMXS-FN,Real Estate,false
-KFAST,KFAST.ST,,SE,OMXS-FN,Utilities,false
-KLARA,KLARA.ST,,SE,OMXS-FN,Health Care,false
-KNW,KNW.ST,,SE,OMXS-FN,Financials,false
-KOPY,KOPY.ST,,SE,OMXS-FN,Consumer Staples,false
-LAMOR,LAMOR.ST,,SE,OMXS-FN,Materials,false
-LIDDS,LIDDS.ST,,SE,OMXS-FN,Communication Services,false
-LINC,LINC.ST,,SE,OMXS-FN,Industrials,true
-LOHILO,LOHILO.ST,,SE,OMXS-FN,Technology,true
-LUMITO,LUMITO.ST,,SE,OMXS-FN,Consumer Discretionary,false
-MAGLE,MAGLE.ST,,SE,OMXS-FN,Energy,true
-MANGOLD,MANGOLD.ST,,SE,OMXS-FN,Real Estate,false
-MANTEX,MANTEX.ST,,SE,OMXS-FN,Utilities,true
-MIDS,MIDS.ST,,SE,OMXS-FN,Health Care,true
-MNDR,MNDR.ST,,SE,OMXS-FN,Financials,false
-NETMORE,NETMORE.ST,,SE,OMXS-FN,Consumer Staples,false
-NEXAM,NEXAM.ST,,SE,OMXS-FN,Materials,true
-NICO,NICO.ST,,SE,OMXS-FN,Communication Services,true
-NORDIG,NORDIG.ST,,SE,OMXS-FN,Industrials,true
-NORDISK,NORDISK.ST,,SE,OMXS-FN,Technology,false
-NOVUS,NOVUS.ST,,SE,OMXS-FN,Consumer Discretionary,false
-PAXMAN,PAXMAN.ST,,SE,OMXS-FN,Energy,false
-PROSTAT,PROSTAT.ST,,SE,OMXS-FN,Real Estate,false
-RAKETE,RAKETE.ST,,SE,OMXS-FN,Utilities,false
-REFINE,REFINE.ST,,SE,OMXS-FN,Health Care,false
-RLS,RLS.ST,,SE,OMXS-FN,Financials,false
-RUGVISTA,RUGVISTA.ST,,SE,OMXS-FN,Consumer Staples,false
-SAFETURE,SAFETURE.ST,,SE,OMXS-FN,Materials,false
-SBB,SBB.ST,,SE,OMXS-FN,Communication Services,false
-SERNEKE,SERNEKE.ST,,SE,OMXS-FN,Industrials,false
-SIMRIS,SIMRIS.ST,,SE,OMXS-FN,Technology,false
-SLEEP,SLEEP.ST,,SE,OMXS-FN,Consumer Discretionary,true
-SOLTECH,SOLTECH.ST,,SE,OMXS-FN,Energy,false
-SPAGO,SPAGO.ST,,SE,OMXS-FN,Real Estate,true
-STILLE,STILLE.ST,,SE,OMXS-FN,Utilities,false
-STRAX,STRAX.ST,,SE,OMXS-FN,Health Care,false
-SUST,SUST.ST,,SE,OMXS-FN,Financials,false
-TANGIAM,TANGIAM.ST,,SE,OMXS-FN,Consumer Staples,false
-TEQ,TEQ.ST,,SE,OMXS-FN,Materials,true
-TRUE,TRUE.ST,,SE,OMXS-FN,Communication Services,false
-TRIBONA,TRIBONA.ST,,SE,OMXS-FN,Industrials,false
-VERTISEIT,VERTISEIT.ST,,SE,OMXS-FN,Technology,false
-VNVIO,VNVIO.ST,,SE,OMXS-FN,Consumer Discretionary,false
-XANO,XANO.ST,,SE,OMXS-FN,Energy,false
-XBRANE,XBRANE.ST,,SE,OMXS-FN,Real Estate,true
-ZICC,ZICC.ST,,SE,OMXS-FN,Utilities,false
-ZIGNSEC,ZIGNSEC.ST,,SE,OMXS-FN,Health Care,false
-Hofseth BioCare,HBC.OL,NO0010598683,NO,OSLO,Consumer Staples,true
-HydrogenPro,HYPRO.OL,NO0010892359,NO,OSLO,Industrials,true
-IDEX Biometrics,IDEX.OL,NO0013536078,NO,OSLO,Technology,true
-Integrated Wind Solutions,IWS.OL,NO0013461350,NO,OSLO,Industrials,true
-Interoil Exploration and Production,IOX.OL,NO0013119255,NO,OSLO,Energy,true
-KMC Properties,KMC.OL,NO0013637181,NO,OSLO,Real Estate,false
-Kongsberg Automotive,KOA.OL,NO0003033102,NO,OSLO,Consumer Discretionary,true
-Lifecare,LIFE.OL,NO0013355859,NO,OSLO,Health Care,true
-Magnora,MGN.OL,NO0010187032,NO,OSLO,Energy,true
-Medistim,MEDI.OL,NO0010159684,NO,OSLO,Health Care,true
-Napatech,NAPA.OL,DK0060520450,NO,OSLO,Technology,true
-Navamedic,NAVA.OL,NO0010205966,NO,OSLO,Health Care,true
-Norske Skog,NSKOG.OL,NO0010861115,NO,OSLO,Materials,true
-Northern Ocean,NOL.OL,BMG6682J1036,NO,OSLO,Energy,true
-NRC Group,NRC.OL,NO0003679102,NO,OSLO,Industrials,true
-Nykode Therapeutics,NYKD.OL,NO0010714785,NO,OSLO,Health Care,true
-Odfjell Technology,OTL.OL,BMG6716L1081,NO,OSLO,Energy,true
-Okeanis Eco Tankers,OET.OL,MHY641771016,NO,OSLO,Energy,true
-Olav Thon Eiendomsselskap,OLT.OL,NO0005638858,NO,OSLO,Real Estate,false
-Oncoinvent,ONCIN.OL,NO0013251173,NO,OSLO,Health Care,true
-Otello Corporation,OTEC.OL,NO0010040611,NO,OSLO,Technology,true
-PCI Biotech Holding,PCIB.OL,NO0010405640,NO,OSLO,Health Care,false
-PetroNor E&P,PNOR.OL,NO0012942525,NO,OSLO,Energy,true
-Photocure,PHO.OL,NO0010000045,NO,OSLO,Health Care,true
-Polaris Media,POL.OL,NO0010466022,NO,OSLO,Communication Services,true
-poLight,PLT.OL,NO0012535832,NO,OSLO,Technology,true
-Prosafe,PRS.OL,NO0010861990,NO,OSLO,Energy,true
-Questor Technology,QEC.OL,CA74836K1003,NO,OSLO,Energy,true
-Rana Gruber,RANA.OL,NO0010907389,NO,OSLO,Materials,false
-Reach Subsea,REACH.OL,NO0003117202,NO,OSLO,Energy,true
-S.D. Standard ETC,SDSD.OL,CY0101550917,NO,OSLO,Energy,true
-Saga Pure,SAGA.OL,NO0010572589,NO,OSLO,Financials,true
-SmartCraft,SMCRT.OL,NO0011008971,NO,OSLO,Technology,false
-Smartoptics Group,SMOP.OL,NO0011012502,NO,OSLO,Technology,true
-Apetit,APETIT.HE,,FI,OMXH,Consumer Staples,true
-Detection Technology,DETEC.HE,,FI,OMXH,Technology,true
-Digital Workforce Services,DWF.HE,,FI,OMXH,Technology,true
-Eezy,EEZY.HE,,FI,OMXH,Industrials,true
-Enersense International,ESENSE.HE,,FI,OMXH,Industrials,true
-Fodelia,FODELIA.HE,,FI,OMXH,Consumer Staples,true
-Koskisen,KOSKI.HE,,FI,OMXH,Materials,true
-Lassila & Tikanoja,LAT1V.HE,,FI,OMXH,Industrials,false
-Modulight,MODU.HE,,FI,OMXH,Health Care,true
-Raute,RAUTE.HE,,FI,OMXH,Industrials,true
-Spinnova,SPINN.HE,,FI,OMXH,Materials,true
-Taaleri,TAALA.HE,,FI,OMXH,Financials,true
-Talenom,TNOM.HE,,FI,OMXH,Industrials,true
-H. Lundbeck B,HLUN-B.CO,,DK,OMXC,Health Care,true
-TCM Group,TCM.CO,,DK,OMXC,Consumer Discretionary,true
-Avanza Bank Holding,AZA.ST,,SE,OMXS,Financials,true
-Bilia A,BILI-A.ST,,SE,OMXS,Consumer Discretionary,true
-BHG Group,BHG.ST,,SE,OMXS,Consumer Discretionary,true
-Bulten,BULTEN.ST,,SE,OMXS,Consumer Discretionary,true
-Fagerhult,FAG.ST,,SE,OMXS,Industrials,true
-RevolutionRace,RVRC.ST,,SE,OMXS,Consumer Discretionary,true
-Vitec Software Group B,VIT-B.ST,,SE,OMXS,Technology,true
-Festi,FESTI.IC,,IS,OMXI,Consumer Staples,true
-VÍS,VIS.IC,,IS,OMXI,Financials,true
-Vår Energi,VAR.OL,,NO,OSLO,Energy,true
-SpareBank 1 Sør-Norge,SB1NO.OL,,NO,OSLO,Financials,true
-Frontline,FRO.OL,,NO,OSLO,Energy,true
-CMB.TECH,CMBTO.OL,,NO,OSLO,Energy,true
-Sparebanken Norge,SBNOR.OL,,NO,OSLO,Financials,true
-SpareBank 1 Østlandet,SPOL.OL,,NO,OSLO,Financials,true
-Tietoevry,TIETO.OL,,NO,OSLO,Technology,true
-Wilhelm Wilhelmsen Holding B,WWIB.OL,,NO,OSLO,Industrials,true
-SoftwareOne Holding,SWON.OL,,NO,OSLO,Technology,true
-AF Gruppen,AFG.OL,,NO,OSLO,Industrials,true
-Norconsult,NORCO.OL,,NO,OSLO,Industrials,true
-Elopak,ELO.OL,,NO,OSLO,Industrials,true
-BlueNord,BNOR.OL,,NO,OSLO,Energy,true
-Norbit,NORBT.OL,,NO,OSLO,Technology,true
-Solstad Maritime Holding,SOMA.OL,,NO,OSLO,Energy,true
-Aker BioMarine,AKBM.OL,,NO,OSLO,Consumer Staples,true
-Public Property Invest,PUBLI.OL,,NO,OSLO,Real Estate,true
-Arendals Fossekompani,AFK.OL,,NO,OSLO,Utilities,true
-Paratus Energy Services,PLSV.OL,,NO,OSLO,Energy,true
-B2 Impact,B2I.OL,,NO,OSLO,Financials,true
-Pareto Bank,PARB.OL,,NO,OSLO,Financials,true
-SpareBank 1 Ringerike Hadeland,RING.OL,,NO,OSLO,Financials,true
-Sentia,SNTIA.OL,,NO,OSLO,Financials,true
-Sparebanken Møre,MORG.OL,,NO,OSLO,Financials,true
-SpareBank 1 Østfold Akershus,SOAG.OL,,NO,OSLO,Financials,true
-SED Energy Holdings,ENH.OL,,NO,OSLO,Energy,true
-Klaveness Combination Carriers,KCC.OL,,NO,OSLO,Industrials,true
-SpareBank 1 Helgeland,HELG.OL,,NO,OSLO,Financials,true
-Cadeler,CADLR.OL,,NO,OSLO,Energy,true
-Endúr,ENDUR.OL,,NO,OSLO,Industrials,true
-Himalaya Shipping,HSHP.OL,,NO,OSLO,Industrials,true
-Lumi Education Group,LUMI.OL,NO0010927288,NO,OSLO,Consumer Discretionary,true
-Akobo Minerals,AKOBO.OL,,NO,OSLO,Materials,true
-ALNG,ALNG.OL,NO0010607971,NO,OSLO,Energy,true
-River Tech,RIVER.OL,MT0001710103,NO,OSLO,Consumer Discretionary,true
-Norwegian Property,NPRO.OL,NO0010317811,NO,OSLO,Real Estate,false
-Aasen Sparebank,AASB.OL,,NO,OSLO,Unknown,true
-ABL Group,ABL.OL,,NO,OSLO,Unknown,true
-Aker Carbon Capture,ACC.OL,,NO,OSLO,Unknown,false
-American Shipping Company,AMSC.OL,,NO,OSLO,Unknown,false
-Aqua Bio Technology,ABT.OL,,NO,OSLO,Unknown,false
-Arribatec Group,ARR.OL,,NO,OSLO,Unknown,true
-Borgestad,BORG.OL,,NO,OSLO,Unknown,false
-Carasent,CARA.OL,,NO,OSLO,Unknown,false
-Dolphin Drilling,DDRIL.OL,,NO,OSLO,Unknown,true
-ECIT,ECIT.OL,,NO,OSLO,Unknown,false
-Electromagnetic Geoservices,EMGS.OL,,NO,OSLO,Unknown,true
-Gentian Diagnostics,GENT.OL,,NO,OSLO,Unknown,true
-Havila Kystruten,HKY.OL,,NO,OSLO,Unknown,true
-Havila Shipping,HAV.OL,,NO,OSLO,Unknown,true
-Huddly,HDLY.OL,,NO,OSLO,Unknown,true
-Hunter Group,HUNT.OL,,NO,OSLO,Unknown,true
-Jinhui Shipping and Transportation,JIN.OL,,NO,OSLO,Unknown,true
-Meltwater,MWTR.OL,,NO,OSLO,Unknown,false
-Morrow Bank,MOBA.OL,,NO,OSLO,Unknown,false
-Norwegian Block Exchange,NBX.OL,,NO,OSLO,Unknown,true
-Northern Drilling,NODL.OL,,NO,OSLO,Unknown,false
-RomReal,ROM.OL,,NO,OSLO,Unknown,true
-Scana,SCANA.OL,,NO,OSLO,Unknown,true
-SeaBird Exploration,SBX.OL,,NO,OSLO,Unknown,false
-Solstad Offshore,SOFF.OL,,NO,OSLO,Unknown,true
-StrongPoint,STRO.OL,,NO,OSLO,Unknown,true
-Techstep,TECH.OL,,NO,OSLO,Unknown,true
-Treasure,TRE.OL,,NO,OSLO,Unknown,false
-Vow,VOW.OL,,NO,OSLO,Unknown,true
-Zalaris,ZAL.OL,,NO,OSLO,Unknown,true
-2020 Bulkers,2020.OL,,NO,OSLO,Unknown,true
-5th Planet Games,5PG.OL,,NO,OSLO,Unknown,true
-Agillic,AGILC.CO,,DK,OMXC,Unknown,true
-Ambea?,AMBEA.CO,,DK,OMXC,Unknown,false
-Atlantic Sapphire,ASA.CO,,DK,OMXC,Unknown,false
-BioPorto,BIOPOR.CO,,DK,OMXC,Unknown,true
-Boliga Gruppen,BOLIGA.CO,,DK,OMXC,Unknown,false
-Brain+,BRAINP.CO,,DK,OMXC,Unknown,false
-Brødrene A & O Johansen,AOJ-B.CO,,DK,OMXC,Unknown,true
-Cemat,CEMAT.CO,,DK,OMXC,Unknown,true
-Columbus,COLUM.CO,,DK,OMXC,Unknown,true
-Copenhagen Capital,CPHCAP.CO,,DK,OMXC,Unknown,false
-Copyright Agent,COPY.CO,,DK,OMXC,Unknown,false
-CS Medica,CSMED.CO,,DK,OMXC,Unknown,false
-Dantax,DANT.CO,,DK,OMXC,Unknown,true
-Djurslands Bank,DJUR.CO,,DK,OMXC,Unknown,true
-DonkeyRepublic,DONKEY.CO,,DK,OMXC,Unknown,true
-FastPassCorp,FASTPC.CO,,DK,OMXC,Unknown,true
-Flügger Group B,FLUG-B.CO,,DK,OMXC,Unknown,true
-Gabriel Holding,GABR.CO,,DK,OMXC,Unknown,true
-Green Hydrogen Systems,GREENH.CO,,DK,OMXC,Unknown,false
-Gubra,GUBRA.CO,,DK,OMXC,Unknown,true
-Gyldendal B,GYLD-B.CO,,DK,OMXC,Unknown,true
-Harboes Bryggeri B,HARB-B.CO,,DK,OMXC,Unknown,true
-Hvidbjerg Bank,HVID.CO,,DK,OMXC,Unknown,true
-InterMail B,IMAIL-B.CO,,DK,OMXC,Unknown,false
-Jeudan,JDAN.CO,,DK,OMXC,Unknown,true
-Kreditbanken,KRE.CO,,DK,OMXC,Unknown,true
-Lån & Spar Bank,LASP.CO,,DK,OMXC,Unknown,true
-Lollands Bank,LOLB.CO,,DK,OMXC,Unknown,true
-Luxor B,LUXOR-B.CO,,DK,OMXC,Unknown,true
-MapsPeople,MAPS.CO,,DK,OMXC,Unknown,false
-Monsenso,MONSO.CO,,DK,OMXC,Unknown,true
-Newcap Holding,NEWCAP.CO,,DK,OMXC,Unknown,true
-NNIT,NNIT.CO,,DK,OMXC,Unknown,true
-North Media,NORTHM.CO,,DK,OMXC,Unknown,true
-NTR Holding B,NTR-B.CO,,DK,OMXC,Unknown,false
-Odico,ODICO.CO,,DK,OMXC,Unknown,false
-Orphazyme,ORPHA.CO,,DK,OMXC,Unknown,false
-Parken Sport & Entertainment,PARKEN.CO,,DK,OMXC,Unknown,true
-Penneo,PENNEO.CO,,DK,OMXC,Unknown,false
-Prime Office,PRIMOF.CO,,DK,OMXC,Unknown,true
-Roblon B,ROBL-B.CO,,DK,OMXC,Unknown,false
-Rovsing,ROV.CO,,DK,OMXC,Unknown,true
-Scandinavian Brake Systems,SBS.CO,,DK,OMXC,Unknown,false
-Scape Technologies,SCAPE.CO,,DK,OMXC,Unknown,false
-Shape Robotics,SHAPE.CO,,DK,OMXC,Unknown,true
-Silkeborg IF Invest,SILKE.CO,,DK,OMXC,Unknown,false
-SKAKO,SKAKO.CO,,DK,OMXC,Unknown,true
-SP Group,SPG.CO,,DK,OMXC,Unknown,true
-Totalbanken,TOTAL.CO,,DK,OMXC,Unknown,false
-Trifork Group,TRIFOR.CO,,DK,OMXC,Unknown,true
-UIE,UIE.CO,,DK,OMXC,Unknown,true
-ViroGates,VIRO.CO,,DK,OMXC,Unknown,true
-WindowMaster International,WMA.CO,,DK,OMXC,Unknown,true
-Wirtek,WIRTEK.CO,,DK,OMXC,Unknown,true
-Aktia Bank,AKTIA.HE,,FI,OMXH,Unknown,true
-Alma Media,ALMA.HE,,FI,OMXH,Unknown,true
-Boreo,BOREO.HE,,FI,OMXH,Unknown,true
-Digia,DIGIA.HE,,FI,OMXH,Unknown,true
-Heeros,HEEROS.HE,,FI,OMXH,Unknown,false
-Kesko B,KESKOB.HE,,FI,OMXH,Unknown,true
-Kojamo,KOJAMO.HE,,FI,OMXH,Unknown,false
-Kreate Group,KREATE.HE,,FI,OMXH,Unknown,true
-Lifa Air,LIFA.HE,,FI,OMXH,Unknown,false
-Mandatum,MANTA.HE,,FI,OMXH,Unknown,true
-Metsä Board B,METSB.HE,,FI,OMXH,Unknown,true
-Optomed,OPTOMED.HE,,FI,OMXH,Unknown,true
-Pihlajalinna,PIHLIS.HE,,FI,OMXH,Unknown,true
-Reka Industrial,REKA.HE,,FI,OMXH,Unknown,true
-Remedy Entertainment,REMEDY.HE,,FI,OMXH,Unknown,true
-SSH Communications Security,SSH1V.HE,,FI,OMXH,Unknown,true
-Viking Line,VIK1V.HE,,FI,OMXH,Unknown,true
-Wetteri,WETTERI.HE,,FI,OMXH,Unknown,true
-YIT,YIT.HE,,FI,OMXH,Unknown,true
-Amaroq Minerals,AMRQ.IC,,IS,OMXI,Unknown,true
-Kaldalón,KALD.IC,,IS,OMXI,Unknown,true
-Sjóvá-Almennar,SJOVA.IC,,IS,OMXI,Unknown,true
-Acarix,ACARIX.ST,,SE,OMXS,Unknown,true
-Acroud,ACROUD.ST,,SE,OMXS,Unknown,true
-Active Biotech,ACTI.ST,,SE,OMXS,Unknown,true
-Alligo B,ALLIGO-B.ST,,SE,OMXS,Unknown,true
-Alelion Energy Systems,ALELIO.ST,,SE,OMXS,Unknown,false
-Alimak Group,ALIG.ST,,SE,OMXS,Unknown,true
-Annehem Fastigheter B,ANNE-B.ST,,SE,OMXS,Unknown,true
-Arise,ARISE.ST,,SE,OMXS,Unknown,false
-Artificial Solutions,ASAI.ST,,SE,OMXS,Unknown,false
-Attendo,ATT.ST,,SE,OMXS,Unknown,true
-Avensia,AVEN.ST,,SE,OMXS,Unknown,true
-Beijer Alma B,BEIA-B.ST,,SE,OMXS,Unknown,true
-Bredband2 i Skandinavien,BRE2.ST,,SE,OMXS,Unknown,false
-Byggmax Group,BMAX.ST,,SE,OMXS,Unknown,true
-C-Rad B,CRAD-B.ST,,SE,OMXS,Unknown,true
-Careium,CARE.ST,,SE,OMXS,Unknown,true
-Cavotec,CCC.ST,,SE,OMXS,Unknown,true
-Christian Berner Tech Trade B,CBTT-B.ST,,SE,OMXS,Unknown,false
-Clavister Holding,CLAV.ST,,SE,OMXS,Unknown,true
-Concentric,COIC.ST,,SE,OMXS,Unknown,false
-Copperstone Resources B,COPP-B.ST,,SE,OMXS,Unknown,false
-Doro,DORO.ST,,SE,OMXS,Unknown,false
-Electra Gruppen,ELEC.ST,,SE,OMXS,Unknown,false
-Eltel,ELTEL.ST,,SE,OMXS,Unknown,true
-Ependion,EPEN.ST,,SE,OMXS,Unknown,true
-EQL Pharma,EQL.ST,,SE,OMXS,Unknown,true
-Ework Group,EWRK.ST,,SE,OMXS,Unknown,true
-Fastpartner A,FPAR-A.ST,,SE,OMXS,Unknown,true
-Firefly,FIRE.ST,,SE,OMXS,Unknown,true
-Formpipe Software,FPIP.ST,,SE,OMXS,Unknown,true
-Generic Sweden,GENI.ST,,SE,OMXS,Unknown,true
-GHP Specialty Care,GHP.ST,,SE,OMXS,Unknown,false
-Havsfrun Investment B,HAV-B.ST,,SE,OMXS,Unknown,true
-Hifab Group B,HIFA-B.ST,,SE,OMXS,Unknown,false
-InCoax Networks,INCOAX.ST,,SE,OMXS,Unknown,true
-Inission B,INISS-B.ST,,SE,OMXS,Unknown,true
-Irisity,IRIS.ST,,SE,OMXS,Unknown,true
-Kancera,KAN.ST,,SE,OMXS,Unknown,false
-Kopparbergs Bryggeri B,KOBR-B.ST,,SE,OMXS,Unknown,true
-Lammhults Design Group B,LAMM-B.ST,,SE,OMXS,Unknown,true
-Medivir B,MVIR-B.ST,,SE,OMXS,Unknown,false
-Micro Systemation B,MSAB-B.ST,,SE,OMXS,Unknown,true
-Midsona B,MIDSONA-B.ST,,SE,OMXS,Unknown,false
-Misen Energy,MISEN.ST,,SE,OMXS,Unknown,false
-Nanexa,NANEXA.ST,,SE,OMXS,Unknown,true
-Nilörngruppen B,NIL-B.ST,,SE,OMXS,Unknown,true
-Nordic Waterproofing Holding,NWG.ST,,SE,OMXS,Unknown,false
-Ortoma B,ORT-B.ST,,SE,OMXS,Unknown,true
-Ovzon,OVZON.ST,,SE,OMXS,Unknown,true
-Prevas B,PREV-B.ST,,SE,OMXS,Unknown,true
-Precise Biometrics,PREC.ST,,SE,OMXS,Unknown,true
-Rottneros,RROS.ST,,SE,OMXS,Unknown,true
-SinterCast,SINT.ST,,SE,OMXS,Unknown,true
-SkiStar B,SKIS-B.ST,,SE,OMXS,Unknown,true
-Starbreeze A,STAR-A.ST,,SE,OMXS,Unknown,true
-Starbreeze B,STAR-B.ST,,SE,OMXS,Unknown,true
-Studsvik,SVIK.ST,,SE,OMXS,Unknown,true
-Svedbergs Group B,SVED-B.ST,,SE,OMXS,Unknown,true
-Tethys Oil,TETY.ST,,SE,OMXS,Unknown,false
-Transtema Group,TRANS.ST,,SE,OMXS,Unknown,true
-VBG Group B,VBG-B.ST,,SE,OMXS,Unknown,true
-Vicore Pharma Holding,VICO.ST,,SE,OMXS,Unknown,true
-Wise Group,WISE.ST,,SE,OMXS,Unknown,true
-2cureX,2CUREX.ST,,SE,OMXS-FN,Unknown,true
-A1M Pharma,A1M.ST,,SE,OMXS-FN,Unknown,false
-Abliva,ABLI.ST,,SE,OMXS-FN,Unknown,false
-Admicom,ADMCM.ST,,SE,OMXS-FN,Unknown,false
-Advenica,ADVE.ST,,SE,OMXS-FN,Unknown,true
-AegirBio,AEGIR.ST,,SE,OMXS-FN,Unknown,true
-Annexin Pharmaceuticals,ANNX.ST,,SE,OMXS-FN,Unknown,true
-Aptahem,APTA.ST,,SE,OMXS-FN,Unknown,true
-Audiodo,AUDO.ST,,SE,OMXS-FN,Unknown,false
-Avtech Sweden B,AVT-B.ST,,SE,OMXS-FN,Unknown,true
-BellPal Holding,BELLP.ST,,SE,OMXS-FN,Unknown,false
-Bonäsudden Holding,BONAS.ST,,SE,OMXS-FN,Unknown,true
-CAG Group,CAG.ST,,SE,OMXS-FN,Unknown,true
-Candles Scandinavia,CANDLE-B.ST,,SE,OMXS-FN,Unknown,true
-Cell Impact B,CI-B.ST,,SE,OMXS-FN,Unknown,false
-Coala-Life Group,COALA.ST,,SE,OMXS-FN,Unknown,false
-Curasight,CURAS.ST,,SE,OMXS-FN,Unknown,true
-Dignitana,DIGN.ST,,SE,OMXS-FN,Unknown,false
-Emplicure,EMPLI.ST,,SE,OMXS-FN,Unknown,false
-Enorama Pharma,ERMA.ST,,SE,OMXS-FN,Unknown,true
-Euroafrica Digital Ventures,EURA.ST,,SE,OMXS-FN,Unknown,false
-ExpreS2ion Biotech,EXPRS2.ST,,SE,OMXS-FN,Unknown,true
-Fragbite Group,FRAG.ST,,SE,OMXS-FN,Unknown,true
-Free2move Holding,F2M.ST,,SE,OMXS-FN,Unknown,true
-Gapwaves B,GAPW-B.ST,,SE,OMXS-FN,Unknown,true
-Guard Therapeutics,GUARD.ST,,SE,OMXS-FN,Unknown,true
-Hilbert Group,HILB.ST,,SE,OMXS-FN,Unknown,false
-Hubbster Group,HUBS.ST,,SE,OMXS-FN,Unknown,false
-Immunovia,IMMNOV.ST,,SE,OMXS-FN,Unknown,true
-Infracom Group,INFRA.ST,,SE,OMXS-FN,Unknown,true
-Lipidor,LIPI.ST,,SE,OMXS-FN,Unknown,false
-Lundin Gold Swedish Depository Receipts,LUG.ST,,SE,OMXS-FN,Unknown,true
-Movinn,MOVINN.ST,,SE,OMXS-FN,Unknown,false
-Netmore Group B,NETMORE-B.ST,,SE,OMXS-FN,Unknown,false
-Nordic Flanges Group,NFG.ST,,SE,OMXS-FN,Unknown,false
-Saniona,SANION.ST,,SE,OMXS-FN,Unknown,true
-Scandinavian Enviro Systems,SES.ST,,SE,OMXS-FN,Unknown,true
-Tangiamo Touch Technology,TANGI.ST,,SE,OMXS-FN,Unknown,false
-Vertiseit B,VERT-B.ST,,SE,OMXS-FN,Unknown,true
-ZignSec,ZIGN.ST,,SE,OMXS-FN,Unknown,false
-Arcario,ARCA.ST,,SE,SPOTLIGHT,Unknown,false
-Chordate Medical Holding,CMH.ST,,SE,SPOTLIGHT,Unknown,false
-Cyxone,CYXO.ST,,SE,SPOTLIGHT,Unknown,false
-Diadrom Holding,DIAH.ST,,SE,SPOTLIGHT,Unknown,true
-DLaboratory Sweden,DLAB.ST,,SE,SPOTLIGHT,Unknown,true
-Everysport Group,EVERY.ST,,SE,SPOTLIGHT,Unknown,false
-Fluicell,FLUI.ST,,SE,SPOTLIGHT,Unknown,true
-Iconovo,ICO.ST,,SE,SPOTLIGHT,Unknown,true
-Inhalation Sciences Sweden,ISAB.ST,,SE,SPOTLIGHT,Unknown,true
-LC-Tec Holding,LCT.ST,,SE,SPOTLIGHT,Unknown,true
-OrganoClick,ORGC.ST,,SE,SPOTLIGHT,Unknown,true
-PharmaLundensis,PHAL.ST,,SE,SPOTLIGHT,Unknown,true
-Phase Holographic Imaging,PHI.ST,,SE,SPOTLIGHT,Unknown,false
-Real Fastigheter,REALFI.ST,,SE,SPOTLIGHT,Unknown,true
-Redsense Medical,REDS.ST,,SE,SPOTLIGHT,Unknown,true
-Recyctec Holding,RECY-B.ST,,SE,SPOTLIGHT,Unknown,true
-SensoDetect,SDET.ST,,SE,SPOTLIGHT,Unknown,true
-Toleranzia,TOL.ST,,SE,SPOTLIGHT,Unknown,false
+Plejd AB,PLEJD.ST,,SE,NGM,Industrials,true
+Sensys Traffic AB,SENS.ST,SE0000567729,SE,NGM,Technology,true
+Sivers IMA Holding AB,SIVE.ST,SE0003917798,SE,NGM,Technology,true
+TCECUR Sweden A,TCC-A.ST,,SE,NGM,Technology,true
+36 Group AB,36GRP.ST,,SE,OMXS,Unknown,true
+Traton SE,8TRA.ST,DE000TRAT0N7,SE,OMXS,Unknown,true
+AAK AB,AAK.ST,SE0011337708,SE,OMXS,Unknown,true
+ABB Ltd,ABB.ST,CH0012221716,SE,OMXS,Industrials,true
+Abelco Investment Group AB,ABIG.ST,SE0003617075,SE,OMXS,Unknown,true
+Absolicon Solar Collector AB Series B,ABSL-B.ST,SE0018396947,SE,OMXS,Unknown,true
+Acarix A/S,ACARIX.ST,SE0009268717,SE,OMXS,Unknown,true
+Acrinova AB,ACRI-A.ST,SE0015660014,SE,OMXS,Unknown,true
+Acroud AB,ACROUD.ST,SE0001863291,SE,OMXS,Unknown,true
+Active Biotech AB,ACTI.ST,SE0001137985,SE,OMXS,Unknown,true
+Acuvi AB,ACUVI.ST,SE0017833171,SE,OMXS,Unknown,true
+Addtech AB (publ.),ADDT-B.ST,SE0014781795,SE,OMXS,Industrials,true
+Adverty,ADVT.ST,,SE,OMXS,Unknown,true
+Africa Energy Corp.,AEC.ST,CA00830W1059,SE,OMXS,Unknown,true
+Africa Resources,AFRI.ST,,SE,OMXS,Unknown,true
+Afry AB,AFRY.ST,SE0005999836,SE,OMXS,Industrials,true
+AGES Industri AB (publ),AGES-B.ST,SE0005799046,SE,OMXS,Unknown,true
+Arlandastad Group AB,AGROUP.ST,SE0016276851,SE,OMXS,Unknown,true
+AIK Fotboll B,AIK-B.ST,,SE,OMXS,Unknown,true
+Aino Health AB,AINO.ST,SE0009242555,SE,OMXS,Unknown,true
+Byggmästare Anders J Ahlström Holding AB (publ),AJA-B.ST,SE0026876476,SE,OMXS,Unknown,true
+eEducation Albert AB,ALBERT.ST,SE0016797989,SE,OMXS,Unknown,true
+Alfa Laval AB,ALFA.ST,SE0000695876,SE,OMXS,Industrials,true
+AddLife AB (publ),ALIF-B.ST,SE0014401378,SE,OMXS,Health Care,true
+Alimak Hek Group AB,ALIG.ST,SE0007158910,SE,OMXS,Unknown,true
+Autoliv Inc,ALIV-SDB.ST,SE0021309614,SE,OMXS,Unknown,true
+Alleima AB (publ),ALLEI.ST,SE0017615644,SE,OMXS,Industrials,true
+Alligo AB Series B,ALLIGO-B.ST,SE0009922305,SE,OMXS,Unknown,true
+ALM Equity AB Pfd.,ALM-PREF.ST,SE0004109627,SE,OMXS,Unknown,true
+ALM Equity AB (publ),ALM.ST,SE0000540163,SE,OMXS,Unknown,true
+Alpcot Holding AB Series B,ALPCOT-B.ST,SE0016845655,SE,OMXS,Unknown,true
+ALTRA FASTIGHETER,ALTRA.ST,,SE,OMXS,Unknown,true
+Alvotech SDB,ALVO-SDB.ST,SE0025011463,SE,OMXS,Unknown,true
+Alzinova AB,ALZ.ST,SE0007413455,SE,OMXS,Unknown,true
+Amaron Commercial Properties AB (publ),AMARON-CF-B.ST,,SE,OMXS,Unknown,true
+Ambea AB,AMBEA.ST,SE0009663826,SE,OMXS,Health Care,true
+Amido AB,AMIDO.ST,,SE,OMXS,Unknown,true
+Angler Gaming Plc,ANGL.ST,,SE,OMXS,Unknown,true
+Annehem Fastigheter AB,ANNE-B.ST,SE0015221684,SE,OMXS,Unknown,true
+Addnode Group AB (publ),ANOD-B.ST,SE0017885767,SE,OMXS,Technology,true
+Anoto Group AB,ANOT.ST,SE0010415281,SE,OMXS,Technology,true
+Apotea,APOTEA.ST,SE0023313762,SE,OMXS,Unknown,true
+APR Technologies AB,APRTEC.ST,,SE,OMXS,Unknown,true
+AQ Group AB,AQ.ST,SE0022062196,SE,OMXS,Unknown,true
+Arbona AB (publ),ARBO-A.ST,,SE,OMXS,Unknown,true
+Arctic Gold Publ AB,ARCT.ST,SE0000697948,SE,OMXS,Unknown,true
+ARENIT Industrie SE SDB,ARENIT-SDB.ST,,SE,OMXS,Unknown,true
+Arctic Falls,ARFA.ST,,SE,OMXS,Unknown,true
+Arion banki hf,ARION-SDB.ST,SE0010413567,SE,OMXS,Unknown,true
+Arjo AB (publ),ARJO-B.ST,SE0010468116,SE,OMXS,Health Care,true
+Arctic Paper S.A.,ARP.ST,PLARTPR00012,SE,OMXS,Unknown,true
+Arla Plast AB,ARPL.ST,SE0015810817,SE,OMXS,Unknown,true
+Asker Healthcare,ASKER.ST,SE0024171458,SE,OMXS,Unknown,true
+Financière Amuse TopCo SAS,ASMDEE-B.ST,SE0023615638,SE,OMXS,Unknown,true
+ASSA ABLOY AB (publ),ASSA-B.ST,SE0007100581,SE,OMXS,Industrials,true
+Attana,ATANA.ST,,SE,OMXS,Unknown,true
+Atlas Copco AB Series A,ATCO-A.ST,SE0017486889,SE,OMXS,Industrials,true
+Atlas Copco AB Series B,ATCO-B.ST,SE0017486897,SE,OMXS,Industrials,true
+Actic Group AB,ATIC.ST,SE0009269467,SE,OMXS,Unknown,true
+Athanase Innovation AB,ATIN.ST,SE0018014060,SE,OMXS,Unknown,true
+Alligator Bioscience AB,ATORX.ST,SE0024173637,SE,OMXS,Health Care,true
+Atrium Ljungberg AB (publ),ATRLJ-B.ST,SE0024320832,SE,OMXS,Unknown,true
+Attendo AB (publ),ATT.ST,SE0007666110,SE,OMXS,Unknown,true
+AVARDA BANK,AVARDA.ST,SE0025666969,SE,OMXS,Unknown,true
+Avensia publ AB,AVEN.ST,SE0000671745,SE,OMXS,Unknown,true
+Avsalt Group,AVSALT.ST,,SE,OMXS,Unknown,true
+Axfood AB,AXFO.ST,SE0006993770,SE,OMXS,Consumer Staples,true
+aXichem AB,AXIC-A.ST,SE0005250719,SE,OMXS,Unknown,true
+Axolot Solutions Holding AB,AXOLOT.ST,SE0009414303,SE,OMXS,Unknown,true
+Avanza Bank Holding AB (publ),AZA.ST,SE0012454072,SE,OMXS,Financials,true
+AstraZeneca PLC,AZN.ST,GB0009895292,SE,OMXS,Health Care,true
+B3 Consulting Group AB,B3.ST,SE0008347660,SE,OMXS,Unknown,true
+Bahnhof AB Series B,BAHN-B.ST,SE0010442418,SE,OMXS,Unknown,true
+Balco Group AB,BALCO.ST,SE0010323998,SE,OMXS,Unknown,true
+Fastighets AB Balder (publ),BALD-B.ST,SE0017832488,SE,OMXS,Real Estate,true
+Eurobattery Minerals AB,BAT.ST,,SE,OMXS,Unknown,true
+Bawat Water Technologies AB,BAWAT.ST,SE0017487424,SE,OMXS,Unknown,true
+New Bubbleroom Sweden AB,BBROOM.ST,SE0016288476,SE,OMXS,Unknown,true
+Beammwave AB B,BEAMMW-B.ST,SE0016799068,SE,OMXS,Technology,true
+BE Group AB,BEGR.ST,SE0008321921,SE,OMXS,Unknown,true
+Beijer Alma AB (publ),BEIA-B.ST,SE0011090547,SE,OMXS,Unknown,true
+Beijer Ref AB (publ),BEIJ-B.ST,SE0015949748,SE,OMXS,Industrials,true
+Beowulf Mining PLC,BEO-SDB.ST,SE0002457796,SE,OMXS,Unknown,true
+Bergman & Beving AB (publ),BERG-B.ST,SE0000101362,SE,OMXS,Unknown,true
+Berner Industrier B,BERNER-B.ST,SE0006143129,SE,OMXS,Unknown,true
+Besqab Pref B,BESQAB-PREF-B.ST,SE0015195706,SE,OMXS,Unknown,true
+Besqab,BESQAB.ST,SE0010547786,SE,OMXS,Unknown,true
+Byhmgard publ AB,BESS.ST,,SE,OMXS,Unknown,true
+Better Collective,BETCO.ST,DK0060952240,SE,OMXS,Communication Services,true
+Betsson AB,BETS-B.ST,SE0022726485,SE,OMXS,Consumer Discretionary,true
+BHG Group AB (publ),BHG.ST,SE0010948588,SE,OMXS,Consumer Discretionary,true
+Bergholm Fritidsfordon Ab,BHOLM.ST,,SE,OMXS,Unknown,true
+BICO Group AB,BICO.ST,SE0013647385,SE,OMXS,Health Care,true
+Bilia AB (publ),BILI-A.ST,SE0009921588,SE,OMXS,Consumer Discretionary,true
+BillerudKorsnas AB,BILL.ST,SE0000862997,SE,OMXS,Materials,true
+BIMobject AB,BIM.ST,SE0011644376,SE,OMXS,Unknown,true
+Binero Group AB,BINERO.ST,SE0005249570,SE,OMXS,Unknown,true
+BioInvent International AB,BINV.ST,SE0015244520,SE,OMXS,Health Care,true
+BioArctic AB (publ),BIOA-B.ST,SE0010323311,SE,OMXS,Health Care,true
+Bioextrax AB,BIOEX.ST,SE0016276752,SE,OMXS,Unknown,true
+BioGaia AB (publ),BIOG-B.ST,SE0017769995,SE,OMXS,Health Care,true
+Biosergen AS,BIOSGN.ST,SE0016013460,SE,OMXS,Unknown,true
+Biovica International AB (publ),BIOVIC-B.ST,SE0008613731,SE,OMXS,Unknown,true
+Bluelake Mineral,BLUE.ST,,SE,OMXS,Unknown,true
+Byggmax Group AB,BMAX.ST,SE0003303627,SE,OMXS,Unknown,true
+BMC,BMC.ST,,SE,OMXS,Unknown,true
+Nimbus Group AB,BOAT.ST,SE0015407390,SE,OMXS,Unknown,true
+Boho Group AB,BOHO-PREF.ST,,SE,OMXS,Unknown,true
+Boho Group AB,BOHO.ST,,SE,OMXS,Unknown,true
+Bokusgruppen AB,BOKUS.ST,SE0016074256,SE,OMXS,Unknown,true
+Boliden AB,BOL.ST,SE0020050417,SE,OMXS,Materials,true
+BoMill AB,BOMILL.ST,SE0014583332,SE,OMXS,Unknown,true
+Bonava AB (publ),BONAV-A.ST,SE0008091573,SE,OMXS,Unknown,true
+Bonava AB (publ),BONAV-B.ST,SE0008091581,SE,OMXS,Real Estate,true
+Bong AB (publ),BONG.ST,SE0000396061,SE,OMXS,Unknown,true
+Boozt AB,BOOZT.ST,SE0009888738,SE,OMXS,Consumer Discretionary,true
+Bjorn Borg AB,BORG.ST,SE0021921327,SE,OMXS,Unknown,true
+Botnia Gold AB (publ),BOTX.ST,SE0010494708,SE,OMXS,Unknown,true
+Boule Diagnostics AB,BOUL.ST,SE0011231158,SE,OMXS,Health Care,true
+Bravida Holding AB,BRAV.ST,SE0007491303,SE,OMXS,Industrials,true
+BRAVE,BRAVE.ST,,SE,OMXS,Unknown,true
+Brilliant Future AB,BRILL.ST,SE0015811625,SE,OMXS,Unknown,true
+Brinova Fastigheter AB (publ),BRIN-B.ST,SE0008347652,SE,OMXS,Unknown,true
+Briox,BRIX.ST,,SE,OMXS,Unknown,true
+B Treasury Capital AB,BTC-B.ST,,SE,OMXS,Unknown,true
+Goobit Group AB,BTCX.ST,SE0015837752,SE,OMXS,Unknown,true
+BTS Group AB (publ),BTS-B.ST,SE0000805426,SE,OMXS,Industrials,true
+BuddyPro Group B,BUDDY-B.ST,,SE,OMXS,Unknown,true
+Bufab Holding AB,BUFAB.ST,SE0025010671,SE,OMXS,Industrials,true
+Bulten AB,BULTEN.ST,SE0003849223,SE,OMXS,Consumer Discretionary,true
+Bure Equity AB,BURE.ST,SE0000195810,SE,OMXS,Financials,true
+Bambuser AB,BUSER.ST,SE0009663834,SE,OMXS,Technology,true
+Sweden BuyersClub AB,BUY.ST,SE0015660287,SE,OMXS,Unknown,true
+Bygg Partner i Dalarna Holding AB,BYGGP.ST,SE0009242324,SE,OMXS,Unknown,true
+Hernö Gin AB (publ),CALVIK.ST,SE0017564800,SE,OMXS,Unknown,true
+Camurus AB,CAMX.ST,SE0007692850,SE,OMXS,Health Care,true
+Northern CapSek Ventures PREF,CAPS-PREF.ST,,SE,OMXS,Unknown,true
+Northern CapSek Ventures,CAPS.ST,,SE,OMXS,Unknown,true
+Carasent ASA,CARA.ST,SE0023261599,SE,OMXS,Unknown,true
+Cardeon,CARDEO.ST,,SE,OMXS,Unknown,true
+Careium AB,CARE.ST,SE0017131824,SE,OMXS,Unknown,true
+Case Group AB,CASE.ST,SE0017082514,SE,OMXS,Unknown,true
+Castellum AB,CAST.ST,SE0000379190,SE,OMXS,Real Estate,true
+Catella AB A,CAT-A.ST,SE0000188500,SE,OMXS,Unknown,true
+Catella AB (publ),CAT-B.ST,SE0000188518,SE,OMXS,Financials,true
+Catena AB,CATE.ST,SE0001664707,SE,OMXS,Real Estate,true
+Cavotec SA,CCC.ST,SE0025010887,SE,OMXS,Unknown,true
+CodeMill AB,CDMIL.ST,SE0013914819,SE,OMXS,Unknown,true
+Cedergrenska AB,CEDER.ST,SE0015949946,SE,OMXS,Unknown,true
+CellaVision AB,CEVI.ST,SE0000683484,SE,OMXS,Healthcare,true
+Coeli Fastighet I PREF P2,CF1-PREF-P2.ST,,SE,OMXS,Unknown,true
+Coeli Fastighet II PREF P2,CF2-PREF-P2.ST,,SE,OMXS,Unknown,true
+ChargePanel AB,CHARGE.ST,SE0017083835,SE,OMXS,Unknown,true
+Checkin.com Group AB,CHECK.ST,SE0015810502,SE,OMXS,Unknown,true
+Cheffelo AB,CHEF.ST,SE0015556873,SE,OMXS,Unknown,true
+Cell Impact AB,CI.ST,SE0017885379,SE,OMXS,Unknown,true
+Cibus Nordic Real Estate AB (publ),CIBUS.ST,SE0010832204,SE,OMXS,Real Estate,true
+Cinclus Pharma,CINPHA.ST,SE0020388577,SE,OMXS,Unknown,true
+Cint Group AB,CINT.ST,SE0015483276,SE,OMXS,Technology,true
+Cloetta AB (publ),CLA-B.ST,SE0002626861,SE,OMXS,Consumer Staples,true
+Clas Ohlson AB (publ),CLAS-B.ST,SE0000584948,SE,OMXS,Consumer Discretionary,true
+Clavister Holding AB (publ.),CLAV.ST,SE0005308558,SE,OMXS,Unknown,true
+Corline Biomedical AB,CLBIO.ST,SE0006887451,SE,OMXS,Unknown,true
+Clean Motion AB,CLEMO.ST,SE0008216303,SE,OMXS,Unknown,true
+Climeon AB (publ),CLIME-B.ST,SE0009973548,SE,OMXS,Industrials,true
+Scandinavian ChemoTech AB Series B,CMOTEC-B.ST,SE0009242654,SE,OMXS,Unknown,true
+Concejo AB (publ),CNCJO-B.ST,SE0000236382,SE,OMXS,Unknown,true
+CNI Nordic 5 PREF P2,CNI5-PREF-P2.ST,,SE,OMXS,Unknown,true
+Coffee Stain Group B,COFFEE-B.ST,,SE,OMXS,Unknown,true
+Collaxio B,COLLAX.ST,,SE,OMXS,Unknown,true
+COOR Service Management AB,COOR.ST,SE0007158829,SE,OMXS,Industrials,true
+Corem Property Group AB (publ),CORE-A.ST,SE0010714279,SE,OMXS,Unknown,true
+Corem Property Group AB (publ),CORE-B.ST,SE0010714287,SE,OMXS,Real Estate,true
+Corem Property Group AB (publ),CORE-D.ST,SE0015961594,SE,OMXS,Unknown,true
+Corem Property Group AB (publ),CORE-PREF.ST,SE0010714311,SE,OMXS,Unknown,true
+Coeli Private Equity,CPE-I.ST,,SE,OMXS,Unknown,true
+C-Rad AB (publ),CRAD-B.ST,SE0002016352,SE,OMXS,Unknown,true
+Creades AB,CRED-A.ST,SE0015661236,SE,OMXS,Financials,true
+Crustal Resources B,CRUST-B.ST,,SE,OMXS,Unknown,true
+Crown Energy,CRWN.ST,,SE,OMXS,Unknown,true
+Catena Media plc,CTM.ST,MT0001000109,SE,OMXS,Unknown,true
+CTT Systems AB,CTT.ST,SE0000418923,SE,OMXS,Unknown,true
+CombinedX AB,CX.ST,SE0012065589,SE,OMXS,Unknown,true
+Dicot AB,DICOT.ST,,SE,OMXS,Unknown,true
+Dios Fastigheter AB,DIOS.ST,SE0001634262,SE,OMXS,Real Estate,true
+Dividend Sweden B,DIV-B.ST,,SE,OMXS,Unknown,true
+Divio Technologies AB Series B,DIVIO-B.ST,SE0011311554,SE,OMXS,Unknown,true
+District Metals Corporation,DMXSE-SDB.ST,,SE,OMXS,Unknown,true
+Diamyd Medical AB (publ),DMYD-B.ST,SE0005162880,SE,OMXS,Unknown,true
+Dometic Group AB (publ),DOM.ST,SE0007691613,SE,OMXS,Consumer Discretionary,true
+Done.ai Group AB,DONE.ST,SE0010546911,SE,OMXS,Unknown,true
+Drillcon AB,DRIL.ST,SE0001770702,SE,OMXS,Unknown,true
+Duni AB,DUNI.ST,SE0000616716,SE,OMXS,Consumer Staples,true
+Dustin Group AB,DUST.ST,SE0006625471,SE,OMXS,Technology,true
+Devyser Diagnostics AB,DVYSR.ST,SE0016588867,SE,OMXS,Unknown,true
+Dynavox Group,DYVOX.ST,SE0017105620,SE,OMXS,Unknown,true
+Eastnine AB (publ),EAST.ST,SE0022050183,SE,OMXS,Unknown,true
+Ecoclime Group AB Series B,ECC-B.ST,SE0012729937,SE,OMXS,Unknown,true
+Effnetplattformen Holding AB,EFFH.ST,SE0015987565,SE,OMXS,Unknown,true
+Egetis Therapeutics AB (publ),EGTX.ST,SE0003815604,SE,OMXS,Health Care,true
+Elekta AB (publ),EKTA-B.ST,SE0000163628,SE,OMXS,Unknown,true
+Elanders AB (publ),ELAN-B.ST,SE0000119299,SE,OMXS,Industrials,true
+Elon AB (publ),ELON.ST,SE0001572520,SE,OMXS,Unknown,true
+Eltel AB,ELTEL.ST,SE0006509949,SE,OMXS,Unknown,true
+AB Electrolux (publ),ELUX-A.ST,SE0016589170,SE,OMXS,Unknown,true
+AB Electrolux (publ),ELUX-B.ST,SE0016589188,SE,OMXS,Consumer Discretionary,true
+ELECTROLUX PAID SUBSCRIPTION SHARE,ELUX-BTA-B.ST,,SE,OMXS,Unknown,true
+ELECTROLUX SUBSCRIPTION RIGHTS CLA,ELUX-TR-B.ST,,SE,OMXS,Unknown,true
+EmbeddedArt Group AB,EMART.ST,,SE,OMXS,Unknown,true
+Teneo AI AB (publ),EMB.ST,SE0015797873,SE,OMXS,Unknown,true
+Embellence Group AB,EMBELL.ST,SE0013888831,SE,OMXS,Unknown,true
+Embracer Group AB (publ),EMBRAC-B.ST,SE0023615885,SE,OMXS,Consumer Discretionary,true
+Fastighetsbolaget Emilshus AB,EMIL-B.ST,SE0016785786,SE,OMXS,Unknown,true
+Fastighetsbolaget Emilshus AB Pfd,EMIL-PREF.ST,SE0016785794,SE,OMXS,Unknown,true
+Enersize Oy,ENERS.ST,FI4000233317,SE,OMXS,Unknown,true
+Enity,ENITY.ST,SE0025011554,SE,OMXS,Unknown,true
+Eniro AB,ENRO.ST,SE0011256312,SE,OMXS,Unknown,true
+Envar Holding AB,ENVAR.ST,,SE,OMXS,Unknown,true
+Eolus Vind AB (publ),EOLU-B.ST,SE0007075056,SE,OMXS,Utilities,true
+Ependion AB,EPEN.ST,SE0000671711,SE,OMXS,Unknown,true
+Epiroc AB (publ),EPI-A.ST,SE0015658109,SE,OMXS,Unknown,true
+Epiroc AB (publ),EPI-B.ST,SE0015658117,SE,OMXS,Unknown,true
+Electrolux Professional AB (publ),EPRO-B.ST,SE0013747870,SE,OMXS,Industrials,true
+EQL Pharma AB,EQL.ST,SE0005497732,SE,OMXS,Unknown,true
+EQT AB (publ),EQT.ST,SE0012853455,SE,OMXS,Unknown,true
+Telefonaktiebolaget LM Ericsson (publ),ERIC-A.ST,SE0000108649,SE,OMXS,Unknown,true
+Telefonaktiebolaget LM Ericsson (publ),ERIC-B.ST,SE0000108656,SE,OMXS,Technology,true
+ES Energy Save Holding AB,ESGR-B.ST,SE0014428447,SE,OMXS,Unknown,true
+Essity AB (publ),ESSITY-A.ST,SE0009922156,SE,OMXS,Unknown,true
+Essity AB (publ),ESSITY-B.ST,SE0009922164,SE,OMXS,Consumer Staples,true
+Evolution AB (publ),EVO.ST,SE0012673267,SE,OMXS,Consumer Discretionary,true
+eWork Group AB,EWRK.ST,SE0002402701,SE,OMXS,Unknown,true
+Exsitec Holding AB,EXS.ST,SE0014035762,SE,OMXS,Technology,true
+Fabege AB,FABG.ST,SE0011166974,SE,OMXS,Real Estate,true
+Fagerhult AB,FAG.ST,SE0010048884,SE,OMXS,Industrials,true
+Fastator AB,FASTAT.ST,SE0015407382,SE,OMXS,Unknown,true
+Ferroamp Elektronik AB,FERRO.ST,SE0012229920,SE,OMXS,Unknown,true
+Fingerprint Cards AB (publ),FING-B.ST,SE0026141665,SE,OMXS,Unknown,true
+Firefly AB (publ),FIRE.ST,SE0000395428,SE,OMXS,Unknown,true
+First Venture Sweden AB Series B,FIRST-B.ST,SE0016075451,SE,OMXS,Unknown,true
+Flat Capital AB Series B,FLAT-B.ST,SE0016609846,SE,OMXS,Unknown,true
+Flerie,FLERIE.ST,SE0022447348,SE,OMXS,Unknown,true
+Flexion Mobile PLC,FLEXM.ST,GB00BZ1MDB19,SE,OMXS,Unknown,true
+Fleming Properties AB,FLMNG.ST,SE0013042561,SE,OMXS,Unknown,true
+Flowscape Technology AB,FLOWS.ST,,SE,OMXS,Unknown,true
+Fluoguide AS,FLUO.ST,DK0061123312,SE,OMXS,Unknown,true
+FM Mattsson Mora Group AB (publ),FMM-B.ST,SE0018040883,SE,OMXS,Unknown,true
+Ferronordic AB (publ),FNM.ST,SE0005468717,SE,OMXS,Unknown,true
+Fortinova Fastigheter AB Series B,FNOVA-B.ST,SE0014608915,SE,OMXS,Unknown,true
+Fenix Outdoor International AG,FOI-B.ST,CH0242214887,SE,OMXS,Unknown,true
+FastPartner AB (publ),FPAR-A.ST,SE0013512506,SE,OMXS,Unknown,true
+FastPartner AB Series D,FPAR-D.ST,SE0013512514,SE,OMXS,Unknown,true
+FormPipe Software AB,FPIP.ST,SE0001338039,SE,OMXS,Unknown,true
+Fractal Gaming Group AB,FRACTL.ST,SE0015504477,SE,OMXS,Unknown,true
+Freetrailer Group A/S,FREETR.ST,DK0061026119,SE,OMXS,Unknown,true
+Freja eID Group AB,FREJA.ST,SE0015950308,SE,OMXS,Unknown,true
+Invoicery Group AB,FRILAN.ST,SE0019070434,SE,OMXS,Unknown,true
+Front Ventures B,FRNT-B.ST,,SE,OMXS,Unknown,true
+Frontwalker,FRWA-B.ST,,SE,OMXS,Unknown,true
+Fsport AB,FSPORT.ST,SE0016288641,SE,OMXS,Unknown,true
+Gentoo Media,G2M.ST,US36467X2062,SE,OMXS,Unknown,true
+G5 Entertainment publ AB,G5EN.ST,SE0001824004,SE,OMXS,Communication Services,true
+Gabather AB (publ),GABA.ST,SE0010869552,SE,OMXS,Unknown,true
+AB Gotland Art & Design,GAD.ST,,SE,OMXS,Unknown,true
+Garpco B,GARPCO-B.ST,,SE,OMXS,Unknown,true
+Jumpgate,GATE.ST,,SE,OMXS,Unknown,true
+Goodbye Kansas Group AB (publ),GBK.ST,SE0010270793,SE,OMXS,Unknown,true
+Gaming Corps AB,GCOR.ST,SE0014694691,SE,OMXS,Unknown,true
+Genetic Analysis AS,GEAN.ST,,SE,OMXS,Unknown,true
+Generic Sweden publ AB,GENI.ST,SE0001790791,SE,OMXS,Unknown,true
+Genovis AB (publ.),GENO.ST,SE0002485979,SE,OMXS,Health Care,true
+Getinge AB ser. B,GETI-B.ST,SE0000202624,SE,OMXS,Health Care,true
+Guideline Geo AB (publ),GGEO.ST,SE0005562014,SE,OMXS,Unknown,true
+GiG Software PLC,GIG-SDB.ST,SE0022760229,SE,OMXS,Unknown,true
+Gigasun AB,GIGA.ST,SE0016101521,SE,OMXS,Unknown,true
+GreenMerc B,GMERC-B.ST,,SE,OMXS,Unknown,true
+Gotland Rederi AB Series A,GOTL-A.ST,SE0000105371,SE,OMXS,Unknown,true
+Gotland Rederi AB Series B,GOTL-B.ST,SE0000105397,SE,OMXS,Unknown,true
+Genova Property Group AB,GPG.ST,SE0007184189,SE,OMXS,Unknown,true
+Gasporox AB (publ),GPX.ST,SE0008991624,SE,OMXS,Unknown,true
+GRANGEX AB,GRANGX.ST,,SE,OMXS,Unknown,true
+Greater Than AB,GREAT.ST,SE0005881554,SE,OMXS,Unknown,true
+Green Landscaping Group AB (publ),GREEN.ST,SE0010985028,SE,OMXS,Unknown,true
+Gränges AB (publ),GRNG.ST,SE0006288015,SE,OMXS,Materials,true
+Goldsky Resources Corp.,GSKR-SDB.ST,,SE,OMXS,Unknown,true
+Glycorex Transplantation B,GTAB-B.ST,,SE,OMXS,Unknown,true
+Gold Town Games,GTG.ST,,SE,OMXS,Unknown,true
+Guldbrev Holding AB (publ),GULD.ST,,SE,OMXS,Unknown,true
+H100 Group,H100.ST,,SE,OMXS,Unknown,true
+Hacksaw,HACK.ST,SE0025138357,SE,OMXS,Unknown,true
+HAKI Safety A,HAKI-A.ST,SE0000122657,SE,OMXS,Unknown,true
+HAKI Safety B,HAKI-B.ST,SE0000122673,SE,OMXS,Unknown,true
+Havsfrun Investment AB (publ),HAV-B.ST,SE0000312043,SE,OMXS,Unknown,true
+Haypp Grp Ab,HAYPP.ST,SE0016829469,SE,OMXS,Unknown,true
+Hunter Capital RTO 1 AB,HCRTO1.ST,,SE,OMXS,Unknown,true
+Hunter Capital RTO 2 AB,HCRTO2.ST,,SE,OMXS,Unknown,true
+Real Heart,HEART.ST,SE0006256798,SE,OMXS,Unknown,true
+HEBA Fastighets AB (publ),HEBA-B.ST,SE0017911480,SE,OMXS,Unknown,true
+Heimstaden AB Pfd.,HEIM-PREF.ST,SE0015949037,SE,OMXS,Unknown,true
+Heliospectra publ AB,HELIO.ST,SE0005933082,SE,OMXS,Unknown,true
+Hemnet Group AB,HEM.ST,SE0015671995,SE,OMXS,Technology,true
+Vuxen Group AB,HERNO-B.ST,SE0017767494,SE,OMXS,Unknown,true
+Hexagon AB (publ),HEXA-B.ST,SE0015961909,SE,OMXS,Technology,true
+Hexicon AB,HEXI.ST,SE0004898799,SE,OMXS,Unknown,true
+HF Reverse (RTO) AB ser. B,HFRTO-B.ST,,SE,OMXS,Unknown,true
+High Coast Distillery AB,HIGHCO-B.ST,SE0003848613,SE,OMXS,Unknown,true
+Hilbert Group AB Series B,HILB-B.ST,SE0016278154,SE,OMXS,Unknown,true
+H & M Hennes & Mauritz AB (publ),HM-B.ST,SE0000106270,SE,OMXS,Consumer Discretionary,true
+Hemply Balance Holding,HMPLY.ST,,SE,OMXS,Unknown,true
+HMS Networks AB (publ),HMS.ST,SE0009997018,SE,OMXS,Unknown,true
+Hansa Biopharma AB,HNSA.ST,SE0002148817,SE,OMXS,Health Care,true
+Hoist Finance AB,HOFI.ST,SE0006887063,SE,OMXS,Financials,true
+Holdflight,HOLDFL.ST,,SE,OMXS,Unknown,true
+Holmen AB (publ),HOLM-A.ST,SE0011090000,SE,OMXS,Unknown,true
+Holmen AB (publ),HOLM-B.ST,SE0011090018,SE,OMXS,Materials,true
+HomeMaid AB,HOME-B.ST,,SE,OMXS,Unknown,true
+HEXPOL AB (publ),HPOL-B.ST,SE0007074281,SE,OMXS,Materials,true
+Hexatronic Group AB,HTRO.ST,SE0018040677,SE,OMXS,Unknown,true
+Hufvudstaden AB (publ),HUFV-A.ST,SE0000170375,SE,OMXS,Real Estate,true
+Hultström Group B,HULT-B.ST,SE0000483943,SE,OMXS,Unknown,true
+Humana AB (publ),HUM.ST,SE0008040653,SE,OMXS,Health Care,true
+Hunter Capital AB,HUNTER.ST,,SE,OMXS,Unknown,true
+Husqvarna AB (publ),HUSQ-A.ST,SE0001662222,SE,OMXS,Unknown,true
+Husqvarna AB (publ),HUSQ-B.ST,SE0001662230,SE,OMXS,Consumer Discretionary,true
+Hybricon Bus Systems AB,HYCO.ST,,SE,OMXS,Unknown,true
+Infant Bacterial Therapeutics AB (publ),IBT-B.ST,SE0008015259,SE,OMXS,Unknown,true
+Neovici Holding AB (publ),IDLDX.ST,SE0003883990,SE,OMXS,Unknown,true
+Idun Industrier AB Series B,IDUN-B.ST,SE0013512464,SE,OMXS,Unknown,true
+IMHO Intermedia House,IMHO-B.ST,,SE,OMXS,Unknown,true
+Mendus AB (publ),IMMU.ST,SE0022239950,SE,OMXS,Unknown,true
+Impact Coatings publ AB,IMPC.ST,SE0001279142,SE,OMXS,Unknown,true
+InCoax Networks AB,INCOAX.ST,SE0009832595,SE,OMXS,Unknown,true
+Indutrade AB,INDT.ST,SE0001515552,SE,OMXS,Industrials,true
+Industrivarden AB ser. A,INDU-A.ST,SE0000190126,SE,OMXS,Unknown,true
+Industrivarden AB ser. C,INDU-C.ST,SE0000107203,SE,OMXS,Financials,true
+Infrea AB,INFREA.ST,SE0010600106,SE,OMXS,Unknown,true
+Inission AB (publ),INISS-B.ST,SE0016275069,SE,OMXS,Unknown,true
+Instalco Intressenter AB,INSTAL.ST,SE0017483506,SE,OMXS,Industrials,true
+Intea Fastigheter B,INTEA-B.ST,SE0017072259,SE,OMXS,Unknown,true
+Intea Fastigheter D,INTEA-D.ST,SE0017072267,SE,OMXS,Unknown,true
+Integrum AB Series B,INTEG-B.ST,SE0009807266,SE,OMXS,Unknown,true
+INTRUM PAID SUBSCRIPTION SHARES,INTRUM-BTA.ST,,SE,OMXS,Unknown,true
+INTRUM SUBSCRIPTION RIGHTS,INTRUM-TR.ST,,SE,OMXS,Unknown,true
+Intrum Justitia AB,INTRUM.ST,SE0000936478,SE,OMXS,Financials,true
+Investor AB ser. A,INVE-A.ST,SE0015811955,SE,OMXS,Unknown,true
+Investor AB ser. B,INVE-B.ST,SE0015811963,SE,OMXS,Financials,true
+Inwido AB,INWI.ST,SE0006220018,SE,OMXS,Industrials,true
+International Petroleum Corporation,IPCO.ST,CA46016U1084,SE,OMXS,Unknown,true
+Irisity AB,IRIS.ST,SE0005365681,SE,OMXS,Unknown,true
+IRLAB Therapeutics AB (publ),IRLAB-A.ST,SE0012675361,SE,OMXS,Unknown,true
+Image Systems AB,IS.ST,SE0006421871,SE,OMXS,Unknown,true
+Isofol Medical AB,ISOFOL.ST,SE0009581051,SE,OMXS,Health Care,true
+ITAB Shop Concept AB ser. B,ITAB.ST,SE0015962097,SE,OMXS,Unknown,true
+Intervacc AB,IVACC.ST,SE0009607252,SE,OMXS,Unknown,true
+Invisio Communications AB,IVSO.ST,SE0001200015,SE,OMXS,Technology,true
+iZafe Group AB Series B,IZAFE-B.ST,SE0003656834,SE,OMXS,Unknown,true
+JLT Mobile Computers AB (publ),JLT.ST,SE0000725624,SE,OMXS,Unknown,true
+JM AB (publ),JM.ST,SE0000806994,SE,OMXS,Real Estate,true
+John Mattson Fastighetsforetagen AB,JOMA.ST,SE0012481364,SE,OMXS,Unknown,true
+K2A Knaust & Andersson Fastigheter AB (publ),K2A-B.ST,SE0010520254,SE,OMXS,Unknown,true
+K2A Knaust & Andersson Fastigheter AB (publ),K2A-PREF.ST,SE0006852075,SE,OMXS,Unknown,true
+K33 AB (publ),K33.ST,,SE,OMXS,Unknown,true
+KABE Group AB (publ.),KABE-B.ST,SE0000107724,SE,OMXS,Consumer Discretionary,true
+Kakel Max AB (publ),KAKEL.ST,SE0009921075,SE,OMXS,Unknown,true
+Kambi Group PLC,KAMBI.ST,MT0000780107,SE,OMXS,Unknown,true
+Kalleback Property Invest AB,KAPIAB.ST,SE0005704079,SE,OMXS,Unknown,true
+Karnov Group AB,KAR.ST,SE0012323715,SE,OMXS,Industrials,true
+Karnell,KARNEL-B.ST,SE0017832173,SE,OMXS,Unknown,true
+KB Components AB (publ),KBC.ST,,SE,OMXS,Unknown,true
+KDventures AB ser. B,KDV-B.ST,,SE,OMXS,Unknown,true
+KebNi AB (publ),KEBNI-B.ST,SE0012904803,SE,OMXS,Unknown,true
+Kentima Holding publ AB,KENH.ST,SE0005100757,SE,OMXS,Unknown,true
+Keo Capital AB (publ),KEOC.ST,,SE,OMXS,Unknown,true
+Kinnevik Investment AB ser. A,KINV-A.ST,SE0022060513,SE,OMXS,Unknown,true
+Kinnevik Investment AB ser. B,KINV-B.ST,SE0022060521,SE,OMXS,Financials,true
+Klaria Pharma Holding AB,KLAR.ST,SE0007280326,SE,OMXS,Unknown,true
+KlaraBo Sverige AB Series B,KLARA-B.ST,SE0010832287,SE,OMXS,Real Estate,true
+Klimator AB,KLIMAT.ST,SE0014401329,SE,OMXS,Unknown,true
+Know IT AB,KNOW.ST,SE0000421273,SE,OMXS,Unknown,true
+Kopparbergs Bryggeri AB,KOBR-B.ST,SE0000500779,SE,OMXS,Unknown,true
+Kvix AB (Publ),KVIX.ST,,SE,OMXS,Unknown,true
+LL Lucky Games publ AB,LADYLU.ST,SE0015797873,SE,OMXS,Unknown,true
+Lagercrantz Group AB (publ),LAGR-B.ST,SE0014990966,SE,OMXS,Industrials,true
+LightAir,LAIR.ST,,SE,OMXS,Unknown,true
+Lammhults Design Group AB (publ),LAMM-B.ST,SE0000386138,SE,OMXS,Unknown,true
+Lane Capital Group AB ser. B,LANE-B.ST,,SE,OMXS,Unknown,true
+Novakand Pharma AB (publ),LARK.ST,SE0016101935,SE,OMXS,Unknown,true
+Latvian Forest Company AB,LATF-B.ST,,SE,OMXS,Unknown,true
+Investment AB Latour (publ),LATO-B.ST,SE0010100958,SE,OMXS,Financials,true
+Lea Bank AB,LEA.ST,,SE,OMXS,Unknown,true
+Leading Edge Materials Corp,LEMSE.ST,CA52171T1003,SE,OMXS,Unknown,true
+Level Bio,LEVBIO.ST,,SE,OMXS,Unknown,true
+Nordic LEVEL Group AB,LEVEL.ST,SE0012313302,SE,OMXS,Unknown,true
+Lappland Guldprospektering AB B,LGOLD-B.ST,,SE,OMXS,Unknown,true
+Lindab International AB,LIAB.ST,SE0001852419,SE,OMXS,Industrials,true
+Lifco AB (publ),LIFCO-B.ST,SE0015949201,SE,OMXS,Industrials,true
+Lightning Group AB,LIGR.ST,,SE,OMXS,Unknown,true
+Lime Technologies AB (publ),LIME.ST,SE0011870195,SE,OMXS,Technology,true
+Link Prop Investment AB,LINKAB.ST,,SE,OMXS,Unknown,true
+Litium AB (publ),LITI.ST,SE0007387246,SE,OMXS,Unknown,true
+Logistea AB Series B,LOGI-B.ST,SE0017131337,SE,OMXS,Unknown,true
+Logistri Fastighets AB ser. A,LOGIST-A.ST,,SE,OMXS,Unknown,true
+Logistri Fastighets AB ser. B,LOGIST-B.ST,,SE,OMXS,Unknown,true
+Loomis AB ser. B,LOOMIS.ST,SE0014504817,SE,OMXS,Industrials,true
+I Love Lund AB ser. B,LOVE-B.ST,,SE,OMXS,Unknown,true
+Lovisagruvan AB,LOVI.ST,,SE,OMXS,Unknown,true
+Loyal Solutions AS,LOYAL.ST,DK0061535507,SE,OMXS,Unknown,true
+Lucara Diamond Corp,LUC.ST,CA54928Q1081,SE,OMXS,Unknown,true
+LumenRadio AB,LUMEN.ST,SE0019072158,SE,OMXS,Unknown,true
+Lundin Mining Corporation,LUMI.ST,CA5503721063,SE,OMXS,Unknown,true
+L E Lundbergföretagen AB (publ),LUND-B.ST,SE0000108847,SE,OMXS,Financials,true
+Luxbright AB,LXB.ST,SE0015192075,SE,OMXS,Unknown,true
+Lyckegard Group AB,LYGRD.ST,SE0017160575,SE,OMXS,Unknown,true
+Media and Games Invest PLC,M8G.ST,MT0000580101,SE,OMXS,Unknown,true
+MAG Interactive AB (publ),MAGI.ST,SE0010520908,SE,OMXS,Unknown,true
+Mahvie Minerals,MAHVIE.ST,,SE,OMXS,Unknown,true
+Mangold Fondkommission AB,MANG.ST,SE0001449380,SE,OMXS,Unknown,true
+Mavshack publ AB,MAV.ST,SE0005992419,SE,OMXS,Unknown,true
+Hotel Fast SSE AB (publ),MAXENT-B.ST,SE0011725506,SE,OMXS,Unknown,true
+Movebybike Europe Ab,MBBAB.ST,,SE,OMXS,Unknown,true
+MedCap AB (publ),MCAP.ST,SE0009160872,SE,OMXS,Unknown,true
+Medicover AB (publ),MCOV-B.ST,SE0009778848,SE,OMXS,Health Care,true
+Malmbergs Elektriska AB (publ),MEAB-B.ST,SE0000507659,SE,OMXS,Unknown,true
+Meds Apotek AB,MEDS.ST,,SE,OMXS,Unknown,true
+Mediacle Group,MEGR.ST,,SE,OMXS,Unknown,true
+Mekonomen AB,MEKO.ST,SE0002110064,SE,OMXS,Consumer Discretionary,true
+Meren Energy,MER.ST,CA5889141019,SE,OMXS,Unknown,true
+Metacon AB,META.ST,SE0003086214,SE,OMXS,Unknown,true
+MilDef Group AB,MILDEF.ST,SE0016074249,SE,OMXS,Industrials,true
+MIPS AB,MIPS.ST,SE0009216278,SE,OMXS,Consumer Discretionary,true
+Miris Holding AB,MIR.ST,,SE,OMXS,Unknown,true
+Momentum Group AB (publ),MMGR-B.ST,SE0017562523,SE,OMXS,Industrials,true
+MindArk PE AB,MNDRK.ST,SE0019354358,SE,OMXS,Unknown,true
+Mentice AB,MNTC.ST,SE0012673291,SE,OMXS,Health Care,true
+Moberg Pharma AB (publ),MOB.ST,SE0020353928,SE,OMXS,Unknown,true
+MODEL,MODEL.ST,,SE,OMXS,Unknown,true
+Modus Therapeutics Holding AB,MODTX.ST,SE0015987904,SE,OMXS,Unknown,true
+Mofast AB,MOFAST.ST,SE0012596120,SE,OMXS,Unknown,true
+Morrow Bank,MORROW.ST,SE0026852725,SE,OMXS,Unknown,true
+Micropos Medical AB,MPOS.ST,,SE,OMXS,Unknown,true
+mResell Holding AB,MRSELL.ST,,SE,OMXS,Unknown,true
+Micro Systemation AB (publ),MSAB-B.ST,SE0000526626,SE,OMXS,Unknown,true
+Midsona AB (publ),MSON-A.ST,SE0000565210,SE,OMXS,Unknown,true
+Midsona AB (publ),MSON-B.ST,SE0000565228,SE,OMXS,Unknown,true
+Modern Times Group Mtg AB,MTG-A.ST,SE0018012486,SE,OMXS,Unknown,true
+Modern Times Group Mtg AB,MTG-B.ST,SE0018012494,SE,OMXS,Communication Services,true
+MTI Investment SE,MTI.ST,SE0017105539,SE,OMXS,Unknown,true
+Munters Group AB,MTRS.ST,SE0009806607,SE,OMXS,Industrials,true
+Medivir AB,MVIR.ST,SE0020181014,SE,OMXS,Unknown,true
+Mycronic publ AB,MYCR.ST,SE0025158629,SE,OMXS,Technology,true
+NANECH,NANECH.ST,,SE,OMXS,Unknown,true
+Nanexa AB,NANEXA.ST,SE0007074166,SE,OMXS,Unknown,true
+Nanocap Group AB Series B,NANOC-B.ST,SE0004020931,SE,OMXS,Unknown,true
+Nanoform Finland Plc,NANOFS.ST,FI4000330972,SE,OMXS,Unknown,true
+Navigo Invest AB Pfd,NAVIGO-PREF.ST,,SE,OMXS,Unknown,true
+EMB Mission Bound AB (publ),NAVIGO-STAM.ST,SE0007100532,SE,OMXS,Unknown,true
+NAXS Nordic Access Buyout Fund AB,NAXS.ST,SE0001965369,SE,OMXS,Unknown,true
+NCAB Group,NCAB.ST,SE0017160773,SE,OMXS,Technology,true
+NCC AB (publ),NCC-A.ST,SE0000118952,SE,OMXS,Unknown,true
+NCC AB (publ),NCC-B.ST,SE0000117970,SE,OMXS,Unknown,true
+Nordea Bank Abp,NDA-SE.ST,FI4000297767,SE,OMXS,Financials,true
+Nelly Group AB,NELLY.ST,SE0015245535,SE,OMXS,Unknown,true
+NEL ASA,NELO.ST,,SE,OMXS,Unknown,true
+Mashup Ireland AB,NEO-B.ST,SE0016830038,SE,OMXS,Unknown,true
+NEOBO FASTIGHETER,NEOBO.ST,SE0005034550,SE,OMXS,Unknown,true
+Neola Medical AB,NEOLA.ST,SE0014829255,SE,OMXS,Unknown,true
+Nepa AB,NEPA.ST,SE0008066302,SE,OMXS,Unknown,true
+Netel Holding AB,NETEL.ST,SE0016798417,SE,OMXS,Industrials,true
+New Wave Group AB (publ),NEWA-B.ST,SE0020356970,SE,OMXS,Consumer Discretionary,true
+Nordic Flanges Group AB,NFGAB.ST,SE0001994658,SE,OMXS,Unknown,true
+NGS Group AB (publ),NGS.ST,SE0009947708,SE,OMXS,Unknown,true
+NIBE Industrier AB (publ),NIBE-B.ST,SE0015988019,SE,OMXS,Industrials,true
+Nanologica AB,NICA.ST,SE0005454873,SE,OMXS,Unknown,true
+Nidhogg Resources Holding AB,NIDHOG.ST,,SE,OMXS,Unknown,true
+Niloerngruppen AB Series B,NIL-B.ST,SE0007100342,SE,OMXS,Unknown,true
+Nilsson Special Vehicles publ AB,NILS.ST,SE0007702949,SE,OMXS,Unknown,true
+Nordic Iron Ore,NIO.ST,SE0011528017,SE,OMXS,Unknown,true
+Nitro Games Oyj,NITRO.ST,FI4000242961,SE,OMXS,Unknown,true
+Niutech Group,NIUTEC.ST,,SE,OMXS,Unknown,true
+Nivika Fastigheter AB Series B,NIVI-B.ST,SE0017083272,SE,OMXS,Real Estate,true
+Nederman Holding AB,NMAN.ST,SE0011204510,SE,OMXS,Industrials,true
+New Nordic Healthbrands AB (publ),NNH.ST,SE0001838038,SE,OMXS,Unknown,true
+NOBA Bank,NOBA.ST,SE0023135298,SE,OMXS,Unknown,true
+Nobia AB,NOBI.ST,SE0000949331,SE,OMXS,Consumer Discretionary,true
+Nodebis Applications,NODE.ST,,SE,OMXS,Unknown,true
+Nokia,NOKIA-SEK.ST,,SE,OMXS,Unknown,true
+Nokia Oyj,NOKIA.ST,FI0009000681,SE,OMXS,Unknown,true
+Nolato AB (publ),NOLA-B.ST,SE0015962477,SE,OMXS,Industrials,true
+Nordisk Bergteknik AB Series B,NORB-B.ST,SE0015812128,SE,OMXS,Unknown,true
+Norden Estates AB,NORDEN.ST,,SE,OMXS,Unknown,true
+Norion Bank,NORION.ST,SE0017831795,SE,OMXS,Unknown,true
+Nosa Med AB,NOSA.ST,SE0006994539,SE,OMXS,Unknown,true
+NOSIUM B,NOSIUM-B.ST,,SE,OMXS,Unknown,true
+NOTE AB,NOTE.ST,SE0001161654,SE,OMXS,Industrials,true
+Norditek Group AB,NOTEK.ST,,SE,OMXS,Unknown,true
+Novus Group International AB,NOVU.ST,,SE,OMXS,Unknown,true
+Nowonomics,NOWO.ST,,SE,OMXS,Unknown,true
+NP3 Fastigheter AB (publ),NP3-PREF.ST,SE0010820514,SE,OMXS,Unknown,true
+NP3 Fastigheter AB,NP3.ST,SE0006342333,SE,OMXS,Real Estate,true
+Nordrest Holding AB (publ),NREST.ST,,SE,OMXS,Unknown,true
+Stockholm Nordtech Group AB,NTECH.ST,,SE,OMXS,Unknown,true
+Novotek AB,NTEK-B.ST,SE0000567752,SE,OMXS,Unknown,true
+Nexar Group,NXAR.ST,,SE,OMXS,Unknown,true
+NextCell Pharma AB,NXTCL.ST,SE0009723125,SE,OMXS,Unknown,true
+NYAB AB,NYAB.ST,,SE,OMXS,Unknown,true
+Nyfosa AB (publ),NYF.ST,SE0011426428,SE,OMXS,Real Estate,true
+Online Brands Nordic AB,OBAB.ST,SE0017133838,SE,OMXS,Unknown,true
+Obducat PREF B,OBDU-PREF-B.ST,,SE,OMXS,Unknown,true
+Observit AB,OBSE.ST,,SE,OMXS,Unknown,true
+Octave Intelligence PLC,OCTV-SDB.ST,SE0028329433,SE,OMXS,Unknown,true
+OEM International AB (publ),OEM-B.ST,SE0017766843,SE,OMXS,Industrials,true
+Ogunsen AB Series B,OGUN-B.ST,SE0008406151,SE,OMXS,Unknown,true
+Oncopeptides AB,ONCO.ST,SE0009414576,SE,OMXS,Health Care,true
+Oncozenge AB,ONCOZ.ST,SE0015504097,SE,OMXS,Unknown,true
+Oneflow AB,ONEF.ST,SE0017564461,SE,OMXS,Unknown,true
+oodash Group AB (publ),OODA.ST,SE0020699296,SE,OMXS,Unknown,true
+Opsy Holding AB,OPSYH.ST,,SE,OMXS,Unknown,true
+Opter AB,OPTER.ST,SE0016829501,SE,OMXS,Unknown,true
+Investment AB Oresund,ORES.ST,SE0008321608,SE,OMXS,Unknown,true
+Orrön Energy AB (publ),ORRON.ST,SE0000825820,SE,OMXS,Unknown,true
+Ortoma AB Series B,ORT-B.ST,SE0005676103,SE,OMXS,Unknown,true
+Ortivus AB ser. A,ORTI-A.ST,SE0000188930,SE,OMXS,Unknown,true
+Ortivus AB ser. B,ORTI-B.ST,SE0000123085,SE,OMXS,Unknown,true
+Ortelius International AB,ORTIN.ST,,SE,OMXS,Unknown,true
+Orexo AB,ORX.ST,SE0000736415,SE,OMXS,Unknown,true
+OurLiving AB,OURLIV.ST,SE0009606593,SE,OMXS,Unknown,true
+Ovzon AB,OVZON.ST,SE0010948711,SE,OMXS,Unknown,true
+Proact IT Group AB,PACT.ST,SE0015961222,SE,OMXS,Technology,true
+Acenta Group AB,PADEL.ST,,SE,OMXS,Unknown,true
+Photocat AS,PCAT.ST,DK0060668796,SE,OMXS,Unknown,true
+Powercell Sweden,PCELL.ST,SE0006425815,SE,OMXS,Unknown,true
+Precomp Solutions AB Series B,PCOM-B.ST,SE0006091724,SE,OMXS,Unknown,true
+Paradox Interactive AB (publ),PDX.ST,SE0008294953,SE,OMXS,Consumer Discretionary,true
+Peab AB (publ),PEAB-B.ST,SE0000106205,SE,OMXS,Industrials,true
+BrightBid Group AB (publ),PERP-B.ST,SE0022726311,SE,OMXS,Unknown,true
+Preservia Holding PREF,PHOL-PREF.ST,,SE,OMXS,Unknown,true
+Preservia Hyresfastigheter B,PHYR-B.ST,,SE,OMXS,Unknown,true
+Preservia Hyresfastigheter PREF,PHYR-PREF.ST,,SE,OMXS,Unknown,true
+Pierce Group AB,PIERCE.ST,SE0015658364,SE,OMXS,Consumer Discretionary,true
+Pila Pharma AB,PILA.ST,SE0015988274,SE,OMXS,Unknown,true
+Pion Group AB Series B,PION-B.ST,SE0000567539,SE,OMXS,Unknown,true
+PixelFox,PIXEL.ST,,SE,OMXS,Unknown,true
+Pixfam,PIXFAM.ST,,SE,OMXS,Unknown,true
+Platzer Fastigheter Holding AB (publ),PLAZ-B.ST,SE0004977692,SE,OMXS,Real Estate,true
+Pandox AB (publ),PNDX-B.ST,SE0007100359,SE,OMXS,Real Estate,true
+Polygiene AB,POLYG.ST,SE0007692157,SE,OMXS,Unknown,true
+Polymer Factory Sweden AB,POLYMER.ST,,SE,OMXS,Unknown,true
+Precio Fishbone AB (publ),PRCO-B.ST,SE0000141137,SE,OMXS,Unknown,true
+Precise Biometrics AB,PREC.ST,SE0018013849,SE,OMXS,Unknown,true
+Prevas AB,PREV-B.ST,SE0000356008,SE,OMXS,Unknown,true
+Profoto Holding AB,PRFO.ST,SE0015962147,SE,OMXS,Unknown,true
+Prisma Properties,PRISMA.ST,SE0022062055,SE,OMXS,Unknown,true
+Prolight Diagnostics,PRLD.ST,,SE,OMXS,Unknown,true
+ProfilGruppen AB (publ),PROF-B.ST,SE0000393860,SE,OMXS,Unknown,true
+Prostatype Genomics AB,PROGEN.ST,SE0014684569,SE,OMXS,Unknown,true
+Proport Invest AB,PRPORT.ST,,SE,OMXS,Unknown,true
+PPI PUBLIC PROPERTY INVEST,PUBLI.ST,SE0028799411,SE,OMXS,Unknown,true
+PublicVC RTO1 AB B,PVRTO1-B.ST,,SE,OMXS,Unknown,true
+Qleanair Holding AB,QAIR.ST,SE0013382066,SE,OMXS,Unknown,true
+Qben Infra AB (publ),QBEN.ST,,SE,OMXS,Unknown,true
+QBIM AB,QBIM.ST,,SE,OMXS,Unknown,true
+QBNK Holding AB,QBNK.ST,,SE,OMXS,Unknown,true
+Qbrick,QBRICK.ST,,SE,OMXS,Unknown,true
+Qlucore AB,QCORE.ST,SE0016829824,SE,OMXS,Unknown,true
+Qiiwi Games AB (publ),QIIWI.ST,SE0010245373,SE,OMXS,Unknown,true
+Q linea AB,QLINEA.ST,SE0025420714,SE,OMXS,Unknown,true
+QSYS,QSYS.ST,,SE,OMXS,Unknown,true
+Raketech Group Holding,RAKE.ST,MT0001390104,SE,OMXS,Unknown,true
+Ramlosa Shipping Ab,RAMSH.ST,,SE,OMXS,Unknown,true
+Ratos AB (publ),RATO-A.ST,SE0000191090,SE,OMXS,Unknown,true
+Ratos AB (publ),RATO-B.ST,SE0000111940,SE,OMXS,Financials,true
+RaySearch Laboratories AB (publ),RAY-B.ST,SE0000135485,SE,OMXS,Health Care,true
+Real Fastigheter,REAL.ST,,SE,OMXS,Unknown,true
+Rejlers AB (publ),REJL-B.ST,SE0000123671,SE,OMXS,Industrials,true
+Rentunder Holding,RENT.ST,,SE,OMXS,Unknown,true
+Respiratorius AB,RESP.ST,,SE,OMXS,Unknown,true
+RanLOS AB Series B,RLOS-B.ST,SE0019762147,SE,OMXS,Unknown,true
+Relevance Communication Nordic,RLVNC.ST,,SE,OMXS,Unknown,true
+Railway Metrics & Dynamics Sweden AB,RMDX.ST,SE0011451921,SE,OMXS,Unknown,true
+Röko,ROKO-B.ST,SE0023950795,SE,OMXS,Unknown,true
+Ranplan Group,RPLAN.ST,SE0011178201,SE,OMXS,Unknown,true
+Rottneros AB,RROS.ST,SE0000112252,SE,OMXS,Unknown,true
+Rusta AB (publ),RUSTA.ST,SE0020848356,SE,OMXS,Unknown,true
+RVRC Holding AB,RVRC.ST,SE0015962485,SE,OMXS,Consumer Discretionary,true
+Saab AB (publ),SAAB-B.ST,SE0021921269,SE,OMXS,Unknown,true
+Safe at Sea AB,SAFE.ST,,SE,OMXS,Unknown,true
+mySafety Group B,SAFETY-B.ST,SE0010769182,SE,OMXS,Unknown,true
+AB Sagax (publ),SAGA-A.ST,SE0004635878,SE,OMXS,Unknown,true
+AB Sagax (publ),SAGA-B.ST,SE0005127818,SE,OMXS,Real Estate,true
+SALIX,SALIX.ST,,SE,OMXS,Unknown,true
+SaltX Technology Holding AB,SALT-B.ST,SE0005308541,SE,OMXS,Unknown,true
+Sampo Oyj,SAMPO-SEK.ST,FI4000552500,SE,OMXS,Unknown,true
+Sandvik AB,SAND.ST,SE0000667891,SE,OMXS,Industrials,true
+SARSYS,SARS.ST,,SE,OMXS,Unknown,true
+Nordnet AB,SAVE.ST,SE0015192067,SE,OMXS,Financials,true
+Saxlund Group AB,SAXG.ST,SE0008966014,SE,OMXS,Unknown,true
+Samhällsbyggnadsbolaget i Norden AB (publ),SBB-B.ST,SE0009554454,SE,OMXS,Real Estate,true
+Samhaellsbyggnadsbolaget i Norden AB Series D,SBB-D.ST,SE0011844091,SE,OMXS,Unknown,true
+SBF Bostad A,SBFBO-A.ST,,SE,OMXS,Unknown,true
+SBF Bostad B,SBFBO-B.ST,,SE,OMXS,Unknown,true
+StoneBeach Group,SBG.ST,,SE,OMXS,Unknown,true
+ScandBook Holding AB,SBOK.ST,SE0003175660,SE,OMXS,Unknown,true
+Svenska Cellulosa Aktiebolaget SCA (publ),SCA-A.ST,SE0000171886,SE,OMXS,Unknown,true
+Svenska Cellulosa Aktiebolaget SCA (publ),SCA-B.ST,SE0000112724,SE,OMXS,Materials,true
+Scibase AB,SCIB.ST,SE0007045414,SE,OMXS,Unknown,true
+Scandi Standard publ AB,SCST.ST,SE0005999760,SE,OMXS,Unknown,true
+Sdiptech AB (publ),SDIP-B.ST,SE0003756758,SE,OMXS,Industrials,true
+ScandiDos AB,SDOS.ST,SE0005768124,SE,OMXS,Unknown,true
+Seafire AB,SEAF.ST,SE0009779796,SE,OMXS,Unknown,true
+Skandinaviska Enskilda Banken AB (publ),SEB-A.ST,SE0000148884,SE,OMXS,Financials,true
+Skandinaviska Enskilda Banken AB (publ),SEB-C.ST,SE0000120784,SE,OMXS,Unknown,true
+Swedencare publ AB,SECARE.ST,SE0015988167,SE,OMXS,Unknown,true
+Sectra AB (publ),SECT-B.ST,SE0022419784,SE,OMXS,Unknown,true
+Securitas AB,SECU-B.ST,SE0000163594,SE,OMXS,Industrials,true
+Sedana Medical AB,SEDANA.ST,SE0015988373,SE,OMXS,Health Care,true
+SEHED Byggmästargruppen B,SEHED-B.ST,,SE,OMXS,Unknown,true
+SenzaGen AB,SENZA.ST,SE0010219626,SE,OMXS,Unknown,true
+Serstech AB,SERT.ST,SE0005365095,SE,OMXS,Unknown,true
+Servana AB,SERV.ST,,SE,OMXS,Unknown,true
+Senzime AB,SEZI.ST,SE0002478776,SE,OMXS,Unknown,true
+Solid FAB,SFAB.ST,SE0017082548,SE,OMXS,Unknown,true
+Stenhus Fastigheter I Norden AB,SFAST.ST,SE0014956819,SE,OMXS,Unknown,true
+Safello Group AB,SFL.ST,SE0015346895,SE,OMXS,Unknown,true
+Safeture AB,SFTR.ST,SE0006117297,SE,OMXS,Unknown,true
+Sensys Gatso Group AB,SGG.ST,SE0020356244,SE,OMXS,Unknown,true
+Svenska Handelsbanken AB (publ),SHB-A.ST,SE0007100599,SE,OMXS,Financials,true
+Svenska Handelsbanken AB (publ),SHB-B.ST,SE0007100607,SE,OMXS,Unknown,true
+BlueYield AB,SHIP.ST,,SE,OMXS,Unknown,true
+Scandic Hotels Group AB (publ),SHOT.ST,SE0007640156,SE,OMXS,Consumer Discretionary,true
+SIBEK,SIBEK.ST,,SE,OMXS,Unknown,true
+Silex Microsystems AB,SILEX.ST,SE0028000190,SE,OMXS,Unknown,true
+Simris Alg AB (publ),SIMRIS-B.ST,SE0008091664,SE,OMXS,Unknown,true
+Solution International Nordics AB,SIN.ST,,SE,OMXS,Unknown,true
+Sinch AB,SINCH.ST,SE0016101844,SE,OMXS,Technology,true
+SinterCast AB,SINT.ST,SE0000950982,SE,OMXS,Unknown,true
+Siljansvik AB (publ),SIVI.ST,SE0000201253,SE,OMXS,Unknown,true
+Skanska AB (publ),SKA-B.ST,SE0000113250,SE,OMXS,Industrials,true
+AB SKF (publ),SKF-A.ST,SE0000108201,SE,OMXS,Unknown,true
+AB SKF (publ),SKF-B.ST,SE0000108227,SE,OMXS,Industrials,true
+SkiStar AB (publ),SKIS-B.ST,SE0012141687,SE,OMXS,Unknown,true
+Skane mollan AB,SKMO.ST,SE0017885338,SE,OMXS,Unknown,true
+Skolon AB,SKOLON.ST,SE0017615784,SE,OMXS,Unknown,true
+Safe Lane Gaming B,SLG-B.ST,,SE,OMXS,Unknown,true
+Swedish Logistic Property AB Series B,SLP-B.ST,SE0017565476,SE,OMXS,Unknown,true
+SmartCraft Group AB (publ),SMCRT.ST,SE0027597691,SE,OMXS,Unknown,true
+Smoltek Nanotech Holding AB,SMOL.ST,,SE,OMXS,Unknown,true
+ShaMaran Petroleum Ltd,SNM-SDB.ST,,SE,OMXS,Unknown,true
+ShaMaran Petroleum Corp,SNM.ST,CA8193201024,SE,OMXS,Unknown,true
+Premium Snacks Nordic AB,SNX.ST,SE0006260865,SE,OMXS,Unknown,true
+Swedish Orphan Biovitrum AB (publ),SOBI.ST,SE0000872095,SE,OMXS,Health Care,true
+Soder Sportfiske AB,SODER.ST,SE0016276539,SE,OMXS,Unknown,true
+Softronic AB,SOF-B.ST,SE0000323305,SE,OMXS,Unknown,true
+Solnaberg Property AB,SOLNA.ST,,SE,OMXS,Unknown,true
+Sonetel AB,SONE.ST,SE0009580517,SE,OMXS,Unknown,true
+Sotkamo Silver,SOSI.ST,,SE,OMXS,Unknown,true
+SpectraCure AB,SPEC.ST,SE0007158118,SE,OMXS,Unknown,true
+Spectrumone publ AB,SPEONE.ST,SE0006994448,SE,OMXS,Unknown,true
+Spiltan Invest,SPLTN.ST,,SE,OMXS,Unknown,true
+Spotr Group AB,SPOTR.ST,,SE,OMXS,Unknown,true
+Sprint Bioscience AB,SPRINT.ST,SE0006343745,SE,OMXS,Unknown,true
+SSAB AB (publ),SSAB-A.ST,SE0000171100,SE,OMXS,Materials,true
+SSAB AB (publ),SSAB-B.ST,SE0000120669,SE,OMXS,Unknown,true
+Starbreeze AB (publ),STAR-A.ST,SE0007158928,SE,OMXS,Unknown,true
+Starbreeze AB (publ),STAR-B.ST,SE0005992831,SE,OMXS,Unknown,true
+Safestate Group,STATE.ST,,SE,OMXS,Unknown,true
+Stora Enso Oyj ser. A,STE-A.ST,FI0009007603,SE,OMXS,Unknown,true
+Stora Enso Oyj ser. R,STE-R.ST,FI0009007611,SE,OMXS,Unknown,true
+Stockholm Treasury AB,STHLM.ST,,SE,OMXS,Unknown,true
+Storskogen Group AB Series B,STOR-B.ST,SE0016797732,SE,OMXS,Industrials,true
+Storytel AB (publ),STORY-B.ST,SE0007439443,SE,OMXS,Communication Services,true
+Suntrade Group AB ser. B,STRD-B.ST,,SE,OMXS,Unknown,true
+Studentbostader I Sverige AB,STUDBO.ST,SE0015657697,SE,OMXS,Unknown,true
+Star Vault B,STVA-B.ST,,SE,OMXS,Unknown,true
+SeaTwirl AB,STW.ST,SE0009242175,SE,OMXS,Unknown,true
+Stockwik Forvaltning AB,STWK.ST,SE0012257970,SE,OMXS,Unknown,true
+Subgen AI,SUBGEN.ST,SE0026820854,SE,OMXS,Unknown,true
+Summa Defence Oyj,SUMMAS.ST,,SE,OMXS,Unknown,true
+Surgical Science Sweden AB,SUS.ST,SE0014428512,SE,OMXS,Health Care,true
+Sveafastigheter,SVEAF.ST,SE0022243812,SE,OMXS,Unknown,true
+Svedbergs i Dalstorp AB (publ),SVED-B.ST,SE0000407991,SE,OMXS,Unknown,true
+Studsvik AB,SVIK.ST,SE0000653230,SE,OMXS,Unknown,true
+Svolder AB (publ),SVOL-A.ST,SE0017161441,SE,OMXS,Unknown,true
+Svolder AB (publ),SVOL-B.ST,SE0017161458,SE,OMXS,Unknown,true
+Sweco AB (publ),SWEC-A.ST,SE0014960365,SE,OMXS,Unknown,true
+Sweco AB (publ),SWEC-B.ST,SE0014960373,SE,OMXS,Industrials,true
+Swedbank AB (publ),SWED-A.ST,SE0000242455,SE,OMXS,Financials,true
+Synexo Group,SYNEXO.ST,,SE,OMXS,Unknown,true
+Synsam AB,SYNSAM.ST,SE0016829709,SE,OMXS,Unknown,true
+Systemair AB,SYSR.ST,SE0016609499,SE,OMXS,Industrials,true
+TagMaster AB Series B,TAGM-B.ST,SE0015950399,SE,OMXS,Unknown,true
+TalkPool AG,TALK.ST,CH0322161768,SE,OMXS,Unknown,true
+Tangen Industrikapital AB Class B,TANGEN-B.ST,,SE,OMXS,Unknown,true
+Tele2 AB (publ),TEL2-A.ST,SE0005190220,SE,OMXS,Unknown,true
+Tele2 AB (publ),TEL2-B.ST,SE0005190238,SE,OMXS,Communication Services,true
+Telia Company AB,TELIA.ST,SE0000667925,SE,OMXS,Communication Services,true
+Tellusgruppen AB,TELLUS.ST,SE0015504519,SE,OMXS,Unknown,true
+Calviks AB (publ),TENEO.ST,SE0018397184,SE,OMXS,Unknown,true
+Terranor Group AB,TERNOR.ST,,SE,OMXS,Unknown,true
+Terranet AB,TERRNT-B.ST,SE0009806045,SE,OMXS,Unknown,true
+TF Bank AB,TFBANK.ST,SE0007331608,SE,OMXS,Financials,true
+Thinc Jetty Collective AB,THINC.ST,,SE,OMXS,Unknown,true
+Gamethrill,THRILL.ST,,SE,OMXS,Unknown,true
+Thule Group AB,THULE.ST,SE0006422390,SE,OMXS,Consumer Discretionary,true
+TietoEVRY Corp,TIETOS.ST,FI0009000277,SE,OMXS,Unknown,true
+Tingsvalvet Fastighets AB,TINGS-A.ST,SE0018534471,SE,OMXS,Unknown,true
+Done.ai Group AB,TINGS-B.ST,SE0018534497,SE,OMXS,Unknown,true
+Tingsvalvet Fastighets AB Pfd.,TINGS-PREF.ST,SE0018040727,SE,OMXS,Unknown,true
+Transiro Holding,TIRO.ST,,SE,OMXS,Unknown,true
+Titania Holding AB Series B,TITA-B.ST,SE0017132129,SE,OMXS,Unknown,true
+Tobii AB,TOBII.ST,SE0002591420,SE,OMXS,Technology,true
+Touchtech AB,TOUCH.ST,,SE,OMXS,Unknown,true
+Tourn International AB,TOURN.ST,SE0005568482,SE,OMXS,Unknown,true
+Time People Group,TPGR.ST,,SE,OMXS,Unknown,true
+AB Traction,TRAC-B.ST,SE0000391716,SE,OMXS,Unknown,true
+TradeDoubler AB,TRAD.ST,SE0001552357,SE,OMXS,Unknown,true
+Train Alliance Sweden AB Series B,TRAIN-B.ST,SE0012904779,SE,OMXS,Unknown,true
+Transtema Group AB,TRANS.ST,SE0006758587,SE,OMXS,Unknown,true
+Trelleborg AB (publ),TREL-B.ST,SE0000114837,SE,OMXS,Industrials,true
+Fastighets AB Trianon (publ),TRIAN-B.ST,SE0018013658,SE,OMXS,Unknown,true
+Triboron International AB (publ),TRIBO-B.ST,SE0010600429,SE,OMXS,Unknown,true
+Triona,TRIONA.ST,,SE,OMXS,Unknown,true
+Trainimal,TRML.ST,,SE,OMXS,Unknown,true
+Troax Group AB,TROAX.ST,SE0012729366,SE,OMXS,Industrials,true
+Truecaller AB (publ),TRUE-B.ST,SE0016787071,SE,OMXS,Technology,true
+Tempest Security AB,TSEC.ST,SE0010469221,SE,OMXS,Unknown,true
+Tura Group AB,TURA.ST,SE0017083355,SE,OMXS,Unknown,true
+Unibap AB,UNIBAP.ST,SE0009606809,SE,OMXS,Unknown,true
+Upgrade Invest Nordic AB,UPGRAD.ST,SE0018536401,SE,OMXS,Unknown,true
+Upsales Technology AB,UPSALE.ST,SE0011985514,SE,OMXS,Unknown,true
+USWE Sports AB,USWE.ST,SE0015949771,SE,OMXS,Unknown,true
+Unlimited Travel Group UTG AB (publ),UTG.ST,SE0001834821,SE,OMXS,Unknown,true
+Valuno Group,VALUNO.ST,,SE,OMXS,Unknown,true
+Vaxxa AB,VAXXA.ST,,SE,OMXS,Unknown,true
+VBG Group AB (publ),VBG-B.ST,SE0000115107,SE,OMXS,Unknown,true
+Vef AB,VEFAB.ST,SE0016128151,SE,OMXS,Unknown,true
+Verve Group,VER.ST,,SE,OMXS,Unknown,true
+Vestum AB (publ),VESTUM.ST,SE0017134125,SE,OMXS,Unknown,true
+Vetted Assets AB,VETT.ST,,SE,OMXS,Unknown,true
+Vastra Hamnens Restaurangdrift Ab,VH.ST,SE0017767031,SE,OMXS,Unknown,true
+Vicore Pharma Holding AB (publ),VICO.ST,SE0007577895,SE,OMXS,Unknown,true
+Vidhance AB,VIDH.ST,,SE,OMXS,Unknown,true
+VIMAB Group AB,VIMAB.ST,SE0007439633,SE,OMXS,Unknown,true
+Vimian Group AB,VIMIAN.ST,SE0015961982,SE,OMXS,Health Care,true
+Gruvaktiebolaget Viscaria,VISC.ST,SE0021148160,SE,OMXS,Unknown,true
+Vitec Software Group AB (publ),VIT-B.ST,SE0007871363,SE,OMXS,Technology,true
+Vitrolife AB,VITR.ST,SE0011205202,SE,OMXS,Health Care,true
+Vivesto AB,VIVE.ST,SE0000722365,SE,OMXS,Unknown,true
+VNV Global AB,VNV.ST,SE0014428835,SE,OMXS,Financials,true
+Vo2 Cap Holding AB,VO2.ST,SE0016802797,SE,OMXS,Unknown,true
+Volvo Car AB (publ.),VOLCAR-B.ST,SE0021628898,SE,OMXS,Consumer Discretionary,true
+Volati AB,VOLO-PREF.ST,SE0009143670,SE,OMXS,Unknown,true
+Volati AB,VOLO.ST,SE0009143662,SE,OMXS,Industrials,true
+AB Volvo (publ),VOLV-A.ST,SE0000115420,SE,OMXS,Unknown,true
+AB Volvo (publ),VOLV-B.ST,SE0000115446,SE,OMXS,Industrials,true
+Veteranpoolen AB Series B,VPAB-B.ST,,SE,OMXS,Unknown,true
+Viaplay Group AB Series A,VPLAY-A.ST,SE0012324226,SE,OMXS,Unknown,true
+Viking Supply Ships AB (publ),VSSAB-B.ST,SE0010820613,SE,OMXS,Unknown,true
+Verisure Plc,VSURE.ST,GB00BVMN1558,SE,OMXS,Unknown,true
+DUG Foodtech AB (publ),VUXEN.ST,SE0017232838,SE,OMXS,Unknown,true
+Wallenstam AB (publ),WALL-B.ST,SE0017780133,SE,OMXS,Unknown,true
+Waystream Holding AB (publ),WAYS.ST,SE0007577077,SE,OMXS,Unknown,true
+Wästbygg Gruppen AB (publ),WBGR-B.ST,SE0014453874,SE,OMXS,Unknown,true
+Windon Energy Group AB,WEG.ST,,SE,OMXS,Unknown,true
+White Pebbles AB B,WHITE-B.ST,,SE,OMXS,Unknown,true
+Wihlborgs Fastigheter AB,WIHL.ST,SE0018012635,SE,OMXS,Real Estate,true
+Wise Group AB,WISE.ST,SE0007277876,SE,OMXS,Unknown,true
+Wonderboo Holding,WONDR.ST,,SE,OMXS,Unknown,true
+West International AB,WPAY.ST,SE0002169292,SE,OMXS,Unknown,true
+White Pearl Technology Group B,WPTG-B.ST,SE0020203271,SE,OMXS,Unknown,true
+WebRock Ventures AB,WRV.ST,SE0016278139,SE,OMXS,Unknown,true
+WS WESPORTS GROUP,WSG.ST,,SE,OMXS,Unknown,true
+Wonderful Times Group AB,WTG.ST,,SE,OMXS,Unknown,true
+Wall to Wall Group A,WTW-A.ST,SE0016075246,SE,OMXS,Unknown,true
+Wyld Networks AB,WYLD.ST,SE0015812516,SE,OMXS,Unknown,true
+XANO Industri AB (publ),XANO-B.ST,SE0018014151,SE,OMXS,Unknown,true
+Xer Tech Holding AB,XER.ST,,SE,OMXS,Unknown,true
+Xintela AB,XINT.ST,SE0007756903,SE,OMXS,Unknown,true
+XMReality AB,XMR.ST,SE0009664188,SE,OMXS,Unknown,true
+Xoma AB B,XOM-B.ST,,SE,OMXS,Unknown,true
+XP Chemistries AB,XPC.ST,SE0016787279,SE,OMXS,Unknown,true
+Xvivo Perfusion AB,XVIVO.ST,SE0004840718,SE,OMXS,Health Care,true
+SaveLend Group AB,YIELD.ST,SE0015961024,SE,OMXS,Unknown,true
+Yubico AB,YUBICO.ST,SE0015657788,SE,OMXS,Technology,true
+Zaplox AB,ZAPLOX.ST,SE0009722465,SE,OMXS,Unknown,true
+Zenith Energy Ltd. SDR,ZENA-SDR.ST,,SE,OMXS,Unknown,true
+Zenicor Medical Systems AB,ZENI.ST,,SE,OMXS,Unknown,true
+Zoomability Int AB,ZOOM.ST,,SE,OMXS,Unknown,true
+Zinzino AB Series B,ZZ-B.ST,SE0002480442,SE,OMXS,Consumer Staples,true
+2cureX AB,2CUREX.ST,SE0010468124,SE,OMXS-FN,Unknown,true
+4C Group AB,4C.ST,SE0017936891,SE,OMXS-FN,Technology,true
+AAC Clyde Space AB (publ),AAC.ST,SE0021020716,SE,OMXS-FN,Industrials,true
+Absolent Group AB,ABSO.ST,SE0006256558,SE,OMXS-FN,Technology,true
+AcadeMedia AB (publ),ACAD.ST,SE0007897079,SE,OMXS-FN,Consumer Discretionary,true
+Acast AB,ACAST.ST,SE0015960935,SE,OMXS-FN,Technology,true
+Acconeer AB,ACCON.ST,SE0010546242,SE,OMXS-FN,Technology,true
+Ascelia Pharma AB (publ),ACE.ST,SE0010573113,SE,OMXS-FN,Health Care,true
+AcouSort AB,ACOU.ST,SE0009189608,SE,OMXS-FN,Health Care,true
+Adtraction Group AB,ADTR.ST,SE0016833149,SE,OMXS-FN,Communication Services,true
+Advenica AB,ADVE.ST,SE0006219473,SE,OMXS-FN,Unknown,true
+Svenska Aerogel Holding AB (publ),AERO.ST,SE0008212161,SE,OMXS-FN,Consumer Discretionary,true
+Alcadon Group AB,ALCA.ST,SE0008732218,SE,OMXS-FN,Technology,true
+AlzeCure Pharma,ALZCUR.ST,SE0010133785,SE,OMXS-FN,Real Estate,true
+Annexin Pharmaceuticals AB,ANNX.ST,SE0009664154,SE,OMXS-FN,Unknown,true
+Arcoma AB,ARCOMA.ST,SE0006219176,SE,OMXS-FN,Financials,true
+AVTECH Sweden AB Series B,AVT-B.ST,SE0004270445,SE,OMXS-FN,Unknown,true
+Bactiguard Holding AB (publ),BACTI-B.ST,SE0005878741,SE,OMXS-FN,Health Care,true
+BibbInstruments AB,BIBB.ST,,SE,OMXS-FN,Health Care,true
+Bio-Works Technologies AB,BIOWKS.ST,SE0007387089,SE,OMXS-FN,Unknown,true
+Bonasudden Holding AB,BONAS.ST,SE0007157953,SE,OMXS-FN,Unknown,true
+Bonesupport Holding AB,BONEX.ST,SE0009858152,SE,OMXS-FN,Health Care,true
+BrainCool AB,BRAIN.ST,SE0005731833,SE,OMXS-FN,Utilities,true
+Maximum Entertainment AB,BRIGHT.ST,SE0017937279,SE,OMXS-FN,Health Care,true
+CAG Group AB (publ),CAG.ST,SE0011923341,SE,OMXS-FN,Unknown,true
+Candles Scandinavia AB Series B,CANDLE-B.ST,SE0016797773,SE,OMXS-FN,Unknown,true
+Cantargia AB,CANTA.ST,SE0006371126,SE,OMXS-FN,Health Care,true
+CDON AB,CDON.ST,SE0015191911,SE,OMXS-FN,Consumer Discretionary,true
+Crunchfish AB,CFISH.ST,SE0009190192,SE,OMXS-FN,Technology,true
+Clemondo Group AB (publ),CLEM.ST,SE0005504669,SE,OMXS-FN,Consumer Staples,true
+Clinical Laserthermia Systems AB (publ),CLS-B.ST,SE0002756130,SE,OMXS-FN,Unknown,true
+Compodium International AB,COMPDM.ST,SE0016844468,SE,OMXS-FN,Unknown,true
+Cereno Scientific AB Series B,CRNO-B.ST,,SE,OMXS-FN,Unknown,true
+Ctek AB,CTEK.ST,SE0016798763,SE,OMXS-FN,Consumer Discretionary,true
+Dedicare AB (publ),DEDI.ST,SE0003909282,SE,OMXS-FN,Industrials,true
+DevPort AB (publ),DEVP-B.ST,SE0010546622,SE,OMXS-FN,Unknown,true
+DistIT AB (publ),DIST.ST,SE0003883800,SE,OMXS-FN,Technology,true
+Doxa AB,DOXA.ST,SE0005624756,SE,OMXS-FN,Real Estate,true
+Desenio Group AB,DSNO.ST,SE0015657853,SE,OMXS-FN,Consumer Discretionary,true
+Ecomb AB (publ),ECOMB.ST,,SE,OMXS-FN,Financials,true
+Enad Global 7 AB,EG7.ST,SE0010520106,SE,OMXS-FN,Communication Services,true
+Elicera Therapeutics AB,ELIC.ST,SE0015382080,SE,OMXS-FN,Health Care,true
+Enea AB,ENEA.ST,SE0009697220,SE,OMXS-FN,Technology,true
+engcon AB Cl B,ENGCON-B.ST,SE0017769847,SE,OMXS-FN,Industrials,true
+Enzymatica publ AB,ENZY.ST,SE0003943620,SE,OMXS-FN,Health Care,true
+Enorama Pharma AB,ERMA.ST,SE0008216329,SE,OMXS-FN,Unknown,true
+ExpreS2ion Biotech Holding AB,EXPRS2.ST,SE0008348262,SE,OMXS-FN,Unknown,true
+Free2Move Holding,F2M.ST,,SE,OMXS-FN,Unknown,true
+Fable Media Group AB,FABLE.ST,,SE,OMXS-FN,Energy,true
+Fasadgruppen Group AB,FG.ST,SE0015195771,SE,OMXS-FN,Industrials,true
+FlexQube AB,FLEXQ.ST,SE0010547075,SE,OMXS-FN,Industrials,true
+Fragbite Group AB,FRAG.ST,SE0015949334,SE,OMXS-FN,Unknown,true
+Freemelt Holding AB,FREEM.ST,SE0011167170,SE,OMXS-FN,Industrials,true
+Gapwaves AB Series B,GAPW-B.ST,SE0009155518,SE,OMXS-FN,Unknown,true
+Garo AB,GARO.ST,SE0015812417,SE,OMXS-FN,Industrials,true
+Gomero Group AB,GOMERO.ST,,SE,OMXS-FN,Consumer Staples,true
+GomSpace Group AB,GOMX.ST,SE0008348304,SE,OMXS-FN,Industrials,true
+Guard Therapeutics International AB,GUARD.ST,SE0009973357,SE,OMXS-FN,Unknown,true
+Hanza AB,HANZA.ST,SE0005878543,SE,OMXS-FN,Industrials,true
+Humble Group AB,HUMBLE.ST,SE0006261046,SE,OMXS-FN,Consumer Staples,true
+Immunovia publ AB,IMMNOV.ST,SE0006091997,SE,OMXS-FN,Unknown,true
+Implantica AG,IMP-A-SDB.ST,SE0014855029,SE,OMXS-FN,Health Care,true
+InfraCom Group AB,INFRA.ST,,SE,OMXS-FN,Unknown,true
+I-Tech,ITECH.ST,SE0011167725,SE,OMXS-FN,Materials,true
+Kjell Group AB,KJELL.ST,SE0016797591,SE,OMXS-FN,Consumer Discretionary,true
+Linc AB,LINC.ST,SE0015949433,SE,OMXS-FN,Industrials,true
+Lohilo Foods AB,LOHILO.ST,SE0014262549,SE,OMXS-FN,Technology,true
+Lundin Gold Inc,LUG.ST,CA5503711080,SE,OMXS-FN,Unknown,true
+Lumito,LUMITO.ST,,SE,OMXS-FN,Consumer Discretionary,true
+Lyko Group A,LYKO-A.ST,SE0010468918,SE,OMXS-FN,Consumer Discretionary,true
+Magle Chemoswed Holding Ab,MAGLE.ST,SE0014401014,SE,OMXS-FN,Energy,true
+Maha Energy AB (publ),MAHA-A.ST,SE0008374383,SE,OMXS-FN,Energy,true
+Mantex AB,MANTEX.ST,SE0009663339,SE,OMXS-FN,Utilities,true
+Midsummer AB (publ),MIDS.ST,SE0011281757,SE,OMXS-FN,Health Care,true
+Minesto AB,MINEST.ST,SE0007578141,SE,OMXS-FN,Energy,true
+MOBA Network publ AB,MOBA.ST,SE0016277909,SE,OMXS-FN,Communication Services,true
+Moment Group AB,MOMENT.ST,SE0020388932,SE,OMXS-FN,Industrials,true
+Net Insight AB (publ),NETI-B.ST,SE0000366098,SE,OMXS-FN,Technology,true
+Newbury Pharmaceuticals AB,NEWBRY.ST,SE0015244884,SE,OMXS-FN,Unknown,true
+Nexam Chemical Holding AB,NEXAM.ST,SE0005101003,SE,OMXS-FN,Materials,true
+Nicoccino Holding AB,NICO.ST,SE0005506185,SE,OMXS-FN,Communication Services,true
+Nord Insuretech Group AB,NORDIG.ST,SE0013486255,SE,OMXS-FN,Industrials,true
+OptiCept Technologies AB,OPTI.ST,SE0005881786,SE,OMXS-FN,Industrials,true
+OssDsign AB,OSSD.ST,SE0012570448,SE,OMXS-FN,Health Care,true
+OXE Marine AB,OXE.ST,SE0009888613,SE,OMXS-FN,Unknown,true
+Paxman AB,PAX.ST,SE0009806284,SE,OMXS-FN,Health Care,true
+Pricer AB (publ),PRIC-B.ST,SE0000233934,SE,OMXS-FN,Technology,true
+Promimic AB,PRO.ST,SE0017487242,SE,OMXS-FN,Health Care,true
+Physitrack PLC,PTRK.ST,GB00BK80TJ35,SE,OMXS-FN,Health Care,true
+Qlife Holding AB,QLIFE.ST,SE0013486552,SE,OMXS-FN,Health Care,true
+Qliro AB,QLIRO.ST,SE0013719077,SE,OMXS-FN,Financials,true
+Railcare Group AB (publ),RAIL.ST,SE0010441139,SE,OMXS-FN,Industrials,true
+Rugvista Group AB,RUG.ST,SE0015659834,SE,OMXS-FN,Consumer Discretionary,true
+S2Medical AB,S2M.ST,SE0011725084,SE,OMXS-FN,Health Care,true
+Saniona AB,SANION.ST,SE0005794617,SE,OMXS-FN,Unknown,true
+Seamless Distribution Systems AB,SDS.ST,SE0009994445,SE,OMXS-FN,Technology,true
+Scandinavian Enviro Systems AB,SES.ST,SE0005877560,SE,OMXS-FN,Unknown,true
+Smart Eye AB,SEYE.ST,SE0009268279,SE,OMXS-FN,Technology,true
+Stillfront Group AB (publ),SF.ST,SE0015346135,SE,OMXS-FN,Consumer Discretionary,true
+Sleep Cycle AB,SLEEP.ST,SE0015961404,SE,OMXS-FN,Consumer Discretionary,true
+SolTech Energy Sweden AB,SOLT.ST,SE0005392537,SE,OMXS-FN,Energy,true
+Spago Nanomedical AB,SPAGO.ST,SE0004899474,SE,OMXS-FN,Real Estate,true
+Stille AB,STIL.ST,SE0000998650,SE,OMXS-FN,Unknown,true
+SynAct Pharma AB,SYNACT.ST,SE0008241491,SE,OMXS-FN,Health Care,true
+Teqnion AB,TEQ.ST,SE0012308088,SE,OMXS-FN,Materials,true
+Vertiseit AB Series B,VERT-B.ST,SE0012481133,SE,OMXS-FN,Unknown,true
+Viva Wine Group AB,VIVA.ST,SE0017084361,SE,OMXS-FN,Consumer Staples,true
+W5 Solutions AB,W5.ST,SE0016786040,SE,OMXS-FN,Industrials,true
+Xbrane Biopharma AB,XBRANE.ST,SE0026598583,SE,OMXS-FN,Real Estate,true
+XSpray Pharma AB,XSPRAY.ST,SE0009973563,SE,OMXS-FN,Healthcare,true
+ABAS Protect AB,ABAS.ST,SE0018588659,SE,SPOTLIGHT,Industrials,true
+Aixia Group AB ser. B,AIXIA-B.ST,,SE,SPOTLIGHT,Technology,true
+Blick Global Group AB (publ),BLICK.ST,,SE,SPOTLIGHT,Technology,true
+C100 AB,C100.ST,,SE,SPOTLIGHT,Technology,true
+CHOSA Oncology AB,CHOSA.ST,,SE,SPOTLIGHT,Health Care,true
+CirChem AB,CIRCHE.ST,SE0015193529,SE,SPOTLIGHT,Unknown,true
+Cyclezyme AB,CYCLE.ST,,SE,SPOTLIGHT,Industrials,true
+Diadrom Holding AB,DIAH.ST,SE0001606906,SE,SPOTLIGHT,Unknown,true
+Dlaboratory Sweden AB,DLAB.ST,SE0015658380,SE,SPOTLIGHT,Unknown,true
+edyoutec AB,EDYOU.ST,,SE,SPOTLIGHT,Technology,true
+Enrad AB,ENRAD.ST,,SE,SPOTLIGHT,Unknown,true
+Fluicell AB,FLUI.ST,SE0010831321,SE,SPOTLIGHT,Unknown,true
+Gullberg & Jansson AB,GJAB.ST,,SE,SPOTLIGHT,Industrials,true
+Gosol Energy Group AB,GOSOL.ST,,SE,SPOTLIGHT,Energy,true
+Iconovo,ICO.ST,SE0010868943,SE,SPOTLIGHT,Unknown,true
+Initiator Pharma A/S,INIT.ST,DK0060775872,SE,SPOTLIGHT,Unknown,true
+Inhalation Sciences Sweden AB,ISAB.ST,,SE,SPOTLIGHT,Unknown,true
+Organoclick AB,ORGC.ST,SE0006510335,SE,SPOTLIGHT,Unknown,true
+PharmaLundensis AB,PHAL.ST,,SE,SPOTLIGHT,Unknown,true
+Realfiction Holding AB,REALFI.ST,SE0009920994,SE,SPOTLIGHT,Unknown,true
+Redsense Medical AB,REDS.ST,SE0006965158,SE,SPOTLIGHT,Unknown,true
+SensoDetect AB,SDET.ST,,SE,SPOTLIGHT,Unknown,true
+Sustainion Group AB,SUSG.ST,,SE,SPOTLIGHT,Industrials,true
+Tessin Nordic Holding AB,TESSIN.ST,SE0009522451,SE,SPOTLIGHT,Technology,true
 Transfer Group,TRNSF.ST,,SE,SPOTLIGHT,Unknown,true
-Arlandastad Group,AGROUP.ST,,SE,OMXS,Unknown,true
-Awardit,AWRD.ST,,SE,OMXS-FN,Unknown,false
-B3 Consulting Group,B3.ST,,SE,OMXS,Unknown,true
-Bahnhof B,BAHN-B.ST,,SE,OMXS,Unknown,true
-Bergman & Beving B,BERG-B.ST,,SE,OMXS,Unknown,true
-Besqab,BESQ.ST,,SE,OMXS,Unknown,false
-Bio-Works Technologies,BIOWKS.ST,,SE,OMXS-FN,Unknown,true
-Byggmästare Anders J Ahlström,AJA-B.ST,,SE,OMXS,Unknown,true
-Catella A,CAT-A.ST,,SE,OMXS,Unknown,true
-Cereno Scientific B,CRNO-B.ST,,SE,OMXS-FN,Unknown,true
-CirChem,CIRCHE.ST,,SE,SPOTLIGHT,Unknown,true
-Clinical Laserthermia Systems B,CLS-B.ST,,SE,OMXS-FN,Unknown,true
-Compodium International,COMPDM.ST,,SE,OMXS-FN,Unknown,true
-CTT Systems,CTT.ST,,SE,OMXS,Unknown,true
-DevPort,DEVP-B.ST,,SE,OMXS-FN,Unknown,true
-Eastnine,EAST.ST,,SE,OMXS,Unknown,true
-Emilshus B,EMIL-B.ST,,SE,OMXS,Unknown,true
-Enrad,ENRAD.ST,,SE,SPOTLIGHT,Unknown,true
-Fastator,FASTAT.ST,,SE,OMXS,Unknown,true
-Fenix Outdoor B,FOI-B.ST,,SE,OMXS,Unknown,true
-Fortinova Fastigheter,FNOVA-B.ST,,SE,OMXS,Unknown,true
-Green Landscaping Group,GREEN.ST,,SE,OMXS,Unknown,true
-Haki Safety B,HAKI-B.ST,,SE,OMXS,Unknown,true
-Haypp Group,HAYPP.ST,,SE,OMXS,Unknown,true
-HEBA B,HEBA-B.ST,,SE,OMXS,Unknown,true
-Hedera Group,HEGR.ST,,SE,NGM,Unknown,true
-Initiator Pharma,INIT.ST,,SE,SPOTLIGHT,Unknown,true
-International Petroleum Corporation,IPCO.ST,,SE,OMXS,Unknown,true
-ITAB Shop Concept,ITAB.ST,,SE,OMXS,Unknown,true
-Josemaria Resources,JOSX.ST,,SE,OMXS,Unknown,false
-Karolinska Development B,KDEV.ST,,SE,OMXS,Unknown,false
-Logistea B,LOGI-B.ST,,SE,OMXS,Unknown,true
-Lundin Mining Corporation,LUMI.ST,,SE,OMXS,Unknown,true
-MedCap,MCAP.ST,,SE,OMXS,Unknown,true
-Myrspoven,MPCES.ST,,SE,OMXS-FN,Unknown,false
-Neobo Fastigheter,NEOBO.ST,,SE,OMXS,Unknown,true
-Newbury Pharmaceuticals,NEWBRY.ST,,SE,OMXS-FN,Unknown,true
-Norrhydro Group,NORRH.ST,,SE,OMXS-FN,Unknown,false
-Orrön Energy,ORRON.ST,,SE,OMXS,Unknown,true
-OXE Marine,OXE.ST,,SE,OMXS-FN,Unknown,true
-Profoto Holding,PRFO.ST,,SE,OMXS,Unknown,true
-Q-Linea,QLINEA.ST,,SE,OMXS,Unknown,true
-Re:NewCell,RENEW.ST,,SE,OMXS-FN,Unknown,false
-Resurs Holding,RESURS.ST,,SE,OMXS,Unknown,false
-Senzime,SEZI.ST,,SE,OMXS,Unknown,true
-Serneke Group B,SRNKE-B.ST,,SE,OMXS,Unknown,false
-Softronic B,SOF-B.ST,,SE,OMXS,Unknown,true
-Stille,STIL.ST,,SE,OMXS-FN,Unknown,true
-Swedencare,SECARE.ST,,SE,OMXS,Unknown,true
-XANO Industri B,XANO-B.ST,,SE,OMXS,Unknown,true
-Aega,AEGA.OL,,NO,OSLO,Unknown,false
-Andfjord Salmon,ANDF.OL,,NO,OSLO,Unknown,true
-Argeo,ARGEO.OL,,NO,OSLO,Unknown,false
-Bergen Carbon Solutions,BCS.OL,,NO,OSLO,Unknown,true
-Black Sea Property,BSP.OL,,NO,OSLO,Unknown,true
-Byggma,BMA.OL,,NO,OSLO,Unknown,true
-Circa Group,CIRCA.OL,,NO,OSLO,Unknown,false
-ContextVision,CONTX.OL,,NO,OSLO,Unknown,true
-Desert Control,DSRT.OL,,NO,OSLO,Unknown,true
-EAM Solar,EAM.OL,,NO,OSLO,Unknown,true
-Edda Wind,EWIND.OL,,NO,OSLO,Unknown,false
-Elliptic Laboratories,ELABS.OL,,NO,OSLO,Unknown,true
-Exact Therapeutics,EXTX.OL,,NO,OSLO,Unknown,true
-Fjord1,FJORD.OL,,NO,OSLO,Unknown,false
-Goodtech,GOD.OL,,NO,OSLO,Unknown,true
-House of Control Group,HOC.OL,,NO,OSLO,Unknown,false
-Huddlestock Fintech,HUDL.OL,,NO,OSLO,Unknown,true
-Hyon,HYON.OL,,NO,OSLO,Unknown,false
-Ice Fish Farm,IFISH.OL,,NO,OSLO,Unknown,true
-Itera,ITERA.OL,,NO,OSLO,Unknown,true
-Kahoot,KAHOT.OL,,NO,OSLO,Unknown,false
-Kyoto Group,KYOTO.OL,,NO,OSLO,Unknown,false
-M Vest Water,MVW.OL,,NO,OSLO,Unknown,true
-Nidaros Sparebank,NISB.OL,,NO,OSLO,Unknown,true
-NorAm Drilling,NORAM.OL,,NO,OSLO,Unknown,true
-Norcod,NCOD.OL,,NO,OSLO,Unknown,true
-Observe Medical,OBSRV.OL,,NO,OSLO,Unknown,true
-Ocean GeoLoop,OCEAN.OL,,NO,OSLO,Unknown,true
-PatientSky Group,PSKY.OL,,NO,OSLO,Unknown,false
-Pryme,PRYME.OL,,NO,OSLO,Unknown,true
-Q-Free,QFR.OL,,NO,OSLO,Unknown,false
-Quantafuel,QFUEL.OL,,NO,OSLO,Unknown,false
-Salmon Evolution,SALME.OL,,NO,OSLO,Unknown,true
-Sandnes Sparebank,SADG.OL,,NO,OSLO,Unknown,false
-Skue Sparebank,SKUE.OL,,NO,OSLO,Unknown,true
-Sparebanken Sør,SOR.OL,,NO,OSLO,Unknown,false
-Sparebanken Vest,SVEG.OL,,NO,OSLO,Unknown,false
-The Kingfish Company,KING.OL,,NO,OSLO,Unknown,true
-Ultimovacs,ULTI.OL,,NO,OSLO,Unknown,false
-Administer,ADMIN.HE,,FI,OMXH,Unknown,true
-Aiforia Technologies,AIFORIA.HE,,FI,OMXH,Unknown,true
-Alexandria Group,ALEX.HE,,FI,OMXH,Unknown,true
-Aspocomp Group,ACG1V.HE,,FI,OMXH,Unknown,true
-Biohit B,BIOBV.HE,,FI,OMXH,Unknown,true
-Componenta,CTH1V.HE,,FI,OMXH,Unknown,true
-Dovre Group,DOV1V.HE,,FI,OMXH,Unknown,true
-Elecster A,ELEAV.HE,,FI,OMXH,Unknown,true
-Enedo,ENEDO.HE,,FI,OMXH,Unknown,false
-Endomines Finland,PAMPALO.HE,,FI,OMXH,Unknown,true
-Etteplan,ETTE.HE,,FI,OMXH,Unknown,true
-Fondia,FONDIA.HE,,FI,OMXH,Unknown,true
-Gofore,GOFORE.HE,,FI,OMXH,Unknown,true
-Honkarakenne B,HONBS.HE,,FI,OMXH,Unknown,true
-Ilkka,ILKKA2.HE,,FI,OMXH,Unknown,true
-Investors House,INVEST.HE,,FI,OMXH,Unknown,true
-Lemonsoft,LEMON.HE,,FI,OMXH,Unknown,true
-Loihde,LOIHDE.HE,,FI,OMXH,Unknown,true
-Martela A,MARAS.HE,,FI,OMXH,Unknown,true
-Meriaura Group,MERIS.HE,,FI,OMXH,Unknown,false
-Nexstim,NXTMH.HE,,FI,OMXH,Unknown,true
-Ovaro Kiinteistösijoitus,OVARO.HE,,FI,OMXH,Unknown,true
-Piippo,PIIPPO.HE,,FI,OMXH,Unknown,true
-Raisio V,RAIKV.HE,,FI,OMXH,Unknown,true
-Rush Factory,RUSH.HE,,FI,OMXH,Unknown,false
-Saga Furs C,SAGCV.HE,,FI,OMXH,Unknown,true
-Sotkamo Silver,SOSI1.HE,,FI,OMXH,Unknown,true
-Stockmann B,STOCKA.HE,,FI,OMXH,Unknown,false
-Suominen,SUY1V.HE,,FI,OMXH,Unknown,true
-Teleste,TLT1V.HE,,FI,OMXH,Unknown,true
-Tulikivi A,TULAV.HE,,FI,OMXH,Unknown,true
-Vincit,VINCIT.HE,,FI,OMXH,Unknown,true
-Wulff Group,WUF1V.HE,,FI,OMXH,Unknown,true
-Aquaporin,AQP.CO,,DK,OMXC-FN,Unknown,false
-Cessatech,CESSA.CO,,DK,OMXC-FN,Unknown,false
-DecideAct,ACT.CO,,DK,OMXC-FN,Unknown,false
-Freetrailer Group,FREETR.CO,,DK,OMXC-FN,Unknown,false
-GreenMobility,GREENM.CO,,DK,OMXC-FN,Unknown,true
-Hypefactors,HYPE.CO,,DK,OMXC-FN,Unknown,false
-Impero,IMPERO.CO,,DK,OMXC-FN,Unknown,true
-LED iBond International,LEDIBOND.CO,,DK,OMXC-FN,Unknown,false
-Loyal Solutions,LOYAL.CO,,DK,OMXC-FN,Unknown,false
-Mdundo.com,MDUNDO.CO,,DK,OMXC-FN,Unknown,true
-Nexcom,NEXCOM.CO,,DK,OMXC-FN,Unknown,true
-OrderYOYO,YOYO.CO,,DK,OMXC-FN,Unknown,false
-Q-Interline,QINTER.CO,,DK,OMXC-FN,Unknown,true
-Risk Intelligence,RISK.CO,,DK,OMXC-FN,Unknown,false
-Scandinavian Medical Solutions,SMSMED.CO,,DK,OMXC-FN,Unknown,true
-Seluxit,SLXIT.CO,,DK,OMXC-FN,Unknown,false
-Stenocare,STENO.CO,,DK,OMXC-FN,Unknown,true
-Trophy Games Development,TGAMES.CO,,DK,OMXC-FN,Unknown,true
-Valuer Holding,VALUER.CO,,DK,OMXC-FN,Unknown,false
-SpareBank 1 SR-Bank,SRBANK.OL,NO0010904281,NO,OSLO,Financials,False
-Topdanmark,TOP.CO,DK0060477503,DK,OMXC,Financials,False
-Harboes Brewery,HARBA.CO,DK0010248189,DK,OMXC,Consumer Staples,False
-SACT,SACT.CO,DK0010284878,DK,OMXC,Technology,False
-Asiakastieto Group,ATG1V.HE,FI4000210210,FI,OMXH,Technology,False
-Admicom,ADMCM.HE,FI4000336028,FI,OMXH,Technology,True
-Aker BP,AKERBP.OL,NO0010345853,NO,OSLO,Energy,False
-PGS,PGS.OL,NO0010199151,NO,OSLO,Energy,False
-Bonheur,BON.OL,NO0010088388,NO,OSLO,Industrials,False
-Viaplay Group,VPLAY-B.ST,SE0018538068,SE,OMXS,Communication Services,True
-Biotage,BIOT.ST,SE0001299209,SE,OMXS,Healthcare,False
-Catena,CAT.ST,SE0001664707,SE,OMXS,Real Estate,False
-Sagax,SAGA-D.ST,SE0005158949,SE,OMXS,Real Estate,True
-K-Fastigheter,KFAST-B.ST,SE0013256985,SE,OMXS,Real Estate,True
-Stendörren Fastigheter,STEF-B.ST,SE0005765028,SE,OMXS,Real Estate,True
-Kungsleden,KLED.ST,SE0000549760,SE,OMXS,Real Estate,False
-Eastnine,EAONE.ST,SE0010765870,SE,OMXS,Real Estate,False
-Atrium Ljungberg,ATLJ-B.ST,SE0000556463,SE,OMXS,Real Estate,False
-Duroc,DURC-B.ST,SE0000728522,SE,OMXS,Industrials,True
-Acrinova,ACRI-B.ST,SE0007158852,SE,OMXS,Real Estate,True
-Aros Quality Group,AQG.ST,SE0007116080,SE,OMXS,Industrials,False
-Probi,PROB.ST,SE0000634406,SE,OMXS,Healthcare,False
-Orion Pharma,ORNBV.HE,FI0009014377,FI,OMXH,Healthcare,True
-Sparebanken Ost,SPOG.OL,NO0010261150,NO,OSLO,Financials,True
-Infront,INFRNT.OL,NO0010890810,NO,OSLO,Technology,False
-Fjord1,FJORD1.OL,NO0010884897,NO,OSLO,Industrials,False
-Agilyx,AGLX.OL,NO0010947307,NO,OSLO,Materials,True
-Crayon Group,CRAYON.OL,NO0010820212,NO,OSLO,Technology,False
-Everfuel,EVER.OL,DK0061414711,NO,OSLO,Energy,False
-Aker Offshore Wind,AOW.OL,NO0010904891,NO,OSLO,Energy,False
-Havila Kystruten,HAVI.OL,NO0010938092,NO,OSLO,Industrials,True
-Ayfie Group,AYF.OL,NO0010807070,NO,OSLO,Technology,False
-Vistin Pharma,VISTIN.OL,NO0010785074,NO,OSLO,Healthcare,False
-Huddly,HUDDLY.OL,NO0010879277,NO,OSLO,Technology,False
-Melhus Sparebank,MELG.OL,NO0010176040,NO,OSLO,Financials,True
+Acrinova AB Series B,ACRI-B.ST,SE0015660030,SE,STOCKHOLM,Real Estate,true
+Duroc AB (publ),DURC-B.ST,SE0000331266,SE,STOCKHOLM,Industrials,true
+K-Fast Holding AB (publ),KFAST-B.ST,SE0016101679,SE,STOCKHOLM,Real Estate,true
+AB Sagax (publ),SAGA-D.ST,SE0009161052,SE,STOCKHOLM,Real Estate,true
+Stendörren Fastigheter AB (publ),STEF-B.ST,SE0006543344,SE,STOCKHOLM,Real Estate,true
+Viaplay Group AB (publ),VPLAY-B.ST,SE0012116390,SE,STOCKHOLM,Communication Services,true

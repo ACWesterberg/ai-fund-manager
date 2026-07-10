@@ -15,6 +15,11 @@ from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines,
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
+from fundmgr.data.universe_selection import (
+    news_watch_tickers,
+    select_tickers_for_price_fetch,
+    tickers_for_feature_build,
+)
 from fundmgr.engine.client import LLMError, call_llm_consensus
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
 from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
@@ -109,14 +114,19 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         sys.exit(1)
 
     tickers = get_enabled_tickers(cfg.universe_path)
+    held_tickers = {p.ticker for p in store.get_positions()}
+    fetch_tickers, fetch_note = select_tickers_for_price_fetch(tickers, held_tickers, cfg.screener)
     click.echo(f"\n{'═'*56}")
     click.echo(f"  AI Fund Manager — Weekly Run")
     click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     click.echo(f"{'═'*56}")
 
     # ── Step 1: Fetch prices ──────────────────────────────────────────────────
-    click.echo(f"\n[1/6] Fetching prices for {len(tickers)} tickers…")
-    fetch_result = fetch_and_cache_prices(tickers, store, cfg.data.lookback_days, force_refresh)
+    click.echo(
+        f"\n[1/6] Fetching prices for {len(fetch_tickers)}/{len(tickers)} tickers "
+        f"({fetch_note})…"
+    )
+    fetch_result = fetch_and_cache_prices(fetch_tickers, store, cfg.data.lookback_days, force_refresh)
     ok = sum(1 for v in fetch_result.values() if v)
     failed = [sym for sym, v in fetch_result.items() if not v]
     click.echo(f"      {ok}/{len(tickers)} tickers resolved")
@@ -124,7 +134,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         click.echo(f"      ✗ Failed: {', '.join(failed)}")
 
     # ── Step 2: Fetch / refresh fundamentals cache (weekly TTL) ───────────────
-    ticker_symbols = [t.yahoo_ticker for t in tickers]
+    feature_tickers = tickers_for_feature_build(tickers, fetch_tickers, store)
+    ticker_symbols = [t.yahoo_ticker for t in feature_tickers]
     if not skip_fundamentals:
         stale_count = len(store.get_stale_fundamentals_tickers(ticker_symbols, ttl_days=7))
         click.echo(f"\n[2/6] Fundamentals cache — {stale_count} tickers need refresh…")
@@ -156,17 +167,25 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
 
     # ── Step 5: Compute features + pre-screen ─────────────────────────────────
     click.echo(f"\n[5/6] Computing features…")
-    features = build_all_features(tickers, store, cfg, fetch_result)
+    features = build_all_features(feature_tickers, store, cfg, fetch_result)
     apply_to_features(features, store)
 
     fund_count = sum(1 for f in features.values() if f.ev_to_ebitda is not None or f.revenue_growth_pct is not None)
     stale = [sym for sym, f in features.items() if f.is_stale]
-    click.echo(f"      {len(features)} tickers with features  ({fund_count} with fundamentals data)")
+    click.echo(
+        f"      {len(features)} tickers with features from cache "
+        f"({len(tickers):,} in universe)  ({fund_count} with fundamentals data)"
+    )
     if stale:
         click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
 
-    held_tickers = {p.ticker for p in store.get_positions()}
-    screened_features, screened_out = screen(features, held_tickers, top_n=cfg.screener.top_n)
+    pinned = set(cfg.screener.pinned_tickers)
+    screened_features, screened_out = screen(
+        features,
+        held_tickers,
+        top_n=cfg.screener.top_n,
+        pinned_tickers=pinned,
+    )
     if screened_out > 0:
         click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
                    f"({screened_out} filtered out, held positions always included)")
@@ -1019,13 +1038,15 @@ def check_news(auto_run: bool, max_age_hours: int):
 
     tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}
+    news_tickers = news_watch_tickers(tickers, held_tickers, cfg.screener)
 
     click.echo(f"\n[check-news] Scanning {len(cfg.data.news_feeds)} feeds "
-               f"(last {max_age_hours}h, {len(held_tickers)} held positions)…")
+               f"(last {max_age_hours}h, {len(news_tickers)} tickers: "
+               f"{len(held_tickers)} held + pinned)…")
 
     triggers = check_news_triggers(
         cfg.data.news_feeds,
-        tickers,
+        news_tickers,
         held_tickers,
         store,
         cfg.data.sentiment,

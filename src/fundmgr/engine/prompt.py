@@ -105,7 +105,7 @@ def _learnings_block(learnings: list[Learning]) -> str:
     return "\n".join(lines)
 
 
-_CANDIDATE_LIMIT = 50  # non-held tickers shown to LLM per run
+_CANDIDATE_LIMIT = 75  # non-held tickers shown to LLM per run
 
 
 def _signal_score(f: TickerFeatures) -> float:

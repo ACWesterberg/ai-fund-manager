@@ -922,6 +922,23 @@ class Store:
             ).fetchone()
         return row["d"] if row and row["d"] else None
 
+    def tickers_with_price_cache(self, symbols: list[str]) -> set[str]:
+        """Return subset of symbols that have at least one cached price bar."""
+        if not symbols:
+            return set()
+        found: set[str] = set()
+        chunk_size = 500
+        with self._conn() as conn:
+            for i in range(0, len(symbols), chunk_size):
+                chunk = symbols[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"SELECT DISTINCT ticker FROM price_cache WHERE ticker IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                found.update(r["ticker"] for r in rows)
+        return found
+
     def close_near(
         self, ticker: str, target_date: str, max_delta_days: int = 7
     ) -> tuple[str, float] | None:

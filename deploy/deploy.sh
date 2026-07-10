@@ -53,6 +53,15 @@ else
 fi
 "$UV" pip install -e . --quiet
 
+# Refresh universe CSVs from FinanceData when the sibling repo is present.
+if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ]; then
+    if FINANCEDATA_DIR="$FINANCEDATA_DIR" "$UV" run python "$REPO_DIR/scripts/sync_universe_from_financedata.py" 2>&1 | tee -a "$LOG_FILE"; then
+        log "Universe synced from FinanceData"
+    else
+        log "  ⚠ Universe sync skipped or failed — using committed CSVs"
+    fi
+fi
+
 # Restart services (requires sudoers entry — see SETUP.md)
 # Wait if a fund run is currently in progress (avoid killing mid-run)
 log "Checking for active fund run…"

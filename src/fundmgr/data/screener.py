@@ -144,11 +144,15 @@ def screen(
     features: dict[str, TickerFeatures],
     held_tickers: set[str],
     top_n: int = 75,
+    pinned_tickers: set[str] | None = None,
 ) -> tuple[dict[str, TickerFeatures], int]:
-    """Return top_n candidates by score, always including held positions.
+    """Return top_n candidates by score, always including held + pinned positions.
 
     Returns (filtered_features, total_screened_out).
     """
+    pinned = pinned_tickers or set()
+    always = held_tickers | pinned
+
     scored = sorted(
         ((sym, _score(feat), feat) for sym, feat in features.items()),
         key=lambda x: x[1],
@@ -157,12 +161,10 @@ def screen(
 
     selected: dict[str, TickerFeatures] = {}
 
-    # Held positions always make the cut regardless of score
     for sym, _, feat in scored:
-        if sym in held_tickers:
+        if sym in always:
             selected[sym] = feat
 
-    # Fill remaining slots with top scorers
     remaining = max(0, top_n - len(selected))
     count = 0
     for sym, _, feat in scored:

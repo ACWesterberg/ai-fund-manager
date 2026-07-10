@@ -56,7 +56,26 @@ data:
 auto_fill: true
 
 screener:
-  top_n: 75
+  top_n: 120
+  price_fetch_limit: 2500
+  rotate_weeks: 8
+  pinned_tickers:
+    - URTH
+    - AAPL
+    - MSFT
+    - NVDA
+    - GOOGL
+    - META
+    - AMZN
+    - TSM
+    - ASML
+    - VOLV-B.ST
+    - ERIC-B.ST
+    - NDA-SE.ST
+    - EQNR.OL
+    - NOVO-B.CO
+    - SAP.DE
+    - SHEL.L
 
 reporting:
   currency: SEK

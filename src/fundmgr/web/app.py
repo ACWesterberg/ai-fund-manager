@@ -353,6 +353,57 @@ async def prompt(request: Request):
     return _render("prompt.html", {"request": request, **prompt_context(cfg)})
 
 
+@app.get("/api/kiosk")
+async def api_kiosk():
+    """Read-only feed for the Pi wall display (Portfolio Composition screen).
+
+    Same numbers as the dashboard home page — live NAV, per-holding weight/PnL and
+    the logo domain — but as JSON so the kiosk can poll and repaint.
+    """
+    cfg, store = _get_deps()
+    positions = store.get_positions()
+    cash = store.get_cash()
+
+    universe = load_universe(cfg.universe_path)
+    name_map = {t.yahoo_ticker: t.name for t in universe}
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in universe}
+
+    live_prices = _fetch_live_prices([p.ticker for p in positions])
+    if cfg.fx_to_sek:
+        from fundmgr.data.fx import convert_prices_to_sek
+        live_prices = convert_prices_to_sek(live_prices, cur_by_ticker, store)
+
+    live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
+    nav = live_market_value + cash
+
+    fund_domains: dict[str, str | None] = {}
+    if positions:
+        cached_fund = store.get_all_fundamentals([p.ticker for p in positions])
+        for ticker, fdata in cached_fund.items():
+            fund_domains[ticker] = _logo_domain(fdata.get("website"))
+
+    holdings = []
+    for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
+        live = live_prices.get(p.ticker)
+        current_value = p.shares * live if live else p.shares * p.avg_cost_sek
+        holdings.append({
+            "ticker": p.ticker,
+            "name": name_map.get(p.ticker, p.ticker),
+            "weight_pct": round(current_value / nav * 100, 1) if nav > 0 else 0,
+            "pnl_pct": round((live / p.avg_cost_sek - 1) * 100, 1) if live else None,
+            "logo_domain": fund_domains.get(p.ticker),
+        })
+
+    return {
+        "nav": round(nav, 0),
+        "currency": "SEK",
+        "cash_pct": round(cash / nav * 100, 1) if nav > 0 else 100.0,
+        "pnl_sek": round(nav - cfg.capital_sek, 0),
+        "pnl_pct": round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0,
+        "holdings": holdings,
+    }
+
+
 @app.get("/universe", response_class=HTMLResponse)
 async def universe(request: Request):
     cfg, store = _get_deps()

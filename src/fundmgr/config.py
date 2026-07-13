@@ -85,7 +85,7 @@ class ScreenerConfig:
 @dataclass
 class OptimizerConfig:
     # Heavy model that *writes* candidate instructions (MIPRO prompt_model).
-    # None → derived from llm.provider at run time (anthropic → claude-opus-4-8, openai → gpt-5.5).
+    # None → derived from llm.provider at run time (anthropic → claude-opus-4-8, openai → gpt-5.6-sol).
     prompt_model_id: str | None = None
     min_outcomes: int = 30       # evaluated outcomes required before optimization runs
     min_examples: int = 8        # usable run-level examples required after reconstruction

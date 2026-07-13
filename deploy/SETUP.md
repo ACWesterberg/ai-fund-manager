@@ -78,7 +78,7 @@ nano .env
 Fill in at minimum:
 
 ```
-OPENAI_API_KEY=sk-...           # GPT-5.5 simulation fund
+OPENAI_API_KEY=sk-...           # GPT-5.6-sol simulation fund
 ANTHROPIC_API_KEY=sk-ant-...    # Claude Opus simulation fund
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
@@ -99,7 +99,7 @@ Each `fund init` seeds that fund's DB with its config's `capital_sek`:
 
 ```bash
 .venv/bin/fund init                                              # 🇸🇪 Nordic REAL — 50k
-FUND_CONFIG=config/config_global.yaml .venv/bin/fund init        # 🌍 Global sim GPT-5.5 — 150k
+FUND_CONFIG=config/config_global.yaml .venv/bin/fund init        # 🌍 Global sim GPT-5.6-sol — 150k
 FUND_CONFIG=config/config_claude.yaml .venv/bin/fund init        # 🤖 Global sim Claude — 150k
 ```
 
@@ -186,7 +186,7 @@ Summary:
 | Fund | Job | Time (CET) |
 |------|-----|------------|
 | 🇸🇪 Nordic REAL | Weekly run / news / stops | Mon 09:30 / wkdays / 15-min |
-| 🌍 Global sim GPT-5.5 | Weekly run / news / stops | Mon 16:00 / wkdays / 15-min |
+| 🌍 Global sim GPT-5.6-sol | Weekly run / news / stops | Mon 16:00 / wkdays / 15-min |
 | 🤖 Global sim Claude | Weekly run / news / stops | Mon 16:30 / wkdays / 15-min |
 | All funds | Prompt optimize (MIPRO) | Sun 02:00 / 02:30 / 03:00 |
 | Backups | DB → Google Drive | Daily 03:00 + post-Mon-run |

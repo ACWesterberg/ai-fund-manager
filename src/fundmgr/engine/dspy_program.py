@@ -15,7 +15,7 @@ What this demonstrates, in order of near-term value:
   1. A typed Signature mirroring build_prompt's inputs -> DecisionRun output.
   2. A Module that adds self-correction (dspy.Refine) for the JSON + risk
      limits the model currently has no feedback loop on.
-  3. Model portability — the SAME program runs on GPT-5.5 or Opus by swapping
+  3. Model portability — the SAME program runs on GPT-5.6-sol or Opus by swapping
      the LM, which is exactly what makes the sim head-to-head fair.
   4. Where N=3 consensus and KNNFewShot (decision_outcomes) plug in later.
 
@@ -108,7 +108,7 @@ if dspy is not None:
         def __init__(self, max_retries: int = 2):
             super().__init__()
             # ChainOfThought gives the model room to reason before emitting the
-            # structured decision — analogous to gpt-5.5 reasoning_effort, but
+            # structured decision — analogous to gpt-5.6-sol reasoning_effort, but
             # provider-agnostic.
             predictor = dspy.ChainOfThought(WeeklyDecision)
             self.decide = dspy.Refine(
@@ -126,7 +126,7 @@ if dspy is not None:
 # Right now both sims share build_prompt but call different SDKs through two
 # branches in client.py (each with its own quirks: temperature handling, JSON
 # fences, structured-outputs vs schema_hint). DSPy collapses that to one LM
-# abstraction, so GPT-5.5 vs Opus run the *identical* program and we're
+# abstraction, so GPT-5.6-sol vs Opus run the *identical* program and we're
 # comparing the models, not two slightly different prompt paths.
 
 
@@ -140,7 +140,7 @@ def build_lm(cfg: "AppConfig", model_id: str | None = None):
         raise RuntimeError("dspy not installed — install with: uv sync --extra optimize")
 
     model_id = model_id or cfg.llm.model_id
-    model = f"{cfg.llm.provider}/{model_id}"  # e.g. "openai/gpt-5.5", "anthropic/claude-opus-4-8"
+    model = f"{cfg.llm.provider}/{model_id}"  # e.g. "openai/gpt-5.6-sol", "anthropic/claude-opus-4-8"
     kwargs = {"max_tokens": cfg.llm.max_tokens}
 
     # Reproduce the temperature carve-outs already in client.py.

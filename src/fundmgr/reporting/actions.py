@@ -31,7 +31,7 @@ def format_action_list(
     lines.append("")
 
     # Market summary
-    lines.append("  Market summary (GPT-5.5):")
+    lines.append("  Market summary (GPT-5.6-sol):")
     for sentence in decision.market_summary.split(". "):
         if sentence.strip():
             lines.append(f"  \"{sentence.strip()}.\"")

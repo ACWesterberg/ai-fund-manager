@@ -40,7 +40,7 @@ app = FastAPI(title="AI Fund Manager", docs_url=None, redoc_url=None)
 # Simulation sub-routes — one per model provider
 from fundmgr.web.sim import make_sim_router  # noqa: E402
 app.include_router(make_sim_router(
-    "config/config_global.yaml", "/sim", "GPT-5.5 Global Fund", sim_accent="amber"
+    "config/config_global.yaml", "/sim", "GPT-5.6-sol Global Fund", sim_accent="amber"
 ))
 app.include_router(make_sim_router(
     "config/config_claude.yaml", "/sim-claude", "Claude Opus Global Fund", sim_accent="violet"

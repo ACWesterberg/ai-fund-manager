@@ -22,7 +22,7 @@
 */15 9-17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
-# ═══ GLOBAL SIMULATION FUND (OpenAI GPT-5.5) — NYSE/NASDAQ + European overlap ══
+# ═══ GLOBAL SIMULATION FUND (OpenAI GPT-5.6-sol) — NYSE/NASDAQ + European overlap ══
 #
 # Best execution window: 16:00 CET
 #   - NYSE/NASDAQ open at 15:30 CET → 30 min in, opening noise settled
@@ -42,7 +42,7 @@
 
 # ═══ CLAUDE SIMULATION FUND (Anthropic Claude Opus) — same universe as Global ══
 #
-# Runs 30 min after GPT-5.5 so both get same market conditions but decide independently
+# Runs 30 min after GPT-5.6-sol so both get same market conditions but decide independently
 
 # Weekly decision run — Monday 16:30 CET
 30 16 * * 1 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund run >> data/logs/weekly_claude.log 2>&1

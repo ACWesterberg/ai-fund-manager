@@ -1,4 +1,4 @@
-name: "🌍 Global SIM — GPT-5.5"
+name: "🌍 Global SIM — GPT-5.6-sol"
 capital_sek: 150000
 cadence: weekly
 benchmark: "URTH"           # iShares MSCI World ETF — proxy for MSCI World total return
@@ -9,7 +9,7 @@ universe_path: "config/universe_global.csv"
 
 llm:
   provider: openai
-  model_id: "gpt-5.5"
+  model_id: "gpt-5.6-sol"
   max_tokens: 16000
   reasoning_effort: "high"
   n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled

@@ -57,8 +57,10 @@
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,
-# snapshot NAV at real market prices, evaluate matured outcomes (~4 weeks) and
-# distil learnings — same pipeline as the funds. 22:15 CET = after NYSE close.
+# snapshot NAV at real market prices, check each position's pre-registered kill
+# criterion against fresh news (Telegram alert on a hit), evaluate matured
+# outcomes (~4 weeks) and distil learnings — same pipeline as the funds.
+# 22:15 CET = after NYSE close.
 
 15 22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-track >> data/logs/paper.log 2>&1
 

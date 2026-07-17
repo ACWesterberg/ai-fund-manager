@@ -16,6 +16,7 @@ map) is kept in that DB's app_meta table; the registry is just the directory.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 
@@ -93,8 +94,29 @@ _TICKER_KEYS = ("ticker", "symbol", "yahoo_ticker")
 _WEIGHT_KEYS = ("weight_pct", "weight", "target_weight_pct", "allocation_pct",
                 "allocation", "percent", "pct")
 _THESIS_KEYS = ("thesis", "rationale", "reason", "why", "comment", "notes")
+_KILL_KEYS = ("kill_criterion", "kill_criteria", "kill", "sell_trigger", "sell_criterion")
 _LIST_KEYS = ("portfolio", "holdings", "positions", "stocks", "picks", "actions",
               "recommendations", "allocations")
+
+# Exchange labels (as LLMs write them) → Yahoo suffix, for JSON answers that
+# give broker-style tickers like {"ticker": "ATCO A", "exchange": "OMX"}.
+_EXCHANGE_SUFFIX = {
+    "OMX": ".ST", "OMXS": ".ST", "STO": ".ST", "STOCKHOLM": ".ST",
+    "OSL": ".OL", "OSE": ".OL", "OSLO": ".OL",
+    "CPH": ".CO", "OMXC": ".CO", "COPENHAGEN": ".CO",
+    "HEL": ".HE", "OMXH": ".HE", "HELSINKI": ".HE",
+    "AMS": ".AS", "AEX": ".AS", "AMSTERDAM": ".AS",
+    "XETRA": ".DE", "FRA": ".DE", "GER": ".DE", "ETR": ".DE",
+    "LSE": ".L", "LON": ".L", "LONDON": ".L",
+    "EPA": ".PA", "PAR": ".PA", "PARIS": ".PA",
+    "MIL": ".MI", "BIT": ".MI", "MTA": ".MI",
+    "BME": ".MC", "MCE": ".MC", "MADRID": ".MC",
+    "SIX": ".SW", "SWX": ".SW", "EBS": ".SW",
+    "TSE": ".T", "TYO": ".T", "TOKYO": ".T",
+    "TSX": ".TO", "TOR": ".TO", "ASX": ".AX",
+    "HKEX": ".HK", "HKG": ".HK",
+}
+_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "OTC", "CBOE", "US"}
 
 _WEIGHT_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:[.,]\d+)?)\s*%")
 
@@ -248,8 +270,8 @@ def _parse_json_holdings(text: str) -> list[dict] | None:
     holdings = []
     for item in items:
         if isinstance(item, str):
-            holdings.append({"ticker": item.strip(), "weight_pct": None,
-                             "thesis": "", "confidence": None})
+            holdings.append({"ticker": item.strip(), "name": item.strip(),
+                             "weight_pct": None, "thesis": "", "confidence": None})
             continue
         if not isinstance(item, dict):
             continue
@@ -257,25 +279,60 @@ def _parse_json_holdings(text: str) -> list[dict] | None:
         name = next((str(item[k]).strip() for k in ("name", "company") if item.get(k)), "")
         if not ticker and not name:
             continue
+
+        # Cash rows carry no holding — their weight simply stays uninvested
+        cluster = str(item.get("cluster") or "").strip()
+        if (ticker.upper() == "CASH" or cluster.lower() == "cash"
+                or _clean_name(name).startswith("cash")):
+            continue
+
+        exchange = str(item.get("exchange") or "").strip().upper()
+        ticker = _normalise_json_ticker(ticker, exchange, name)
+
         weight = next((item[k] for k in _WEIGHT_KEYS
                        if isinstance(item.get(k), (int, float, str)) and item.get(k) != ""), None)
         if isinstance(weight, str):
             m = _WEIGHT_RE.search(weight) or re.search(r"\d+(?:[.,]\d+)?", weight)
             weight = float(m.group(m.lastindex or 0).replace(",", ".")) if m else None
         thesis = next((str(item[k]).strip() for k in _THESIS_KEYS if item.get(k)), "")
-        confidence = item.get("confidence")
-        try:
-            confidence = float(confidence) if confidence is not None else None
-        except (TypeError, ValueError):
-            confidence = None
+        kill = next((str(item[k]).strip() for k in _KILL_KEYS
+                     if item.get(k) not in (None, "")), "")
+        confidence = _safe_confidence(item.get("confidence"))
         holdings.append({
-            "ticker": ticker or None,
+            "ticker": ticker,
             "name": name or ticker,
             "weight_pct": float(weight) if weight is not None else None,
             "thesis": thesis,
+            "kill_criterion": kill,
+            "cluster": cluster,
             "confidence": confidence,
         })
     return holdings or None
+
+
+def _normalise_json_ticker(ticker: str, exchange: str, name: str) -> str | None:
+    """Turn a broker-style JSON ticker into a Yahoo symbol.
+
+    'ATCO A' + OMX → ATCO-A.ST; 'MTRS' + OMX → MTRS.ST (bare 'MTRS' is a
+    different NYSE company on Yahoo); fund placeholders like INDEX_GLOBAL
+    return None so resolve_holdings can map the *name* to an ETF proxy.
+    """
+    if not ticker:
+        return None
+    if "." in ticker:                     # already a Yahoo-style symbol
+        return ticker
+    if not _TICKERISH_RE.match(ticker.replace(" ", "-")) or exchange == "FUND":
+        return None                       # INDEX_GLOBAL etc. — resolve by name
+    if exchange in _EXCHANGE_SUFFIX:
+        return ticker.replace(" ", "-") + _EXCHANGE_SUFFIX[exchange]
+    if exchange in _US_EXCHANGES:
+        return ticker
+    # No usable exchange hint: prefer the name's alias when it points to a
+    # suffixed home listing ('Munters'/'MTRS' → MTRS.ST), else keep as pasted.
+    alias = _lookup_alias(_clean_name(name)) if name else None
+    if alias and "." in alias:
+        return alias
+    return ticker.replace(" ", "-")
 
 
 def _parse_line_holdings(text: str) -> list[dict]:
@@ -317,8 +374,8 @@ def _parse_segment(seg: str) -> dict | None:
         tok = _BULLET_RE.sub("", seg).strip().strip(".,;:")
         if (_TICKERISH_RE.match(tok) and any(c.isalpha() for c in tok)
                 and (tok.isupper() or tok.islower()) and tok.upper() not in _SKIP_WORDS):
-            return {"ticker": tok.upper(), "name": tok.upper(),
-                    "weight_pct": None, "thesis": "", "confidence": None}
+            return {"ticker": tok.upper(), "name": tok.upper(), "weight_pct": None,
+                    "thesis": "", "kill_criterion": "", "confidence": None}
         return None
 
     weight = float(wm.group(1).replace(",", "."))
@@ -333,6 +390,13 @@ def _parse_segment(seg: str) -> dict | None:
         return None       # prose sentence that happens to contain a percentage
 
     thesis = seg[wm.end():].strip(" .,;:—–-|*")
+    # Prose theses often pre-register the falsification condition inline
+    # ("… lock-in. Kill: hyperscaler custom silicon taking >20% …")
+    kill = ""
+    km = re.search(r"\bKill(?:\s+criteri\w+)?\s*[:—-]\s*(.+)$", thesis, re.IGNORECASE)
+    if km:
+        kill = km.group(1).strip()
+        thesis = thesis[: km.start()].strip(" .,;:—–-|*")
 
     # Resolve to a ticker: alias map first, then a lone ticker-looking token.
     # Mixed-case words ("Bufab") are company names — leave unresolved for
@@ -354,6 +418,7 @@ def _parse_segment(seg: str) -> dict | None:
         "name": display_name or (ticker or ""),
         "weight_pct": weight,
         "thesis": thesis,
+        "kill_criterion": kill,
         "confidence": None,
     }
 
@@ -550,6 +615,8 @@ def create_portfolio(
                 "weight_pct": (float(h["weight_pct"])
                                if h.get("weight_pct") not in (None, "") else None),
                 "thesis": str(h.get("thesis") or "").strip(),
+                "kill_criterion": str(h.get("kill_criterion") or "").strip(),
+                "cluster": str(h.get("cluster") or "").strip(),
                 "confidence": _safe_confidence(h.get("confidence")),
             }
             for h in holdings_override
@@ -602,6 +669,11 @@ def create_portfolio(
         store.set_meta("paper_base_prompt", base_prompt.strip())
         store.set_meta("paper_currency_map", json.dumps(currency_map))
         store.set_meta("paper_pasted_text", holdings_text.strip())
+        # Pre-registered falsification conditions, watched daily against news
+        store.set_meta("paper_kill_criteria", json.dumps({
+            h["ticker"]: (h.get("kill_criterion") or "").strip()
+            for h in priced if (h.get("kill_criterion") or "").strip()
+        }))
 
         prices_sek = sek_prices_for(store, [h["ticker"] for h in priced], currency_map, native)
 
@@ -624,11 +696,17 @@ def create_portfolio(
                 price_sek=round(price_sek, 4), fee_sek=round(fee, 2),
                 source="paper", currency=currency_map.get(t, "USD"), timestamp=now,
             ))
+            kill = (h.get("kill_criterion") or "").strip()
+            thesis = h["thesis"]
+            if kill and "kill" not in thesis.lower():
+                thesis = f"{thesis} · Kill: {kill}" if thesis else f"Kill: {kill}"
             actions.append({
                 "ticker": t, "side": "buy",
                 "target_weight_pct": h["weight_pct"],
                 "confidence": h["confidence"],
-                "thesis": h["thesis"],
+                "thesis": thesis,
+                "kill_criterion": kill,
+                "cluster": h.get("cluster") or "",
                 "sek_estimate": round(gross),
                 "stop_loss_pct": None,
             })
@@ -732,6 +810,13 @@ def track_portfolio(slug: str) -> list[str]:
     ))
     log.append(f"NAV {nav:,.0f} SEK ({len(positions)} positions)")
 
+    # Kill-criterion watch: check fresh headlines against each position's
+    # pre-registered falsification condition
+    try:
+        log += check_kill_criteria(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ kill-criterion watch failed: {e}")
+
     # Learning pipeline — identical to the weekly fund runs
     from fundmgr.engine.evaluator import (
         evaluate_pending_outcomes,
@@ -745,6 +830,119 @@ def track_portfolio(slug: str) -> list[str]:
         log.append(f"Evaluated {len(evaluated)} outcomes → "
                    f"{len(stat)} calibration + {len(qual)} qualitative learnings")
     return log
+
+
+# ── Kill-criterion news watch ─────────────────────────────────────────────────
+
+def check_kill_criteria(slug: str, store: Store | None = None) -> list[str]:
+    """Judge each held position's recent headlines against its pre-registered
+    kill criterion (the observable fact that would falsify the thesis).
+
+    Once per ticker per day. A hit is logged, recorded in app_meta, and sent
+    to Telegram (no-op when the bot env vars are unset). Judgement uses
+    gpt-4o-mini — skipped without OPENAI_API_KEY.
+    """
+    if store is None:
+        meta, store = open_portfolio(slug)
+        name = meta["name"]
+    else:
+        name = store.get_meta("paper_name") or slug
+
+    kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
+    held = {p.ticker for p in store.get_positions()}
+    kills = {t: k for t, k in kills.items() if t in held and k}
+    if not kills:
+        return []
+    if not os.getenv("OPENAI_API_KEY"):
+        return ["kill-criterion watch skipped (no OPENAI_API_KEY)"]
+
+    log: list[str] = []
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hits: list[tuple[str, str]] = []
+    for ticker, criterion in kills.items():
+        if store.get_meta(f"paper_killwatch:{ticker}") == today:
+            continue  # already checked today
+        headlines = _recent_headlines(ticker)
+        store.set_meta(f"paper_killwatch:{ticker}", today)
+        if not headlines:
+            continue
+        verdict = _judge_kill_hit(ticker, criterion, headlines)
+        if verdict:
+            hits.append((ticker, verdict))
+            store.set_meta(f"paper_killhit:{ticker}:{today}", verdict)
+            log.append(f"🚨 {ticker}: kill criterion may be triggering — {verdict}")
+
+    if hits:
+        from fundmgr.notify.send import send_telegram
+        lines = [f"<b>📋 Paper portfolio — {name}</b>",
+                 "🚨 Kill-criterion watch: recent news may falsify a thesis"]
+        for ticker, verdict in hits:
+            lines.append(f"\n<b>{ticker}</b>: {verdict}")
+            lines.append(f"  Pre-registered kill: {kills[ticker]}")
+        lines.append("\nVerify before acting — headline-level signal only.")
+        send_telegram("\n".join(lines))
+    return log
+
+
+def _recent_headlines(ticker: str, max_items: int = 8) -> list[str]:
+    """Recent news headlines for a ticker via yfinance. Empty list on failure."""
+    try:
+        import yfinance as yf
+        items = yf.Ticker(ticker).news or []
+    except Exception:
+        return []
+    titles: list[str] = []
+    for item in items[: max_items * 2]:
+        # yfinance has shipped two shapes: flat {'title': …} and nested {'content': {'title': …}}
+        content = item.get("content") if isinstance(item.get("content"), dict) else item
+        title = (content.get("title") or "").strip()
+        publisher = ""
+        prov = content.get("provider")
+        if isinstance(prov, dict):
+            publisher = prov.get("displayName") or ""
+        publisher = publisher or item.get("publisher") or ""
+        if title:
+            titles.append(f"{title}" + (f" ({publisher})" if publisher else ""))
+        if len(titles) >= max_items:
+            break
+    return titles
+
+
+def _judge_kill_hit(ticker: str, criterion: str, headlines: list[str]) -> str | None:
+    """Ask gpt-4o-mini whether the headlines plausibly trigger the kill criterion.
+
+    Returns a one-line reason on a hit, None otherwise (including on any API
+    failure — the watch must never break tracking)."""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "You monitor pre-registered kill criteria (thesis-falsification "
+                    "conditions) for stock positions. Given a criterion and recent "
+                    "headlines, decide if any headline plausibly indicates the "
+                    "criterion is being met. Be strict: general negativity, price "
+                    "moves, or unrelated bad news are NOT a hit — only concrete "
+                    "events matching the stated criterion. Reply with exactly "
+                    "'NO' or 'YES: <one-sentence reason citing the headline>'."
+                )},
+                {"role": "user", "content": (
+                    f"Position: {ticker}\n"
+                    f"Kill criterion: {criterion}\n\n"
+                    "Recent headlines:\n" + "\n".join(f"- {h}" for h in headlines)
+                )},
+            ],
+            max_tokens=120,
+            temperature=0.0,
+        )
+        answer = (resp.choices[0].message.content or "").strip()
+        if answer.upper().startswith("YES"):
+            return answer.split(":", 1)[1].strip() if ":" in answer else answer
+        return None
+    except Exception:
+        return None
 
 
 def track_all() -> list[str]:

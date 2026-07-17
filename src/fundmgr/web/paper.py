@@ -344,11 +344,34 @@ def paper_prompt(request: Request, slug: str):
     mandate = meta["base_prompt"] or "(no base prompt was saved for this portfolio)"
     if pasted:
         mandate += "\n\n── Pasted picks ──\n\n" + pasted
+
+    # Kill criteria (the pre-registered falsification conditions watched daily
+    # against news), with any hits recorded so far surfaced alongside each.
+    kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
+    held = {p.ticker for p in store.get_positions()}
+    kill_rows = []
+    for ticker, criterion in sorted(kills.items()):
+        if not criterion:
+            continue
+        hits = []
+        with store._conn() as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM app_meta WHERE key LIKE ? ORDER BY key DESC",
+                (f"paper_killhit:{ticker}:%",),
+            ).fetchall()
+        for r in rows:
+            hits.append({"date": r["key"].rsplit(":", 1)[1], "reason": r["value"]})
+        kill_rows.append({
+            "ticker": ticker, "criterion": criterion,
+            "held": ticker in held, "hits": hits,
+        })
+
     return _render("prompt.html", {
         "request": request,
         "mandate": mandate,
         "mandate_filename": f"asked of {meta['model_label']}" if meta["model_label"] else "base prompt",
         "guidance": {"current": None, "history": []},
+        "kill_rows": kill_rows,
         "active_page": "prompt",
         **_base_ctx(meta),
     })

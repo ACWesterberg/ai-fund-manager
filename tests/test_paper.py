@@ -137,9 +137,11 @@ def test_parse_prose_with_company_names():
     assert by_ticker["NVDA"]["weight_pct"] == 8
     assert by_ticker["AMZN"]["weight_pct"] == 6
     assert sum(x["weight_pct"] for x in h) == pytest.approx(72)
-    # Theses keep their full text — '>20%' inside NVDA's kill criterion doesn't split the line
+    # Theses keep their text, and the inline "Kill: …" tail is split out as the
+    # pre-registered kill criterion — '>20%' inside it doesn't chop the line
     assert "NVLink" in by_ticker["NVDA"]["thesis"]
-    assert "custom silicon" in by_ticker["NVDA"]["thesis"]
+    assert "custom silicon" in by_ticker["NVDA"]["kill_criterion"]
+    assert "book-to-bill" in by_ticker["ABB.ST"]["kill_criterion"].lower()
 
 
 def test_parse_prose_unresolved_names_kept_for_review():
@@ -162,6 +164,34 @@ def test_resolve_via_symbol_search(monkeypatch):
 def test_parse_index_sleeve_alias():
     h = paper.resolve_holdings(paper.parse_holdings("MSCI World 25%\nNvidia 8%"), search=False)
     assert {x["ticker"] for x in h} == {"URTH", "NVDA"}
+
+
+def test_parse_json_with_broker_tickers_and_kill_criteria():
+    """The structured format: broker-style tickers + exchange field ('ATCO A' on
+    OMX), a FUND placeholder row, a CASH row, and kill_criterion per position."""
+    text = (FIXTURES / "json_portfolio.json").read_text()
+    h = paper.resolve_holdings(paper.parse_holdings(text), search=False)
+    by_ticker = {x["ticker"]: x for x in h}
+
+    # OMX tickers get the .ST suffix (bare 'MTRS' is a different NYSE company),
+    # 'ATCO A' → ATCO-A.ST, ASML on AMS keeps its Amsterdam listing
+    assert set(by_ticker) == {"NVDA", "ASML.AS", "ABB.ST", "MTRS.ST", "ATCO-A.ST", "URTH"}
+    # the INDEX_GLOBAL fund placeholder resolves via its name to the ETF proxy
+    assert by_ticker["URTH"]["weight_pct"] == 25
+    # the CASH row produces no holding — its 3% simply stays uninvested
+    assert sum(x["weight_pct"] for x in h) == pytest.approx(55)
+    # kill criteria ride along per position
+    assert "accelerator unit share" in by_ticker["NVDA"]["kill_criterion"]
+    assert by_ticker["ATCO-A.ST"]["cluster"] == "swedish"
+
+
+def test_json_ticker_normalisation_variants():
+    assert paper._normalise_json_ticker("MYCR", "OMX", "Mycronic") == "MYCR.ST"
+    assert paper._normalise_json_ticker("NVDA", "NASDAQ", "Nvidia") == "NVDA"
+    assert paper._normalise_json_ticker("VOLV-B.ST", "OMX", "Volvo") == "VOLV-B.ST"  # already Yahoo-style
+    assert paper._normalise_json_ticker("INDEX_GLOBAL", "FUND", "x") is None
+    # no exchange hint: the name's home-listing alias wins over an ambiguous bare ticker
+    assert paper._normalise_json_ticker("MTRS", "", "Munters") == "MTRS.ST"
 
 
 # ── Weight normalisation ──────────────────────────────────────────────────────
@@ -311,6 +341,65 @@ def test_create_with_holdings_override(paper_dir, mock_market):
     actions = json.loads(store.get_last_recommendation().actions_json)
     assert {a["ticker"]: a["thesis"] for a in actions}["AAPL"] == "edited row"
     assert store.get_meta("paper_pasted_text") == "original pasted text kept as record"
+
+
+def test_create_stores_kill_criteria(paper_dir, mock_market):
+    text = json.dumps({"positions": [
+        {"ticker": "AAPL", "weight_pct": 60, "kill_criterion": "Services revenue growth <10% YoY"},
+        {"ticker": "MSFT", "weight_pct": 40, "kill_criterion": "Azure decelerates two quarters"},
+    ]})
+    slug, _ = paper.create_portfolio("Kills", 100_000, text)
+    _, store = paper.open_portfolio(slug)
+    kills = json.loads(store.get_meta("paper_kill_criteria"))
+    assert kills["AAPL"].startswith("Services revenue")
+    # the kill criterion is also folded into the action thesis for the history page
+    actions = {a["ticker"]: a for a in json.loads(store.get_last_recommendation().actions_json)}
+    assert "Kill: Azure decelerates" in actions["MSFT"]["thesis"]
+    assert actions["MSFT"]["kill_criterion"] == "Azure decelerates two quarters"
+
+
+def test_check_kill_criteria_flags_matching_news(paper_dir, mock_market, monkeypatch):
+    text = json.dumps({"positions": [
+        {"ticker": "AAPL", "weight_pct": 100,
+         "kill_criterion": "Custom silicon takes >20% accelerator share"},
+    ]})
+    slug, _ = paper.create_portfolio("Watch", 100_000, text)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(paper, "_recent_headlines",
+                        lambda t, max_items=8: ["Hyperscaler custom chip hits 25% of accelerator shipments (Reuters)"])
+    monkeypatch.setattr(paper, "_judge_kill_hit",
+                        lambda ticker, criterion, headlines: "custom silicon crossed 25% per Reuters")
+    sent = {}
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: sent.update(text=text) or True)
+
+    log = paper.check_kill_criteria(slug)
+    assert any("kill criterion may be triggering" in line for line in log)
+    _, store = paper.open_portfolio(slug)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert store.get_meta(f"paper_killhit:AAPL:{today}")
+    # second run same day is a no-op (already checked)
+    assert paper.check_kill_criteria(slug) == []
+
+
+def test_check_kill_criteria_no_hit_stays_quiet(paper_dir, mock_market, monkeypatch):
+    text = json.dumps({"positions": [{"ticker": "AAPL", "weight_pct": 100,
+                                      "kill_criterion": "Services growth stalls"}]})
+    slug, _ = paper.create_portfolio("Quiet", 100_000, text)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(paper, "_recent_headlines", lambda t, max_items=8: ["Apple unveils new colorway"])
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda *a: None)
+    assert paper.check_kill_criteria(slug) == []
+
+
+def test_check_kill_criteria_skips_without_api_key(paper_dir, mock_market, monkeypatch):
+    text = json.dumps({"positions": [{"ticker": "AAPL", "weight_pct": 100,
+                                      "kill_criterion": "x"}]})
+    slug, _ = paper.create_portfolio("NoKey", 100_000, text)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    log = paper.check_kill_criteria(slug)
+    assert any("no OPENAI_API_KEY" in line for line in log)
 
 
 def test_delete_archives_db(paper_dir, mock_market):

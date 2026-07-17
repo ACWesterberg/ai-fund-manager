@@ -1420,6 +1420,24 @@ def paper_track(slug: str | None):
         click.echo(f"  {line}")
 
 
+@cli.command("paper-kill-check")
+@click.option("--slug", default=None, help="Check a single paper portfolio instead of all.")
+def paper_kill_check(slug: str | None):
+    """Check each paper portfolio's holdings against their pre-registered kill
+    criteria using recent news (gpt-4o-mini judge; needs OPENAI_API_KEY).
+
+    Hits are recorded and pushed to Telegram. This also runs automatically as
+    part of 'fund paper-track'."""
+    from fundmgr.paper import check_kill_criteria, list_portfolios
+    slugs = [slug] if slug else [m["slug"] for m in list_portfolios()]
+    if not slugs:
+        click.echo("No paper portfolios yet.")
+        return
+    for s in slugs:
+        for line in check_kill_criteria(s):
+            click.echo(f"  {line}")
+
+
 @cli.command("paper-list")
 def paper_list():
     """List the paper portfolios and their current state."""

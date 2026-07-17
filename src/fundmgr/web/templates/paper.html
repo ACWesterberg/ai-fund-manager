@@ -198,8 +198,11 @@
 
     const tdThesis = document.createElement('td');
     tdThesis.className = 'text-slate-500 text-xs max-w-md';
-    tdThesis.textContent = h.thesis || '';
+    tdThesis.textContent = (h.thesis || '') +
+      (h.kill_criterion ? (h.thesis ? ' · ' : '') + 'Kill: ' + h.kill_criterion : '');
     tr.dataset.thesis = h.thesis || '';
+    tr.dataset.kill = h.kill_criterion || '';
+    tr.dataset.cluster = h.cluster || '';
     tr.dataset.name = h.name || '';
 
     const tdDel = document.createElement('td');
@@ -221,6 +224,8 @@
       ticker: tr.querySelector('.row-ticker').value.trim().toUpperCase(),
       weight_pct: parseFloat(tr.querySelector('.row-weight').value) || null,
       thesis: tr.dataset.thesis,
+      kill_criterion: tr.dataset.kill,
+      cluster: tr.dataset.cluster,
       name: tr.dataset.name,
     })).filter(h => h.ticker);
   }
@@ -258,7 +263,7 @@
   });
 
   document.getElementById('add-row-btn').addEventListener('click', () => {
-    addRow({ticker: '', name: '', weight_pct: null, thesis: ''});
+    addRow({ticker: '', name: '', weight_pct: null, thesis: '', kill_criterion: ''});
   });
 
   document.getElementById('paper-form').addEventListener('submit', () => {

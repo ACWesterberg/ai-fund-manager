@@ -57,6 +57,39 @@
   {% endif %}
 </section>
 
+{% if kill_rows %}
+<!-- Kill criteria (paper portfolios) — watched daily against news -->
+<section class="card mb-4">
+  <div class="card-header mb-3">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-red-400" style="font-size:17px">gpp_maybe</span>
+      <h2 class="card-title">Kill criteria</h2>
+    </div>
+    <span class="text-xs text-slate-600">watched daily vs news</span>
+  </div>
+  <p class="text-[11px] text-slate-600 mb-3">
+    The pre-registered fact that would falsify each thesis. Recent headlines are
+    judged against these once a day; a plausible match is flagged here and pushed
+    to Telegram. Headline-level signal — verify before acting.
+  </p>
+  <div class="space-y-3">
+    {% for k in kill_rows %}
+    <div class="border-l-2 {% if k.hits %}border-red-500/60{% else %}border-slate-700{% endif %} pl-3">
+      <div class="flex items-center gap-2">
+        <span class="font-semibold text-sm text-slate-200">{{ k.ticker }}</span>
+        {% if not k.held %}<span class="text-[10px] text-slate-600">(no longer held)</span>{% endif %}
+        {% if k.hits %}<span class="badge badge-sell">flagged</span>{% endif %}
+      </div>
+      <p class="text-sm text-slate-400 leading-relaxed mt-0.5">{{ k.criterion }}</p>
+      {% for hit in k.hits %}
+      <p class="text-xs text-red-400/90 mt-1">🚨 {{ hit.date }}: {{ hit.reason }}</p>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <!-- Mandate (fixed base prompt) -->
 <section class="card">
   <div class="card-header mb-3">

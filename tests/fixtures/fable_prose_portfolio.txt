@@ -1,0 +1,31 @@
+Here's a clean-sheet ~3M SEK construction under your mandate. Active risk is deliberately concentrated in two clusters where the chokepoint logic is strongest; everything else is kept close to benchmark or explicitly indexed.
+
+**Bear case first, portfolio level:** this book is one trade expressed five ways — that AI capex sustains through 2028 without a digestion phase. If hyperscaler capex guidance flattens, clusters 1, 2, and half of 4 fall together. Correlation in a drawdown will be near 1. The 25% index sleeve and the SEK leg are the only real ballast. Accept that consciously or don't run this book.
+
+**Cluster 1 — AI compute supply chain, 30% at cost (cap 35% incl. look-through)**
+- Nvidia 8% — chokepoint: CUDA + NVLink ecosystem lock-in. Kill: hyperscaler custom silicon taking >20% of accelerator unit share, or two consecutive quarters of data center revenue deceleration below consensus.
+- TSMC 7% — leading-edge logic monopoly (N3/N2). Kill: Intel Foundry or Samsung winning a flagship external node at volume; cross-strait escalation is a tail you size for, not a kill signal you wait for.
+- ASML 6% — EUV/High-NA monopoly, literally no second source. Kill: bookings trend breaking for two quarters ex-China, or a credible non-EUV path to sub-2nm.
+- Micron 5% — HBM oligopoly, tightest supply-demand of the three memory players. Kill: HBM pricing rolling over while capacity additions (Samsung qualification at Nvidia) come online. This is the most cyclical name here — hence smallest.
+- Broadcom 4% — custom ASIC + networking chokepoint, the hedge *against* Nvidia inside the cluster. Kill: loss of a major XPU customer program.
+
+**Cluster 2 — Power and grid, 15%**
+The variant view: the binding constraint on AI buildout is shifting from chips to electrons and cooling, and this layer is priced less perfectly than semis.
+- GE Vernova 5% — gas turbine capacity effectively sold out for years; oligopoly of three. Kill: order book/slot pricing softening.
+- ABB 5% — electrification/grid gear with structural backlog; also your OMXSGI-linked leg. Kill: book-to-bill below 1 for two quarters.
+- Munters 5% — data center cooling exposure, a name you already know well. Kill: DCT order intake breaking trend or hyperscaler concentration risk materializing in a lost account.
+
+**Cluster 3 — Hyperscalers, 12%**
+- Alphabet 6% and Amazon 6%. Variant view is TPU vertical integration and AWS margin leverage respectively. Deliberately *no* Microsoft and no Apple/Meta as direct holdings — at index-plus weights they're closet indexing; you own them through the index sleeve anyway. This is an honest change from your current book.
+
+**Cluster 4 — Swedish chokepoints, 15%**
+- Mycronic 5% — the purest chokepoint on the Stockholm exchange: near-monopoly in laser mask writers. Kill: pattern generator order intake breaking, since one segment carries the thesis.
+- Atlas Copco 6% — vacuum division is a semi-fab bottleneck (with Edwards); quality compounder priced as one, so the edge is smaller — this is partly benchmark management. Kill: vacuum orders diverging negatively from WFE spend.
+- MilDef 4% — European defense electronics, order-driven, NATO tailwind. Kill: order momentum stalling post the current rearmament wave, or dilutive M&A.
+
+**Cluster 5 — Index base, 25%**
+Global cap-weighted index fund (SEK share class). This is the humility sleeve: it caps tracking error, and its look-through adds roughly 1.5–2pp of Nvidia-complex exposure, taking cluster 1 to ~32% — inside the 35% cap but with no room to add. Any new AI-supply-chain idea must displace an existing one.
+
+**Cash 3%** — dry powder for kill-criteria-driven exits needing redeployment.
+
+**Portfolio-level exposures:** roughly 50–55% unhedged USD (direct US names plus ~70% of the index sleeve), with USD/SEK around 9.66 — near the middle of its 12-month range, so you're not entering at a currency extreme, but a 10% SEK rally costs ~5pp of portfolio return with no offset. US equity look-through ~60%, vs ~63% in your benchmark blend — so the geographic bet is small; the real bets are sector concentration and the power layer.

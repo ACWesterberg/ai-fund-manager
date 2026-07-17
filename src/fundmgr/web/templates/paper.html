@@ -123,26 +123,30 @@
     <div>
       <label class="kpi-label" for="pf-holdings">Intended stocks (paste the model's answer)</label>
       <textarea id="pf-holdings" name="holdings_text" rows="10" required
-                placeholder='Paste the model&#39;s reply — JSON like [{"ticker": "AAPL", "weight_pct": 12, "thesis": "..."}] or plain lines like "AAPL 12% — durable services growth". Weights are optional; missing ones share the remainder equally.'
+                placeholder='Paste the model&#39;s reply as-is — prose bullets like "- Nvidia 8% — chokepoint: CUDA lock-in", plain lines like "AAPL 12%", or JSON like [{"ticker": "AAPL", "weight_pct": 12, "thesis": "..."}]. Company names are mapped to Yahoo tickers; use Preview parse to check and edit before buying. Weights are optional; missing ones share the remainder equally.'
                 class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-emerald-500/60">{{ form.holdings_text or '' }}</textarea>
     </div>
 
-    <!-- Parse preview -->
+    <!-- Parse preview: editable — what's in this table is exactly what gets bought -->
+    <input type="hidden" name="holdings_json" id="holdings-json" value="" />
     <div id="preview-box" class="hidden">
       <div class="flex items-center justify-between mb-2">
-        <span class="kpi-label mb-0">Parsed picks</span>
+        <span class="kpi-label mb-0">Parsed picks (editable)</span>
         <span id="preview-total" class="text-xs text-slate-500"></span>
       </div>
       <div class="overflow-x-auto border border-slate-800 rounded-lg">
         <table class="data-table" id="preview-table">
-          <thead><tr><th>Ticker</th><th class="num">Weight</th><th>Thesis</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Parsed from</th><th class="num">Weight %</th><th>Thesis</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
-      <p class="text-[11px] text-slate-600 mt-1">
-        Check the tickers are valid Yahoo Finance symbols (e.g. <code>VOLV-B.ST</code>, <code>NOVO-B.CO</code>) —
-        anything without a live price is skipped and its allocation stays in cash.
-      </p>
+      <div class="flex items-center justify-between mt-1">
+        <p class="text-[11px] text-slate-600">
+          Fix any ticker before creating — Yahoo Finance symbols (e.g. <code>VOLV-B.ST</code>, <code>NOVO-B.CO</code>, <code>URTH</code>).
+          Rows highlighted red couldn't be resolved automatically. Anything without a live price is skipped and stays in cash.
+        </p>
+        <button type="button" id="add-row-btn" class="text-xs text-emerald-500 hover:text-emerald-400 font-semibold whitespace-nowrap ml-3">+ add row</button>
+      </div>
     </div>
     <div id="preview-error" class="hidden text-xs text-red-400"></div>
 
@@ -164,6 +168,69 @@
   const holdingsEl = document.getElementById('pf-holdings');
   const previewBox = document.getElementById('preview-box');
   const previewErr = document.getElementById('preview-error');
+  const tbody = document.querySelector('#preview-table tbody');
+
+  const INPUT_CLS = 'bg-slate-950/60 border border-slate-700/60 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/60';
+
+  function addRow(h) {
+    const tr = document.createElement('tr');
+    if (!h.ticker) tr.classList.add('bg-red-500/5');
+
+    const tdTicker = document.createElement('td');
+    const ti = document.createElement('input');
+    ti.className = INPUT_CLS + ' w-28 font-semibold row-ticker' + (h.ticker ? '' : ' border-red-500/50');
+    ti.value = h.ticker || '';
+    ti.placeholder = 'TICKER';
+    tdTicker.appendChild(ti);
+
+    const tdName = document.createElement('td');
+    tdName.className = 'text-slate-500 text-xs';
+    tdName.textContent = (h.name && h.name !== h.ticker ? h.name : '') +
+                         (h.resolved_via === 'search' ? ' (via Yahoo search — verify!)' : '');
+
+    const tdWeight = document.createElement('td');
+    tdWeight.className = 'num';
+    const wi = document.createElement('input');
+    wi.type = 'number'; wi.step = '0.1'; wi.min = '0'; wi.max = '100';
+    wi.className = INPUT_CLS + ' w-20 text-right row-weight';
+    wi.value = h.weight_pct != null ? h.weight_pct : '';
+    tdWeight.appendChild(wi);
+
+    const tdThesis = document.createElement('td');
+    tdThesis.className = 'text-slate-500 text-xs max-w-md';
+    tdThesis.textContent = h.thesis || '';
+    tr.dataset.thesis = h.thesis || '';
+    tr.dataset.name = h.name || '';
+
+    const tdDel = document.createElement('td');
+    tdDel.className = 'num';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'text-slate-600 hover:text-red-400 text-xs';
+    del.textContent = '✕';
+    del.addEventListener('click', () => { tr.remove(); refreshTotal(); });
+    tdDel.appendChild(del);
+
+    tr.append(tdTicker, tdName, tdWeight, tdThesis, tdDel);
+    tbody.appendChild(tr);
+    wi.addEventListener('input', refreshTotal);
+  }
+
+  function tableHoldings() {
+    return [...tbody.querySelectorAll('tr')].map(tr => ({
+      ticker: tr.querySelector('.row-ticker').value.trim().toUpperCase(),
+      weight_pct: parseFloat(tr.querySelector('.row-weight').value) || null,
+      thesis: tr.dataset.thesis,
+      name: tr.dataset.name,
+    })).filter(h => h.ticker);
+  }
+
+  function refreshTotal() {
+    const hs = tableHoldings();
+    const total = hs.reduce((s, h) => s + (h.weight_pct || 0), 0);
+    document.getElementById('preview-total').textContent =
+      `${hs.length} tickers · ${total.toFixed(1)}% invested, rest cash`;
+  }
 
   document.getElementById('preview-btn').addEventListener('click', async () => {
     previewBox.classList.add('hidden');
@@ -180,23 +247,9 @@
         previewErr.classList.remove('hidden');
         return;
       }
-      const tbody = document.querySelector('#preview-table tbody');
       tbody.innerHTML = '';
-      for (const h of data.holdings) {
-        const tr = document.createElement('tr');
-        const cell = (cls, text) => {
-          const td = document.createElement('td');
-          td.className = cls;
-          td.textContent = text;
-          tr.appendChild(td);
-        };
-        cell('font-semibold', h.ticker);
-        cell('num', h.weight_pct.toFixed(1) + '%');
-        cell('text-slate-500 text-xs', h.thesis || '');
-        tbody.appendChild(tr);
-      }
-      document.getElementById('preview-total').textContent =
-        `${data.holdings.length} tickers · ${data.total_weight}% invested, rest cash`;
+      data.holdings.forEach(addRow);
+      refreshTotal();
       previewBox.classList.remove('hidden');
     } catch (e) {
       previewErr.textContent = 'Preview failed: ' + e;
@@ -204,7 +257,14 @@
     }
   });
 
+  document.getElementById('add-row-btn').addEventListener('click', () => {
+    addRow({ticker: '', name: '', weight_pct: null, thesis: ''});
+  });
+
   document.getElementById('paper-form').addEventListener('submit', () => {
+    // If the preview table is populated, its (edited) rows are what gets bought
+    const hs = tableHoldings();
+    document.getElementById('holdings-json').value = hs.length ? JSON.stringify(hs) : '';
     document.getElementById('create-btn').disabled = true;
     document.getElementById('busy').classList.remove('hidden');
   });

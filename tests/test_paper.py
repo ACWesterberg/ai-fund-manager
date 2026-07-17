@@ -1,10 +1,13 @@
 """Paper portfolios: parsing pasted picks, creation at live prices, tracking, web routes."""
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
 from fundmgr import paper
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 # ── Fixtures: isolate PAPER_DIR + mock all market data ────────────────────────
@@ -50,6 +53,7 @@ def mock_market(monkeypatch):
                 }])
 
     monkeypatch.setattr(paper, "_cache_price_history", fake_history)
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)  # no network
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
@@ -112,6 +116,52 @@ def test_parse_empty_raises():
         paper.parse_holdings("   ")
     with pytest.raises(ValueError):
         paper.parse_holdings("Sorry, I cannot recommend individual stocks today.")
+
+
+def test_parse_prose_with_company_names():
+    """The real-world case: an LLM answer in prose with company names, cluster
+    headers carrying percentages, theses containing '>20%' style figures, and
+    'Alphabet 6% and Amazon 6%' on one line."""
+    text = (FIXTURES / "fable_prose_portfolio.txt").read_text()
+    h = paper.resolve_holdings(paper.parse_holdings(text), search=False)
+
+    by_ticker = {x["ticker"]: x for x in h}
+    assert set(by_ticker) == {
+        "NVDA", "TSM", "ASML", "MU", "AVGO",           # AI compute cluster
+        "GEV", "ABB.ST", "MTRS.ST",                    # power & grid
+        "GOOGL", "AMZN",                               # hyperscalers
+        "MYCR.ST", "ATCO-A.ST", "MILDEF.ST",           # Swedish chokepoints
+    }
+    # Weights survive; commentary lines ("Cluster 1 …, 30% at cost", the bear
+    # case's "25% index sleeve", "Cash 3%", exposure math) produce no holdings
+    assert by_ticker["NVDA"]["weight_pct"] == 8
+    assert by_ticker["AMZN"]["weight_pct"] == 6
+    assert sum(x["weight_pct"] for x in h) == pytest.approx(72)
+    # Theses keep their full text — '>20%' inside NVDA's kill criterion doesn't split the line
+    assert "NVLink" in by_ticker["NVDA"]["thesis"]
+    assert "custom silicon" in by_ticker["NVDA"]["thesis"]
+
+
+def test_parse_prose_unresolved_names_kept_for_review():
+    h = paper.resolve_holdings(paper.parse_holdings("- Some Obscure Company 10%\n- Nvidia 5%"),
+                               search=False)
+    unresolved = [x for x in h if x["ticker"] is None]
+    assert len(unresolved) == 1
+    assert unresolved[0]["name"] == "Some Obscure Company"
+    assert unresolved[0]["weight_pct"] == 10
+
+
+def test_resolve_via_symbol_search(monkeypatch):
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: "BUFAB.ST" if "Bufab" in name else None)
+    h = paper.resolve_holdings(paper.parse_holdings("- Bufab 10%\n- Nvidia 5%"))
+    by_ticker = {x["ticker"]: x for x in h}
+    assert by_ticker["BUFAB.ST"]["resolved_via"] == "search"
+    assert "NVDA" in by_ticker
+
+
+def test_parse_index_sleeve_alias():
+    h = paper.resolve_holdings(paper.parse_holdings("MSCI World 25%\nNvidia 8%"), search=False)
+    assert {x["ticker"] for x in h} == {"URTH", "NVDA"}
 
 
 # ── Weight normalisation ──────────────────────────────────────────────────────
@@ -229,6 +279,40 @@ def test_create_rejects_bad_input(paper_dir, mock_market):
         paper.create_portfolio("X", 0, "AAPL 100%")
 
 
+def test_create_from_company_name_prose(paper_dir, mock_market):
+    slug, _ = paper.create_portfolio(
+        "Prose", 100_000, "- Apple 60% — ecosystem\n- Microsoft 40% — Azure")
+    _, store = paper.open_portfolio(slug)
+    assert {p.ticker for p in store.get_positions()} == {"AAPL", "MSFT"}
+
+
+def test_create_logs_unresolved_names(paper_dir, mock_market):
+    slug, log = paper.create_portfolio(
+        "Partial Resolve", 100_000, "- Apple 50%\n- Some Unknown Industrials 25%")
+    _, store = paper.open_portfolio(slug)
+    assert [p.ticker for p in store.get_positions()] == ["AAPL"]
+    assert any("Some Unknown Industrials" in line for line in log)
+    # the skip reason lands in the creation run's notes, visible on the dashboard
+    notes = json.loads(store.get_last_recommendation().llm_response)["notes"]
+    assert "Some Unknown Industrials" in notes
+
+
+def test_create_with_holdings_override(paper_dir, mock_market):
+    slug, _ = paper.create_portfolio(
+        "Edited", 100_000, "original pasted text kept as record",
+        holdings_override=[
+            {"ticker": "aapl", "weight_pct": 70, "thesis": "edited row"},
+            {"ticker": "MSFT", "weight_pct": 30},
+            {"ticker": "", "weight_pct": 10},          # blank row from the UI — dropped
+        ])
+    _, store = paper.open_portfolio(slug)
+    positions = {p.ticker for p in store.get_positions()}
+    assert positions == {"AAPL", "MSFT"}
+    actions = json.loads(store.get_last_recommendation().actions_json)
+    assert {a["ticker"]: a["thesis"] for a in actions}["AAPL"] == "edited row"
+    assert store.get_meta("paper_pasted_text") == "original pasted text kept as record"
+
+
 def test_delete_archives_db(paper_dir, mock_market):
     slug, _ = paper.create_portfolio("Gone", 50_000, "AAPL 100%")
     paper.delete_portfolio(slug)
@@ -304,6 +388,18 @@ def test_preview_endpoint(client):
     assert data["total_weight"] == pytest.approx(100)
     r = client.post("/paper/preview", json={"holdings_text": ""})
     assert r.json()["ok"] is False
+
+
+def test_create_via_form_with_edited_table(client):
+    """holdings_json (the edited preview table) overrides the raw paste."""
+    r = client.post("/paper/create", data={
+        "name": "Table Created", "capital_sek": 100000,
+        "holdings_text": "- Nvidia 8% — this text is NOT what gets bought",
+        "holdings_json": json.dumps([{"ticker": "AAPL", "weight_pct": 100, "thesis": "t"}]),
+    }, follow_redirects=False)
+    assert r.status_code == 303
+    _, store = paper.open_portfolio("table-created")
+    assert [p.ticker for p in store.get_positions()] == ["AAPL"]
 
 
 def test_create_via_form_and_dashboard(client):

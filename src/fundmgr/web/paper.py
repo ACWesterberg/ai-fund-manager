@@ -117,7 +117,17 @@ async def paper_create(
     base_prompt: str = Form(""),
     model_label: str = Form(""),
     benchmark: str = Form(paper.DEFAULT_BENCHMARK),
+    holdings_json: str = Form(""),
 ):
+    # A user-edited preview table (holdings_json) overrides text parsing
+    holdings_override = None
+    if holdings_json.strip():
+        try:
+            parsed = json.loads(holdings_json)
+            if isinstance(parsed, list) and parsed:
+                holdings_override = parsed
+        except json.JSONDecodeError:
+            pass
     try:
         slug, _log = paper.create_portfolio(
             name=name,
@@ -126,6 +136,7 @@ async def paper_create(
             base_prompt=base_prompt,
             model_label=model_label,
             benchmark=benchmark.strip() or paper.DEFAULT_BENCHMARK,
+            holdings_override=holdings_override,
         )
     except ValueError as e:
         return _render("paper.html", {
@@ -144,11 +155,15 @@ async def paper_create(
 
 @router.post("/preview")
 async def paper_preview(request: Request):
-    """Parse the pasted picks (no price fetches) so the form can show what was understood."""
+    """Parse the pasted picks and resolve company names to tickers (alias map +
+    Yahoo symbol search — no price fetches), so the form can show an editable
+    table of exactly what would be bought."""
     body = await request.json()
     try:
-        holdings = paper.normalise_weights(paper.parse_holdings(body.get("holdings_text", "")))
-        return {"ok": True, "holdings": holdings,
+        holdings = paper.resolve_holdings(paper.parse_holdings(body.get("holdings_text", "")))
+        holdings = paper.normalise_weights(holdings)
+        unresolved = sum(1 for h in holdings if not h.get("ticker"))
+        return {"ok": True, "holdings": holdings, "unresolved": unresolved,
                 "total_weight": round(sum(h["weight_pct"] for h in holdings), 1)}
     except ValueError as e:
         return {"ok": False, "error": str(e)}

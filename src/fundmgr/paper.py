@@ -96,21 +96,79 @@ _THESIS_KEYS = ("thesis", "rationale", "reason", "why", "comment", "notes")
 _LIST_KEYS = ("portfolio", "holdings", "positions", "stocks", "picks", "actions",
               "recommendations", "allocations")
 
-_LINE_RE = re.compile(
-    r"^\s*(?:[-*\d.)\s]*)?"                       # bullets / numbering
-    r"(?P<ticker>[A-Za-z][A-Za-z0-9.\-^=]{0,14})"  # yahoo-style ticker
-    r"(?:\s*[,;:|–—-]?\s+"
-    r"(?P<rest>.*))?$"
-)
 _WEIGHT_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:[.,]\d+)?)\s*%")
+
+# Company name → Yahoo ticker, for prose answers ("Nvidia 8% — chokepoint: …").
+# Names are matched after _clean_name() normalisation (lowercase, no punctuation).
+# Nordic names default to their home listing; US names to the US listing.
+NAME_ALIASES: dict[str, str] = {
+    # US / global mega-caps
+    "nvidia": "NVDA", "microsoft": "MSFT", "apple": "AAPL", "alphabet": "GOOGL",
+    "google": "GOOGL", "amazon": "AMZN", "meta": "META", "meta platforms": "META",
+    "tesla": "TSLA", "netflix": "NFLX", "broadcom": "AVGO", "micron": "MU",
+    "micron technology": "MU", "tsmc": "TSM", "taiwan semiconductor": "TSM",
+    "amd": "AMD", "intel": "INTC", "qualcomm": "QCOM", "arm": "ARM",
+    "asml": "ASML", "asml holding": "ASML", "ge vernova": "GEV",
+    "vertiv": "VRT", "eaton": "ETN", "schneider electric": "SU.PA",
+    "berkshire hathaway": "BRK-B", "jpmorgan": "JPM", "visa": "V",
+    "eli lilly": "LLY", "unitedhealth": "UNH", "palantir": "PLTR",
+    "salesforce": "CRM", "oracle": "ORCL", "adobe": "ADBE", "shopify": "SHOP",
+    "constellation energy": "CEG", "linde": "LIN", "caterpillar": "CAT",
+    # Europe
+    "novo nordisk": "NOVO-B.CO", "lvmh": "MC.PA", "sap": "SAP.DE",
+    "siemens": "SIE.DE", "siemens energy": "ENR.DE", "shell": "SHEL.L",
+    "astrazeneca": "AZN.L", "nestle": "NESN.SW", "novartis": "NOVN.SW",
+    "roche": "ROG.SW", "equinor": "EQNR.OL", "kongsberg": "KOG.OL",
+    "rheinmetall": "RHM.DE", "airbus": "AIR.PA", "safran": "SAF.PA",
+    "bae systems": "BA.L", "rolls royce": "RR.L", "totalenergies": "TTE.PA",
+    # Sweden / Nordics (Stockholm listings)
+    "abb": "ABB.ST", "atlas copco": "ATCO-A.ST", "atlas copco a": "ATCO-A.ST",
+    "atlas copco b": "ATCO-B.ST", "volvo": "VOLV-B.ST", "ericsson": "ERIC-B.ST",
+    "investor": "INVE-B.ST", "hexagon": "HEXA-B.ST", "sandvik": "SAND.ST",
+    "saab": "SAAB-B.ST", "evolution": "EVO.ST", "hm": "HM-B.ST",
+    "h m": "HM-B.ST", "assa abloy": "ASSA-B.ST", "epiroc": "EPI-A.ST",
+    "alfa laval": "ALFA.ST", "skf": "SKF-B.ST", "seb": "SEB-A.ST",
+    "swedbank": "SWED-A.ST", "handelsbanken": "SHB-A.ST", "nordea": "NDA-SE.ST",
+    "mycronic": "MYCR.ST", "munters": "MTRS.ST", "mildef": "MILDEF.ST",
+    "lifco": "LIFCO-B.ST", "lagercrantz": "LAGR-B.ST", "indutrade": "INDT.ST",
+    "addtech": "ADDT-B.ST", "beijer ref": "BEIJ-B.ST", "nibe": "NIBE-B.ST",
+    "vitrolife": "VITR.ST", "sweco": "SWEC-B.ST", "afry": "AFRY.ST",
+    "trelleborg": "TREL-B.ST", "securitas": "SECU-B.ST", "essity": "ESSITY-B.ST",
+    # Common index sleeves → liquid ETF proxies with a live Yahoo feed
+    "msci world": "URTH", "msci world etf": "URTH", "world index": "URTH",
+    "global index fund": "URTH", "global cap weighted index fund": "URTH",
+    "s p 500": "SPY", "sp500": "SPY", "nasdaq 100": "QQQ", "omxs30": "XACT-OMXS30.ST",
+}
+
+# Lines whose (cleaned) first word is one of these are portfolio commentary,
+# not holdings — cluster headers, exposure math, bear-case paragraphs.
+_SKIP_FIRST_WORDS = {
+    "cluster", "cash", "total", "portfolio", "bear", "bull", "kill", "verdict",
+    "benchmark", "note", "notes", "warning", "summary", "exposure", "exposures",
+    "weight", "weights", "correlation", "the", "this", "here", "sum",
+}
+
+_SKIP_WORDS = {"THE", "AND", "FOR", "WITH", "CASH", "TOTAL", "SUM", "NOTE", "NOTES",
+               "TICKER", "SYMBOL", "WEIGHT", "STOCK", "STOCKS", "NAME", "PORTFOLIO"}
+
+_TICKERISH_RE = re.compile(r"^[A-Za-z][A-Za-z0-9.\-^=]{0,14}$")
+
+
+def _clean_name(text: str) -> str:
+    """Normalise a company name for alias lookup: lowercase, drop punctuation/markdown."""
+    text = re.sub(r"[*_`#]+", " ", text)          # markdown emphasis
+    text = re.sub(r"[^A-Za-z0-9&]+", " ", text)   # punctuation → spaces
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def parse_holdings(text: str) -> list[dict]:
-    """Parse pasted picks into [{ticker, weight_pct|None, thesis, confidence}].
+    """Parse pasted picks into [{ticker|None, name, weight_pct|None, thesis, confidence}].
 
-    Accepts a JSON array/object (as an LLM would return) or plain lines like
-    "AAPL 12%  — durable services growth". Raises ValueError when nothing
-    usable is found.
+    Accepts a JSON array/object (as an LLM would return), plain "AAPL 12%"
+    lines, or prose bullets like "- Nvidia 8% — chokepoint: CUDA lock-in"
+    (company names are mapped to Yahoo tickers via NAME_ALIASES; anything
+    unrecognised comes back with ticker=None for resolve_holdings / manual
+    fixing in the preview). Raises ValueError when nothing usable is found.
     """
     text = (text or "").strip()
     if not text:
@@ -124,16 +182,21 @@ def parse_holdings(text: str) -> list[dict]:
             "Could not find any tickers in the pasted text. "
             "Paste JSON with ticker/weight fields, or one 'TICKER weight%' per line."
         )
+    return _dedupe(holdings)
 
-    # De-duplicate, keep first occurrence
+
+def _dedupe(holdings: list[dict]) -> list[dict]:
+    """De-duplicate on ticker (or name while unresolved), keeping first occurrence."""
     seen: set[str] = set()
     unique = []
     for h in holdings:
-        t = h["ticker"].upper()
-        if t in seen:
+        if h.get("ticker"):
+            h["ticker"] = h["ticker"].upper()
+        key = h.get("ticker") or _clean_name(h.get("name") or "")
+        if not key or key in seen:
             continue
-        seen.add(t)
-        h["ticker"] = t
+        seen.add(key)
+        h.setdefault("name", h.get("ticker") or "")
         unique.append(h)
     return unique
 
@@ -191,7 +254,8 @@ def _parse_json_holdings(text: str) -> list[dict] | None:
         if not isinstance(item, dict):
             continue
         ticker = next((str(item[k]).strip() for k in _TICKER_KEYS if item.get(k)), "")
-        if not ticker:
+        name = next((str(item[k]).strip() for k in ("name", "company") if item.get(k)), "")
+        if not ticker and not name:
             continue
         weight = next((item[k] for k in _WEIGHT_KEYS
                        if isinstance(item.get(k), (int, float, str)) and item.get(k) != ""), None)
@@ -205,16 +269,13 @@ def _parse_json_holdings(text: str) -> list[dict] | None:
         except (TypeError, ValueError):
             confidence = None
         holdings.append({
-            "ticker": ticker,
+            "ticker": ticker or None,
+            "name": name or ticker,
             "weight_pct": float(weight) if weight is not None else None,
             "thesis": thesis,
             "confidence": confidence,
         })
     return holdings or None
-
-
-_SKIP_WORDS = {"THE", "AND", "FOR", "WITH", "CASH", "TOTAL", "SUM", "NOTE", "NOTES",
-               "TICKER", "SYMBOL", "WEIGHT", "STOCK", "STOCKS", "NAME", "PORTFOLIO"}
 
 
 def _parse_line_holdings(text: str) -> list[dict]:
@@ -223,27 +284,126 @@ def _parse_line_holdings(text: str) -> list[dict]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        m = _LINE_RE.match(line)
-        if not m:
-            continue
-        ticker = m.group("ticker")
-        rest = m.group("rest") or ""
-        # Ignore obvious prose lines: bare word with lowercase letters and no
-        # weight anywhere ("Here are my picks:")
-        if ticker.upper() in _SKIP_WORDS:
-            continue
-        if ticker != ticker.upper() and not _WEIGHT_RE.search(line):
-            continue
-        wm = _WEIGHT_RE.search(rest) or _WEIGHT_RE.search(line)
-        weight = float(wm.group(1).replace(",", ".")) if wm else None
-        thesis = _WEIGHT_RE.sub("", rest).strip(" ,;:—–-|")
-        holdings.append({
-            "ticker": ticker,
-            "weight_pct": weight,
-            "thesis": thesis,
-            "confidence": None,
-        })
+        # "Alphabet 6% and Amazon 6%. …" — give each weighted name its own
+        # segment. Only split when ≥2 parts open with "Name N%" (weight in the
+        # first few words), so "CUDA + NVLink" or a "Kill: … >20%" tail in a
+        # thesis never chops the line apart.
+        segments = [line]
+        if line.count("%") > 1:
+            parts = re.split(r"\s+and\s+", line)
+            with_leading_weight = sum(
+                1 for p in parts if (m := _WEIGHT_RE.search(p)) and m.start() < 30
+            )
+            if with_leading_weight > 1:
+                segments = parts
+        for seg in segments:
+            h = _parse_segment(seg)
+            if h:
+                holdings.append(h)
     return holdings
+
+
+_BULLET_RE = re.compile(r"^[\s\-*•\d.)]+")
+
+
+def _parse_segment(seg: str) -> dict | None:
+    seg = seg.strip()
+    if not seg:
+        return None
+
+    wm = _WEIGHT_RE.search(seg)
+    if not wm:
+        # No weight: only accept a bare single-token ticker line ("AAPL")
+        tok = _BULLET_RE.sub("", seg).strip().strip(".,;:")
+        if (_TICKERISH_RE.match(tok) and any(c.isalpha() for c in tok)
+                and (tok.isupper() or tok.islower()) and tok.upper() not in _SKIP_WORDS):
+            return {"ticker": tok.upper(), "name": tok.upper(),
+                    "weight_pct": None, "thesis": "", "confidence": None}
+        return None
+
+    weight = float(wm.group(1).replace(",", "."))
+    before = _BULLET_RE.sub(" ", seg[: wm.start()])
+    name = _clean_name(before)
+    if not name:
+        return None
+    words = name.split()
+    if words[0] in _SKIP_FIRST_WORDS:
+        return None       # cluster header / exposure math / commentary
+    if len(words) > 5:
+        return None       # prose sentence that happens to contain a percentage
+
+    thesis = seg[wm.end():].strip(" .,;:—–-|*")
+
+    # Resolve to a ticker: alias map first, then a lone ticker-looking token.
+    # Mixed-case words ("Bufab") are company names — leave unresolved for
+    # resolve_holdings (Yahoo symbol search) or manual fixing in the preview.
+    ticker = _lookup_alias(name)
+    display_name = re.sub(r"[*_`]+", "", before).strip(" .,;:—–-|")
+    if ticker is None:
+        tokens = [t.strip(".,;:*()") for t in before.split()]
+        tokens = [t for t in tokens if t]
+        if len(tokens) == 1 and _TICKERISH_RE.match(tokens[0]) and (
+            tokens[0].isupper() or tokens[0].islower()
+        ):
+            if tokens[0].upper() in _SKIP_WORDS:
+                return None
+            ticker = tokens[0].upper()
+
+    return {
+        "ticker": ticker,
+        "name": display_name or (ticker or ""),
+        "weight_pct": weight,
+        "thesis": thesis,
+        "confidence": None,
+    }
+
+
+def _lookup_alias(cleaned_name: str) -> str | None:
+    """NAME_ALIASES lookup, retrying with trailing words dropped
+    ("micron technology inc" → "micron technology" → "micron")."""
+    words = cleaned_name.split()
+    while words:
+        hit = NAME_ALIASES.get(" ".join(words))
+        if hit:
+            return hit
+        words = words[:-1]
+    return None
+
+
+def resolve_holdings(holdings: list[dict], search: bool = True) -> list[dict]:
+    """Fill in tickers for holdings parsed from company names.
+
+    Alias map first; optionally Yahoo Finance symbol search for the rest
+    (network — skip with search=False). Unresolvable entries keep ticker=None;
+    callers decide whether to drop them or surface them for manual fixing.
+    """
+    for h in holdings:
+        if h.get("ticker"):
+            continue
+        alias = _lookup_alias(_clean_name(h.get("name") or ""))
+        if alias:
+            h["ticker"] = alias
+            continue
+        if search and h.get("name"):
+            sym = _search_symbol(h["name"])
+            if sym:
+                h["ticker"] = sym
+                h["resolved_via"] = "search"
+    return _dedupe(holdings)
+
+
+def _search_symbol(query: str) -> str | None:
+    """Best-effort Yahoo Finance symbol lookup for a company/fund name."""
+    try:
+        import yfinance as yf
+        res = yf.Search(query, max_results=5)
+        for q in res.quotes or []:
+            sym = q.get("symbol")
+            if sym and q.get("quoteType", "").upper() in ("EQUITY", "ETF"):
+                return str(sym).upper()
+    except Exception:
+        pass
+    return None
 
 
 def normalise_weights(holdings: list[dict]) -> list[dict]:
@@ -360,8 +520,12 @@ def create_portfolio(
     base_prompt: str = "",
     model_label: str = "",
     benchmark: str = DEFAULT_BENCHMARK,
+    holdings_override: list[dict] | None = None,
 ) -> tuple[str, list[str]]:
     """Create a paper portfolio and execute its initial buys at live prices.
+
+    holdings_override (e.g. the user-edited preview table) bypasses text
+    parsing; holdings_text is still stored as the pasted record either way.
 
     Returns (slug, log_lines). Raises ValueError on bad input (name taken,
     nothing parseable, no prices available).
@@ -378,7 +542,37 @@ def create_portfolio(
     if db_path.exists():
         raise ValueError(f"A paper portfolio named '{slug}' already exists.")
 
-    holdings = normalise_weights(parse_holdings(holdings_text))
+    if holdings_override:
+        holdings = _dedupe([
+            {
+                "ticker": str(h.get("ticker") or "").strip().upper() or None,
+                "name": str(h.get("name") or h.get("ticker") or "").strip(),
+                "weight_pct": (float(h["weight_pct"])
+                               if h.get("weight_pct") not in (None, "") else None),
+                "thesis": str(h.get("thesis") or "").strip(),
+                "confidence": _safe_confidence(h.get("confidence")),
+            }
+            for h in holdings_override
+        ])
+        if not holdings:
+            raise ValueError("The edited holdings table is empty.")
+    else:
+        holdings = parse_holdings(holdings_text)
+
+    holdings = resolve_holdings(holdings)
+    log: list[str] = []
+    unresolved = [h for h in holdings if not h.get("ticker")]
+    holdings = [h for h in holdings if h.get("ticker")]
+    for h in unresolved:
+        log.append(f"⚠ could not resolve '{h['name']}' to a ticker — skipped "
+                   "(its allocation stays in cash)")
+    if not holdings:
+        raise ValueError(
+            "None of the pasted names could be resolved to a Yahoo Finance ticker. "
+            "Use the preview to enter tickers manually."
+        )
+
+    holdings = normalise_weights(holdings)
     tickers = [h["ticker"] for h in holdings]
 
     # Live native-currency prices + per-ticker currency
@@ -386,7 +580,6 @@ def create_portfolio(
     native = {t: p for t, p in live_prices(tickers).items() if p}
     currency_map = {t: detect_currency(t) for t in tickers if t in native}
 
-    log: list[str] = []
     priced = [h for h in holdings if h["ticker"] in native]
     unpriced = [h["ticker"] for h in holdings if h["ticker"] not in native]
     if not priced:
@@ -460,7 +653,8 @@ def create_portfolio(
             llm_response=json.dumps({
                 "market_summary": f"Paper portfolio '{name}' seeded from "
                                   f"{model_label.strip() or 'pasted'} picks at live market prices.",
-                "notes": f"{len(actions)} positions · benchmark {benchmark}",
+                "notes": f"{len(actions)} positions · benchmark {benchmark}"
+                         + "".join(f"\n{line}" for line in log if line.startswith("⚠")),
             }),
             guardrail_log="{}",
             actions_json=actions_json,
@@ -494,6 +688,13 @@ def create_portfolio(
 
 def _cost_nav(store: Store) -> float:
     return sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
+
+
+def _safe_confidence(value) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 # ── Daily tracking + learning ─────────────────────────────────────────────────

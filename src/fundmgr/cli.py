@@ -1406,5 +1406,39 @@ def reject_rates():
                "rates is materially non-zero.\n")
 
 
+@cli.command("paper-track")
+@click.option("--slug", default=None, help="Track a single paper portfolio instead of all.")
+def paper_track(slug: str | None):
+    """Daily upkeep for the paper portfolios created on the web (/paper):
+
+    refresh price + benchmark caches, snapshot NAV at live prices, evaluate
+    matured decision outcomes and distil learnings — the same pipeline the
+    LLM funds run, scoped to each portfolio's own store."""
+    from fundmgr.paper import track_all, track_portfolio
+    lines = track_portfolio(slug) if slug else track_all()
+    for line in lines:
+        click.echo(f"  {line}")
+
+
+@cli.command("paper-list")
+def paper_list():
+    """List the paper portfolios and their current state."""
+    from fundmgr.paper import list_portfolios, open_portfolio
+    portfolios = list_portfolios()
+    if not portfolios:
+        click.echo("No paper portfolios yet — create one on the web at /paper.")
+        return
+    for meta in portfolios:
+        _, store = open_portfolio(meta["slug"])
+        navs = store.get_nav_history()
+        nav = navs[-1].portfolio_nav_sek if navs else meta["capital_sek"]
+        pnl = (nav / meta["capital_sek"] - 1) * 100 if meta["capital_sek"] else 0.0
+        click.echo(
+            f"  {meta['slug']:<24} {meta['name']:<28} "
+            f"NAV {nav:>10,.0f} SEK  {pnl:>+6.2f}%  "
+            f"(started {meta['created_at'][:10]}, benchmark {meta['benchmark']})"
+        )
+
+
 if __name__ == "__main__":
     cli()

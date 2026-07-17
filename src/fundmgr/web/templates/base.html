@@ -212,6 +212,32 @@
          style="color:#7c3aed">
         <span class="material-symbols-outlined" style="color:#7c3aed">tune</span>Prompt
       </a>
+
+      <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Paper</p>
+      <a href="/paper" class="nav-link {% if active_page == 'paper' %}active{% endif %}"
+         style="color:#059669">
+        <span class="material-symbols-outlined" style="color:#059669">content_paste</span>Paper Portfolios
+      </a>
+      {% if paper_prefix is defined %}
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium" style="color:#059669">{{ paper_name }}</p>
+      <a href="{{ paper_prefix }}" class="nav-link {% if active_page == 'portfolio' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">area_chart</span>Portfolio
+      </a>
+      <a href="{{ paper_prefix }}/transactions" class="nav-link {% if active_page == 'transactions' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">receipt_long</span>Trades
+      </a>
+      <a href="{{ paper_prefix }}/learnings" class="nav-link {% if active_page == 'learnings' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">lightbulb</span>Learnings
+      </a>
+      <a href="{{ paper_prefix }}/prompt" class="nav-link {% if active_page == 'prompt' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">tune</span>Prompt
+      </a>
+      {% endif %}
     </nav>
 
     <div class="px-5 py-4 border-t border-slate-800/50">

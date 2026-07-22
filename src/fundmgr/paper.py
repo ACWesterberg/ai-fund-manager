@@ -46,17 +46,19 @@ def slugify(name: str) -> str:
     return slug[:48] or "portfolio"
 
 
-def list_portfolios() -> list[dict]:
-    """All paper portfolios (metadata only — no price fetches)."""
+def list_portfolios(kind: str | None = None) -> list[dict]:
+    """Portfolios' metadata (no price fetches). `kind` filters by book type:
+    'paper' (pasted sims) or 'live' (real monitored sleeves); None = all."""
     if not PAPER_DIR.exists():
         return []
     out = []
     for db in sorted(PAPER_DIR.glob("*.db")):
         try:
             meta, _store = open_portfolio(db.stem)
-            out.append(meta)
         except Exception:
             continue
+        if kind is None or meta.get("kind") == kind:
+            out.append(meta)
     return out
 
 
@@ -75,6 +77,8 @@ def open_portfolio(slug: str) -> tuple[dict, Store]:
         "created_at": store.get_meta("paper_created_at") or "",
         "base_prompt": store.get_meta("paper_base_prompt") or "",
         "currency_map": json.loads(store.get_meta("paper_currency_map") or "{}"),
+        # 'paper' = pasted sim (default, back-compat); 'live' = real monitored sleeve
+        "kind": store.get_meta("paper_kind") or "paper",
     }
     return meta, store
 
@@ -691,6 +695,7 @@ def create_portfolio(
     holdings_override: list[dict] | None = None,
     position_meta: dict[str, dict] | None = None,
     capex_kill: dict | None = None,
+    kind: str = "paper",
 ) -> tuple[str, list[str]]:
     """Create a paper portfolio and execute its initial buys at live prices.
 
@@ -776,6 +781,7 @@ def create_portfolio(
         store.set_meta("paper_benchmark", benchmark)
         store.set_meta("paper_model_label", model_label.strip())
         store.set_meta("paper_created_at", now.strftime("%Y-%m-%d %H:%M"))
+        store.set_meta("paper_kind", kind if kind in ("paper", "live") else "paper")
         store.set_meta("paper_base_prompt", base_prompt.strip())
         store.set_meta("paper_currency_map", json.dumps(currency_map))
         store.set_meta("paper_pasted_text", holdings_text.strip())

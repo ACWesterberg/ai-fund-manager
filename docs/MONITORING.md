@@ -27,6 +27,13 @@ fund paper-import path/to/kf_chokepoint.json
 
 Capital defaults to `meta.deployable_capital_sek`; override with `--capital`.
 
+Or import from the web: the **Live** section (`/live`) has a "Import a sleeve
+from JSON" form that does the same thing (kind=`live`). Live sleeves get
+real-money framing (never "paper / not real money") and their own dashboard
+with a **Watch-status panel** — the capex kill meter, per-position weight drift
+vs target, and upcoming earnings — separate from the `/paper` simulation
+section.
+
 ## 2. What gets watched (daily, via `fund paper-track`)
 
 Runs from cron after NYSE close (see `deploy/cron.example`). Each pushes to

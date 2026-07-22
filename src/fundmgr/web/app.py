@@ -46,9 +46,11 @@ app.include_router(make_sim_router(
     "config/config_claude.yaml", "/sim-claude", "Claude Opus Global Fund", sim_accent="violet"
 ))
 
-# Paper portfolios — user-created from pasted LLM picks, tracked like the sims
-from fundmgr.web.paper import router as paper_router  # noqa: E402
+# Paper portfolios — user-created from pasted LLM picks, tracked like the sims.
+# Live sleeves — real monitored books imported via `fund paper-import`.
+from fundmgr.web.paper import router as paper_router, live_router  # noqa: E402
 app.include_router(paper_router)
+app.include_router(live_router)
 
 # Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)

@@ -222,26 +222,52 @@
       </a>
 
       <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Live</p>
+      <a href="/live" class="nav-link {% if active_page == 'live' %}active{% endif %}"
+         style="color:#0ea5e9">
+        <span class="material-symbols-outlined" style="color:#0ea5e9">radar</span>Live Sleeves
+      </a>
+      {% if book_prefix is defined and book_section == 'live' %}
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium" style="color:#0ea5e9">{{ book_name }}</p>
+      <a href="{{ book_prefix }}" class="nav-link {% if active_page == 'portfolio' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">area_chart</span>Portfolio
+      </a>
+      <a href="{{ book_prefix }}/transactions" class="nav-link {% if active_page == 'transactions' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">receipt_long</span>Trades
+      </a>
+      <a href="{{ book_prefix }}/learnings" class="nav-link {% if active_page == 'learnings' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">lightbulb</span>Learnings
+      </a>
+      <a href="{{ book_prefix }}/prompt" class="nav-link {% if active_page == 'prompt' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">gpp_maybe</span>Thesis &amp; kills
+      </a>
+      {% endif %}
+
+      <div class="my-3 border-t border-slate-800/50"></div>
       <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Paper</p>
       <a href="/paper" class="nav-link {% if active_page == 'paper' %}active{% endif %}"
          style="color:#059669">
         <span class="material-symbols-outlined" style="color:#059669">content_paste</span>Paper Portfolios
       </a>
-      {% if paper_prefix is defined %}
-      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium" style="color:#059669">{{ paper_name }}</p>
-      <a href="{{ paper_prefix }}" class="nav-link {% if active_page == 'portfolio' %}active{% endif %}"
+      {% if book_prefix is defined and book_section == 'paper' %}
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium" style="color:#059669">{{ book_name }}</p>
+      <a href="{{ book_prefix }}" class="nav-link {% if active_page == 'portfolio' %}active{% endif %}"
          style="color:#10b981">
         <span class="material-symbols-outlined" style="color:#10b981">area_chart</span>Portfolio
       </a>
-      <a href="{{ paper_prefix }}/transactions" class="nav-link {% if active_page == 'transactions' %}active{% endif %}"
+      <a href="{{ book_prefix }}/transactions" class="nav-link {% if active_page == 'transactions' %}active{% endif %}"
          style="color:#10b981">
         <span class="material-symbols-outlined" style="color:#10b981">receipt_long</span>Trades
       </a>
-      <a href="{{ paper_prefix }}/learnings" class="nav-link {% if active_page == 'learnings' %}active{% endif %}"
+      <a href="{{ book_prefix }}/learnings" class="nav-link {% if active_page == 'learnings' %}active{% endif %}"
          style="color:#10b981">
         <span class="material-symbols-outlined" style="color:#10b981">lightbulb</span>Learnings
       </a>
-      <a href="{{ paper_prefix }}/prompt" class="nav-link {% if active_page == 'prompt' %}active{% endif %}"
+      <a href="{{ book_prefix }}/prompt" class="nav-link {% if active_page == 'prompt' %}active{% endif %}"
          style="color:#10b981">
         <span class="material-symbols-outlined" style="color:#10b981">tune</span>Prompt
       </a>

@@ -763,3 +763,69 @@ def test_delete_via_form(client):
     r = client.post("/paper/deletable/delete", follow_redirects=False)
     assert r.status_code == 303
     assert client.get("/paper/deletable").status_code == 404
+
+
+# ── Live sleeves (real-money section) ─────────────────────────────────────────
+
+def test_live_home_empty(client):
+    r = client.get("/live/")
+    assert r.status_code == 200
+    assert "Live Sleeves" in r.text
+    assert "Real money" in r.text
+
+
+def test_live_import_via_form(client):
+    data = {
+        "meta": {"name": "KF Live", "deployable_capital_sek": 100000,
+                 "excluded_holdings": [{"ticker": "SLS", "name": "SELLAS"}]},
+        "portfolio_kill_criterion": {"trigger": "Any two hyperscalers guide capex down",
+                                     "action": "Halve the compute cluster."},
+        "positions": [
+            {"ticker": "AAPL", "currency": "USD", "name": "Apple", "target_weight_pct": 60,
+             "kill_criteria": ["Services <10%"], "next_earnings": "2026-08-01",
+             "watch": "Services growth vs 10%"},
+            {"ticker": "MSFT", "currency": "USD", "name": "Microsoft", "target_weight_pct": 40},
+        ],
+    }
+    r = client.post("/live/import", data={"json_text": json.dumps(data)}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/live/kf-live"
+
+    meta, store = paper.open_portfolio("kf-live")
+    assert meta["kind"] == "live"
+    assert {p.ticker for p in store.get_positions()} == {"AAPL", "MSFT"}  # SLS excluded
+
+    # Dashboard: real-money framing + Watch panel, and NOT the paper disclaimer
+    r = client.get("/live/kf-live")
+    assert r.status_code == 200
+    assert "LIVE SLEEVE" in r.text
+    assert "Not real money" not in r.text
+    assert "Watch status" in r.text
+    assert "Services growth vs 10%" in r.text          # watch line surfaced
+    assert "Any two hyperscalers" in r.text            # capex criterion surfaced
+
+
+def test_live_import_rejects_non_json(client):
+    r = client.post("/live/import", data={"json_text": "not json at all"})
+    assert r.status_code == 200
+    assert "Could not parse JSON" in r.text or "no &#39;positions&#39;" in r.text
+
+
+def test_live_and_paper_lists_are_separate(client):
+    paper.create_portfolio("A Paper Book", 50_000, "AAPL 100%", kind="paper")
+    paper.create_portfolio("A Live Book", 50_000, "AAPL 100%", kind="live")
+
+    rp = client.get("/paper/").text
+    assert "A Paper Book" in rp and "A Live Book" not in rp
+    rl = client.get("/live/").text
+    assert "A Live Book" in rl and "A Paper Book" not in rl
+
+
+def test_paper_book_has_no_watch_panel(client):
+    """Paper books keep the simulation framing — no live Watch panel."""
+    paper.create_portfolio("Plain Paper", 50_000, "AAPL 100%", kind="paper")
+    r = client.get("/paper/plain-paper")
+    assert r.status_code == 200
+    assert "PAPER PORTFOLIO" in r.text
+    assert "Not real money" in r.text
+    assert "Watch status" not in r.text

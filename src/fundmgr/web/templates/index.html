@@ -15,12 +15,96 @@
   <span class="material-symbols-outlined" style="font-size:15px">content_paste</span>
   {{ sim_banner|default('SIMULATION — ' ~ sim_label ~ ' · Not real money') }}
 </div>
+{% elif sim_accent == 'sky' %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border border-sky-500/25 bg-sky-500/5 flex items-center gap-2 text-sky-400 text-xs font-semibold">
+  <span class="material-symbols-outlined" style="font-size:15px">radar</span>
+  {{ sim_banner|default('LIVE SLEEVE — ' ~ sim_label ~ ' · Real positions · Monitored') }}
+</div>
 {% else %}
 <div class="mb-4 px-4 py-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-center gap-2 text-amber-400 text-xs font-semibold">
   <span class="material-symbols-outlined" style="font-size:15px">science</span>
   {{ sim_banner|default('SIMULATION — ' ~ sim_label ~ ' · Auto-executed trades · Not real money') }}
 </div>
 {% endif %}
+{% endif %}
+
+{% if watch %}
+<!-- ── Watch status (live sleeves) ── -->
+<section class="card mb-5" style="border-color:rgba(14,165,233,.18)">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-sky-400" style="font-size:17px">radar</span>
+      <h2 class="card-title">Watch status</h2>
+    </div>
+    <span class="text-xs text-slate-600">alerts push to Telegram · daily</span>
+  </div>
+
+  {% if watch.capex %}
+  {% set c = watch.capex %}
+  <div class="mb-4">
+    <div class="flex items-center gap-2 mb-1.5">
+      <span class="kpi-label mb-0">Portfolio capex kill criterion</span>
+      {% if c.status == 'triggered' %}
+        <span class="badge" style="background:rgba(248,113,113,.12);color:#f87171">TRIGGERED</span>
+      {% elif c.status == 'warning' %}
+        <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24">WARNING · {{ c.count }}/2</span>
+      {% else %}
+        <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">CLEAR</span>
+      {% endif %}
+    </div>
+    <p class="text-xs text-slate-500 mb-2">{{ c.trigger }}</p>
+    <div class="flex flex-wrap gap-1.5">
+      {% for h in c.hyperscalers %}
+        {% if h.signal %}
+        <span class="badge" style="background:rgba(248,113,113,.1);color:#f87171">{{ h.ticker }} · {{ h.signal|upper }}</span>
+        {% else %}
+        <span class="badge" style="background:rgba(255,255,255,.04);color:#64748b">{{ h.ticker }}</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% if c.status == 'triggered' and c.action %}
+      <p class="text-xs text-red-400 mt-2">→ {{ c.action }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if watch.rows %}
+  <div class="overflow-x-auto -mx-1">
+    <table class="data-table" style="font-size:12px">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th class="num">Weight</th>
+          <th class="num">Target</th>
+          <th class="num">Drift</th>
+          <th>Next earnings</th>
+          <th>Watch / kill</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in watch.rows %}
+        <tr>
+          <td class="font-semibold text-slate-200">{{ r.ticker }}</td>
+          <td class="num text-slate-300">{{ "{:.1f}".format(r.weight_pct) }}%</td>
+          <td class="num text-slate-500">{% if r.target_pct %}{{ "{:.1f}".format(r.target_pct) }}%{% else %}—{% endif %}</td>
+          <td class="num">
+            {% if r.ratio %}
+              <span class="{{ 'text-red-400 font-semibold' if r.over else 'text-slate-400' }}">{{ "{:.2f}".format(r.ratio) }}×</span>
+            {% else %}<span class="text-slate-600">—</span>{% endif %}
+          </td>
+          <td class="text-slate-400">{{ r.next_earnings or '—' }}</td>
+          <td class="text-slate-500" style="max-width:340px">{{ r.watch or r.kill or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-[11px] text-slate-600 mt-2">
+    Drift ≥ 1.50× target fires the rebalance alert. Earnings dates come from the imported plan;
+    the daily watch pings before each report and after. Verify every alert before acting.
+  </p>
+  {% endif %}
+</section>
 {% endif %}
 
 <!-- ── KPI strip ── -->

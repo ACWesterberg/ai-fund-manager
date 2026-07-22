@@ -1497,6 +1497,7 @@ def paper_import(json_file: str, name: str | None, capital: float | None,
             holdings_override=parsed["holdings_override"],
             position_meta=parsed["position_meta"],
             capex_kill=parsed["capex_kill"],
+            kind="live",
         )
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)

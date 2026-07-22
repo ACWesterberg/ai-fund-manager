@@ -541,10 +541,22 @@ def test_paper_import_cli(paper_dir, mock_market, tmp_path):
 
     result = CliRunner().invoke(cli, ["paper-import", str(jf)])
     assert result.exit_code == 0, result.output
-    _, store = paper.open_portfolio("import-test")
-    assert {p.ticker for p in store.get_positions()} == {"AAPL", "MSFT"}
-    assert "SLS" not in {p.ticker for p in store.get_positions()}
+    meta, store = paper.open_portfolio("import-test")
+    assert meta["kind"] == "live"
+    # plan-only by default: nothing bought, cash whole, the plan is stored
+    assert store.get_positions() == []
+    assert store.get_cash() == pytest.approx(100000)
+    assert set(json.loads(store.get_meta("paper_target_weights"))) == {"AAPL", "MSFT"}  # SLS excluded
     assert json.loads(store.get_meta("paper_capex_kill"))["trigger"].startswith("2 of 5")
+
+    # --execute opens the positions now
+    data2 = {**data, "meta": {**data["meta"], "name": "Import Exec"}}
+    jf2 = tmp_path / "picks2.json"
+    jf2.write_text(json.dumps(data2))
+    r2 = CliRunner().invoke(cli, ["paper-import", str(jf2), "--execute"])
+    assert r2.exit_code == 0, r2.output
+    _, store2 = paper.open_portfolio("import-exec")
+    assert {p.ticker for p in store2.get_positions()} == {"AAPL", "MSFT"}
 
 
 def test_paper_fill_cli(paper_dir, mock_market):
@@ -564,6 +576,50 @@ def test_paper_fill_cli(paper_dir, mock_market):
     # unknown slug exits non-zero
     bad = CliRunner().invoke(cli, ["paper-fill", "nope", "AAPL", "5", "2000", "1"])
     assert bad.exit_code != 0
+
+
+# ── Plan-only import (real 'live' sleeves) ────────────────────────────────────
+
+def test_create_plan_only_buys_nothing(paper_dir, mock_market):
+    slug, log = paper.create_portfolio(
+        "Plan Sleeve", 100_000, "AAPL 60%\nMSFT 40%", kind="live", execute_buys=False)
+    _, store = paper.open_portfolio(slug)
+    # nothing bought, cash whole — but the plan (targets) is fully stored
+    assert store.get_positions() == []
+    assert store.get_cash() == pytest.approx(100_000)
+    assert set(json.loads(store.get_meta("paper_target_weights"))) == {"AAPL", "MSFT"}
+    # the creation run records the intended trades for the dashboard
+    actions = json.loads(store.get_last_recommendation().actions_json)
+    assert {a["ticker"] for a in actions} == {"AAPL", "MSFT"}
+    assert any("Plan" in line for line in log)
+
+
+def test_plan_then_fill_builds_position(paper_dir, mock_market):
+    slug, _ = paper.create_portfolio(
+        "Fill Later", 100_000, "AAPL 100%", kind="live", execute_buys=False)
+    _, store = paper.open_portfolio(slug)
+    assert store.get_positions() == []
+    # record an actual fill (as the Telegram/CLI path does) → position appears
+    from fundmgr.state.models import Transaction
+    store.apply_fill(Transaction(
+        ticker="AAPL", side="buy", shares=5, price_sek=2000, fee_sek=1,
+        source="fill", currency="USD", timestamp=datetime.now(timezone.utc)))
+    after = {p.ticker: p.shares for p in store.get_positions()}
+    assert after == {"AAPL": 5}
+
+
+def test_earnings_watch_covers_unbought_plan(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio(
+        "Plan Earn", 100_000, "AAPL 100%", kind="live", execute_buys=False,
+        position_meta={"AAPL": {"watch": "Services growth", "next_earnings": ""}})
+    _, store = paper.open_portfolio(slug)
+    assert store.get_positions() == []          # not bought
+    sent = _capture_telegram(monkeypatch)
+    tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
+    monkeypatch.setattr(paper, "_next_earnings_date", lambda t: tomorrow)
+    log = paper.check_earnings_calendar(slug)
+    assert any("heads-up" in line for line in log)   # fires for the planned-but-unheld ticker
+    assert any("reports tomorrow" in m for m in sent)
 
 
 # ── Monitors: capex kill, earnings calendar, weight drift ─────────────────────
@@ -793,14 +849,18 @@ def test_live_import_via_form(client):
 
     meta, store = paper.open_portfolio("kf-live")
     assert meta["kind"] == "live"
-    assert {p.ticker for p in store.get_positions()} == {"AAPL", "MSFT"}  # SLS excluded
+    # plan-only: nothing bought yet, cash whole, SLS excluded from the plan
+    assert store.get_positions() == []
+    assert store.get_cash() == pytest.approx(100000)
+    assert set(json.loads(store.get_meta("paper_target_weights"))) == {"AAPL", "MSFT"}
 
-    # Dashboard: real-money framing + Watch panel, and NOT the paper disclaimer
+    # Dashboard: real-money framing + Watch panel showing the (un-bought) plan
     r = client.get("/live/kf-live")
     assert r.status_code == 200
     assert "LIVE SLEEVE" in r.text
     assert "Not real money" not in r.text
     assert "Watch status" in r.text
+    assert "AAPL" in r.text and "MSFT" in r.text       # plan rows visible before buying
     assert "Services growth vs 10%" in r.text          # watch line surfaced
     assert "Any two hyperscalers" in r.text            # capex criterion surfaced
 

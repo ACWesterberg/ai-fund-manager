@@ -23,16 +23,20 @@ fund paper-import path/to/kf_chokepoint.json
 - **drops `excluded_holdings`** (SELLAS) entirely — never bought, never sized.
 - stores per-position kill criteria, **target weights**, per-position notes
   (`watch`, `next_earnings`), and the **portfolio-level capex kill criterion**.
-- buys at live prices, then the book is tracked like any paper portfolio.
+- **imports the plan only — it does NOT buy.** The sleeve starts 100% cash;
+  positions appear as you record actual fills (below). Pass `--execute` to
+  `paper-import` (or nothing on the CLI) only if you want every position opened
+  at live prices immediately. The watches run against the *plan* (target
+  tickers), so you get kill-criterion and earnings alerts before you've bought.
 
 Capital defaults to `meta.deployable_capital_sek`; override with `--capital`.
 
 Or import from the web: the **Live** section (`/live`) has a "Import a sleeve
-from JSON" form that does the same thing (kind=`live`). Live sleeves get
-real-money framing (never "paper / not real money") and their own dashboard
-with a **Watch-status panel** — the capex kill meter, per-position weight drift
-vs target, and upcoming earnings — separate from the `/paper` simulation
-section.
+from JSON" form that does the same thing (kind=`live`, plan-only). Live sleeves
+get real-money framing (never "paper / not real money") and their own dashboard
+with a **Watch-status panel** — the capex kill meter, the full plan (intended
+tickers, weights, kill lines, next earnings), and per-position weight drift once
+held — separate from the `/paper` simulation section.
 
 ## 2. What gets watched (daily, via `fund paper-track`)
 

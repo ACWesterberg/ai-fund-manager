@@ -36,7 +36,9 @@
       <span class="material-symbols-outlined text-sky-400" style="font-size:17px">radar</span>
       <h2 class="card-title">Watch status</h2>
     </div>
-    <span class="text-xs text-slate-600">alerts push to Telegram · daily</span>
+    <span class="text-xs text-slate-600">
+      {% if watch.rows %}{{ watch.held_count }}/{{ watch.planned_count }} held · {% endif %}alerts push to Telegram
+    </span>
   </div>
 
   {% if watch.capex %}
@@ -85,7 +87,10 @@
         {% for r in watch.rows %}
         <tr>
           <td class="font-semibold text-slate-200">{{ r.ticker }}</td>
-          <td class="num text-slate-300">{{ "{:.1f}".format(r.weight_pct) }}%</td>
+          <td class="num">
+            {% if r.held %}<span class="text-slate-300">{{ "{:.1f}".format(r.weight_pct) }}%</span>
+            {% else %}<span class="text-slate-600">— <span style="font-size:9px;letter-spacing:.04em">plan</span></span>{% endif %}
+          </td>
           <td class="num text-slate-500">{% if r.target_pct %}{{ "{:.1f}".format(r.target_pct) }}%{% else %}—{% endif %}</td>
           <td class="num">
             {% if r.ratio %}

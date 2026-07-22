@@ -114,15 +114,22 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "action": capex_cfg.get("action", ""),
         }
 
+    # Show the whole plan (target tickers ∪ anything held), so intended stocks,
+    # weights and kill lines are visible before they're bought; live weight and
+    # drift fill in for held positions.
+    weight_by = {p["ticker"]: p["weight_pct"] for p in positions_data}
+    tickers = list(dict.fromkeys(list(targets) + [p["ticker"] for p in positions_data]))
     rows = []
-    for p in positions_data:
-        t = p["ticker"]
+    for t in tickers:
         tgt = targets.get(t)
-        ratio = (p["weight_pct"] / tgt) if tgt else None
+        held = t in weight_by
+        weight = weight_by.get(t, 0.0)
+        ratio = (weight / tgt) if (tgt and held) else None
         note = notes.get(t) or {}
         rows.append({
             "ticker": t,
-            "weight_pct": p["weight_pct"],
+            "held": held,
+            "weight_pct": weight,
             "target_pct": tgt,
             "ratio": round(ratio, 2) if ratio else None,
             "over": bool(ratio and ratio >= 1.5),
@@ -130,8 +137,8 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "watch": note.get("watch", ""),
             "kill": kills.get(t, ""),
         })
-    rows.sort(key=lambda r: (0 if r["over"] else 1, -(r["ratio"] or 0)))
-    return {"capex": capex, "rows": rows}
+    rows.sort(key=lambda r: (0 if r["over"] else 1, -(r["target_pct"] or 0)))
+    return {"capex": capex, "rows": rows, "held_count": len(weight_by), "planned_count": len(tickers)}
 
 
 def _not_found() -> HTMLResponse:
@@ -276,6 +283,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 position_meta=parsed["position_meta"],
                 capex_kill=parsed["capex_kill"],
                 kind="live",
+                execute_buys=False,  # import the plan; positions fill from trades
             )
         except ValueError as e:
             return _render(home_template, _home_ctx(

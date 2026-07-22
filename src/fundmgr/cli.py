@@ -1466,15 +1466,20 @@ def paper_list():
 @click.option("--benchmark", default=None, help="Benchmark symbol (default: URTH).")
 @click.option("--model", "model_label", default="Claude Fable",
               help="Label for who produced the picks.")
+@click.option("--execute", is_flag=True, default=False,
+              help="Buy every position now at live prices. Default: plan only — "
+                   "import the idea and let positions fill as you record trades.")
 def paper_import(json_file: str, name: str | None, capital: float | None,
-                 benchmark: str | None, model_label: str):
-    """Create a monitored mirror portfolio from a structured LLM answer (JSON).
+                 benchmark: str | None, model_label: str, execute: bool):
+    """Import a monitored 'live' sleeve from a structured LLM answer (JSON).
 
     Maps broker/Montrose tickers to Yahoo symbols, drops excluded_holdings, and
     stores per-position kill criteria, target weights, notes and the
-    portfolio-level capex kill criterion — then buys at live prices. The book is
-    then watched daily by 'fund paper-track' (kill criteria, capex, earnings,
-    drift → Telegram).
+    portfolio-level capex kill criterion. By default nothing is bought — the
+    plan is imported and positions appear as you record fills ('fund paper-fill'
+    / Telegram screenshot); pass --execute to open everything now. Either way
+    the book is watched daily by 'fund paper-track' (kill criteria, capex,
+    earnings, drift → Telegram).
     """
     from fundmgr import paper
 
@@ -1498,6 +1503,7 @@ def paper_import(json_file: str, name: str | None, capital: float | None,
             position_meta=parsed["position_meta"],
             capex_kill=parsed["capex_kill"],
             kind="live",
+            execute_buys=execute,
         )
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)

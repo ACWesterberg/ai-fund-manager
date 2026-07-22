@@ -696,8 +696,9 @@ def create_portfolio(
     position_meta: dict[str, dict] | None = None,
     capex_kill: dict | None = None,
     kind: str = "paper",
+    execute_buys: bool = True,
 ) -> tuple[str, list[str]]:
-    """Create a paper portfolio and execute its initial buys at live prices.
+    """Create a portfolio from a set of picks.
 
     holdings_override (e.g. the user-edited preview table) bypasses text
     parsing; holdings_text is still stored as the pasted record either way.
@@ -707,8 +708,14 @@ def create_portfolio(
     are optional extras the monitors quote — populated by `fund paper-import`
     from a structured answer; unused by the plain web-paste path.
 
+    execute_buys=True (paper sims) opens every position at live prices now.
+    execute_buys=False (real 'live' sleeves) imports the *plan* only — tickers,
+    weights, kill criteria and notes are stored and monitored, but nothing is
+    bought; positions appear as you record actual fills (`fund paper-fill` /
+    Telegram screenshot). Cash stays whole.
+
     Returns (slug, log_lines). Raises ValueError on bad input (name taken,
-    nothing parseable, no prices available).
+    nothing parseable, or — when executing — no prices available).
     """
     name = name.strip()
     if not name:
@@ -757,20 +764,24 @@ def create_portfolio(
     holdings = normalise_weights(holdings)
     tickers = [h["ticker"] for h in holdings]
 
-    # Live native-currency prices + per-ticker currency
+    # Per-ticker trading currency (resolves without a live price via yfinance
+    # metadata / suffix map) — needed for later fills and SEK drift math.
+    currency_map = {t: detect_currency(t) for t in tickers}
+
+    # Live native-currency prices: used to execute buys and seed the price
+    # cache. In plan-only mode a missing price just means no opening fill.
     from fundmgr.data.quotes import live_prices
     native = {t: p for t, p in live_prices(tickers).items() if p}
-    currency_map = {t: detect_currency(t) for t in tickers if t in native}
 
     priced = [h for h in holdings if h["ticker"] in native]
-    unpriced = [h["ticker"] for h in holdings if h["ticker"] not in native]
-    if not priced:
-        raise ValueError(
-            "Could not fetch a market price for any pasted ticker "
-            f"({', '.join(tickers[:10])}). Are they valid Yahoo Finance symbols?"
-        )
-    for t in unpriced:
-        log.append(f"⚠ {t}: no market price — skipped (allocation stays in cash)")
+    if execute_buys:
+        if not priced:
+            raise ValueError(
+                "Could not fetch a market price for any pasted ticker "
+                f"({', '.join(tickers[:10])}). Are they valid Yahoo Finance symbols?"
+            )
+        for t in [h["ticker"] for h in holdings if h["ticker"] not in native]:
+            log.append(f"⚠ {t}: no market price — skipped (allocation stays in cash)")
 
     store = Store(db_path)
     try:
@@ -785,69 +796,85 @@ def create_portfolio(
         store.set_meta("paper_base_prompt", base_prompt.strip())
         store.set_meta("paper_currency_map", json.dumps(currency_map))
         store.set_meta("paper_pasted_text", holdings_text.strip())
-        # Pre-registered falsification conditions, watched daily against news
+        # The plan — kill criteria, target weights, per-position notes — covers
+        # every resolved holding (bought or not yet), so the monitors and the
+        # Watch panel work from the plan rather than only from executed fills.
         store.set_meta("paper_kill_criteria", json.dumps({
             h["ticker"]: (h.get("kill_criterion") or "").strip()
-            for h in priced if (h.get("kill_criterion") or "").strip()
+            for h in holdings if (h.get("kill_criterion") or "").strip()
         }))
-        # Target weights drive the 1.5×-drift rebalance watch; per-position
-        # notes + the portfolio-level capex kill criterion let the monitors
-        # quote the specific line to act on (watched daily in track_portfolio).
         store.set_meta("paper_target_weights", json.dumps({
-            h["ticker"]: round(float(h["weight_pct"]), 4) for h in priced
+            h["ticker"]: round(float(h["weight_pct"]), 4) for h in holdings
         }))
         if position_meta:
             store.set_meta("paper_position_notes", json.dumps({
-                t: v for t, v in position_meta.items()
-                if t in {h["ticker"] for h in priced}
+                t: v for t, v in position_meta.items() if t in set(tickers)
             }))
         if capex_kill:
             store.set_meta("paper_capex_kill", json.dumps(capex_kill))
 
-        prices_sek = sek_prices_for(store, [h["ticker"] for h in priced], currency_map, native)
-
-        # Execute the initial buys: gross = capital × weight, fee comes out of gross
-        actions = []
-        for h in priced:
-            t = h["ticker"]
-            price_sek = prices_sek.get(t)
-            if not price_sek:
-                log.append(f"⚠ {t}: no FX rate for {currency_map.get(t)} — skipped")
-                continue
-            gross = capital_sek * h["weight_pct"] / 100.0
-            fee = _fees.calc(gross)
-            shares = round((gross - fee) / price_sek, 4)
-            if shares <= 0:
-                log.append(f"⚠ {t}: allocation too small for one lot — skipped")
-                continue
-            store.apply_fill(Transaction(
-                ticker=t, side="buy", shares=shares,
-                price_sek=round(price_sek, 4), fee_sek=round(fee, 2),
-                source="paper", currency=currency_map.get(t, "USD"), timestamp=now,
-            ))
+        def _plan_thesis(h: dict) -> tuple[str, str]:
             kill = (h.get("kill_criterion") or "").strip()
             thesis = h["thesis"]
             if kill and "kill" not in thesis.lower():
                 thesis = f"{thesis} · Kill: {kill}" if thesis else f"Kill: {kill}"
-            actions.append({
-                "ticker": t, "side": "buy",
-                "target_weight_pct": h["weight_pct"],
-                "confidence": h["confidence"],
-                "thesis": thesis,
-                "kill_criterion": kill,
-                "cluster": h.get("cluster") or "",
-                "sek_estimate": round(gross),
-                "stop_loss_pct": None,
-            })
-            log.append(f"✓ Bought {shares:g} × {t} @ {price_sek:,.2f} SEK (fee {fee:.0f})")
+            return thesis, kill
 
-        if not actions:
-            raise ValueError("No positions could be opened — see the skip reasons above.")
+        actions: list[dict] = []
+        if execute_buys:
+            # Open every priced position now: gross = capital × weight, fee off gross
+            prices_sek = sek_prices_for(store, [h["ticker"] for h in priced], currency_map, native)
+            for h in priced:
+                t = h["ticker"]
+                price_sek = prices_sek.get(t)
+                if not price_sek:
+                    log.append(f"⚠ {t}: no FX rate for {currency_map.get(t)} — skipped")
+                    continue
+                gross = capital_sek * h["weight_pct"] / 100.0
+                fee = _fees.calc(gross)
+                shares = round((gross - fee) / price_sek, 4)
+                if shares <= 0:
+                    log.append(f"⚠ {t}: allocation too small for one lot — skipped")
+                    continue
+                store.apply_fill(Transaction(
+                    ticker=t, side="buy", shares=shares,
+                    price_sek=round(price_sek, 4), fee_sek=round(fee, 2),
+                    source="paper", currency=currency_map.get(t, "USD"), timestamp=now,
+                ))
+                thesis, kill = _plan_thesis(h)
+                actions.append({
+                    "ticker": t, "side": "buy", "target_weight_pct": h["weight_pct"],
+                    "confidence": h["confidence"], "thesis": thesis, "kill_criterion": kill,
+                    "cluster": h.get("cluster") or "", "sek_estimate": round(gross),
+                    "stop_loss_pct": None,
+                })
+                log.append(f"✓ Bought {shares:g} × {t} @ {price_sek:,.2f} SEK (fee {fee:.0f})")
+            if not actions:
+                raise ValueError("No positions could be opened — see the skip reasons above.")
+        else:
+            # Plan only: record the intended trades without executing. Cash stays
+            # whole; positions appear as fills are recorded later.
+            for h in holdings:
+                thesis, kill = _plan_thesis(h)
+                actions.append({
+                    "ticker": h["ticker"], "side": "buy", "target_weight_pct": h["weight_pct"],
+                    "confidence": h["confidence"], "thesis": thesis, "kill_criterion": kill,
+                    "cluster": h.get("cluster") or "",
+                    "sek_estimate": round(capital_sek * h["weight_pct"] / 100.0),
+                    "stop_loss_pct": None,
+                })
 
-        # Record the creation as this portfolio's one decision run, so the
-        # standard evaluator/learnings pipeline picks it up like any fund run.
+        # Record the creation as this portfolio's decision run (the plan), so the
+        # dashboard and — for executed books — the learnings pipeline pick it up.
         run_id = f"paper-{slug}-{now.strftime('%Y%m%d%H%M%S')}"
         actions_json = json.dumps(actions)
+        summary = (
+            f"Paper portfolio '{name}' seeded from {model_label.strip() or 'pasted'} "
+            f"picks at live market prices."
+            if execute_buys else
+            f"Live sleeve '{name}' — plan imported from {model_label.strip() or 'pasted'} "
+            f"picks; positions fill as you record trades."
+        )
         store.save_recommendation(RecommendationLog(
             run_id=run_id,
             timestamp=now,
@@ -858,20 +885,22 @@ def create_portfolio(
                 "currency_map": currency_map,
             }),
             llm_response=json.dumps({
-                "market_summary": f"Paper portfolio '{name}' seeded from "
-                                  f"{model_label.strip() or 'pasted'} picks at live market prices.",
-                "notes": f"{len(actions)} positions · benchmark {benchmark}"
+                "market_summary": summary,
+                "notes": f"{len(actions)} {'positions' if execute_buys else 'intended positions'}"
+                         f" · benchmark {benchmark}"
                          + "".join(f"\n{line}" for line in log if line.startswith("⚠")),
             }),
             guardrail_log="{}",
             actions_json=actions_json,
         ))
-        store.seed_outcomes_for_run(run_id, actions_json, prices=native)
+        if execute_buys:
+            store.seed_outcomes_for_run(run_id, actions_json, prices=native)
 
         # Benchmark + price-history caches so tracking/evaluation have data
         from fundmgr.data.benchmark import fetch_and_cache_benchmark
         fetch_and_cache_benchmark(store, symbol=benchmark)
-        _cache_price_history(store, list(native.keys()))
+        if native:
+            _cache_price_history(store, list(native.keys()))
 
         bench_rows = store.get_benchmark()
         store.upsert_nav(NavPoint(
@@ -888,8 +917,13 @@ def create_portfolio(
             pass
         raise
 
-    log.append(f"✓ Portfolio '{name}' created — {len(actions)} positions, "
-               f"{store.get_cash():,.0f} SEK cash")
+    if execute_buys:
+        log.append(f"✓ Portfolio '{name}' created — {len(actions)} positions, "
+                   f"{store.get_cash():,.0f} SEK cash")
+    else:
+        log.append(f"✓ Plan '{name}' imported — {len(actions)} intended positions, "
+                   f"no fills yet ({store.get_cash():,.0f} SEK cash). "
+                   f"Record trades to build the book.")
     return slug, log
 
 
@@ -998,8 +1032,11 @@ def check_kill_criteria(slug: str, store: Store | None = None) -> list[str]:
         name = store.get_meta("paper_name") or slug
 
     kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
-    held = {p.ticker for p in store.get_positions()}
-    kills = {t: k for t, k in kills.items() if t in held and k}
+    # Watch the plan, not just what's been bought: a thesis can break before the
+    # position is opened (held ∪ target-weight tickers).
+    watch_tickers = {p.ticker for p in store.get_positions()} | set(
+        json.loads(store.get_meta("paper_target_weights") or "{}"))
+    kills = {t: k for t, k in kills.items() if t in watch_tickers and k}
     if not kills:
         return []
     if not os.getenv("OPENAI_API_KEY"):
@@ -1252,15 +1289,17 @@ def check_earnings_calendar(slug: str, store: Store | None = None) -> list[str]:
     else:
         name = store.get_meta("paper_name") or slug
 
-    held = [p.ticker for p in store.get_positions()]
-    if not held:
+    # Cover the plan so the heads-up lands before you buy (held ∪ targets).
+    watch_tickers = sorted({p.ticker for p in store.get_positions()} | set(
+        json.loads(store.get_meta("paper_target_weights") or "{}")))
+    if not watch_tickers:
         return []
     notes = json.loads(store.get_meta("paper_position_notes") or "{}")
     kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
     today = datetime.now(timezone.utc).date()
 
     log: list[str] = []
-    for ticker in held:
+    for ticker in watch_tickers:
         edate = _next_earnings_date(ticker)
         if edate is None:
             seeded = (notes.get(ticker) or {}).get("next_earnings", "")

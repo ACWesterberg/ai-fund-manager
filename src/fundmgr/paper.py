@@ -141,6 +141,9 @@ NAME_ALIASES: dict[str, str] = {
     "siemens": "SIE.DE", "siemens energy": "ENR.DE", "shell": "SHEL.L",
     "astrazeneca": "AZN.L", "nestle": "NESN.SW", "novartis": "NOVN.SW",
     "roche": "ROG.SW", "equinor": "EQNR.OL", "kongsberg": "KOG.OL",
+    "kongsberg gruppen": "KOG.OL", "be semiconductor": "BESI.AS",
+    "be semiconductor industries": "BESI.AS", "besi": "BESI.AS",
+    "sk hynix": "000660.KS", "sk hynix inc": "000660.KS", "vertiv holdings": "VRT",
     "rheinmetall": "RHM.DE", "airbus": "AIR.PA", "safran": "SAF.PA",
     "bae systems": "BA.L", "rolls royce": "RR.L", "totalenergies": "TTE.PA",
     # Sweden / Nordics (Stockholm listings)
@@ -174,6 +177,15 @@ _SKIP_WORDS = {"THE", "AND", "FOR", "WITH", "CASH", "TOTAL", "SUM", "NOTE", "NOT
                "TICKER", "SYMBOL", "WEIGHT", "STOCK", "STOCKS", "NAME", "PORTFOLIO"}
 
 _TICKERISH_RE = re.compile(r"^[A-Za-z][A-Za-z0-9.\-^=]{0,14}$")
+
+
+def _join_kill(value) -> str:
+    """Kill criteria arrive as a string or a JSON list (e.g. the Fable format's
+    `"kill_criteria": ["A", "B"]`). Join lists into one readable clause so the
+    news judge reads them cleanly instead of a Python list repr."""
+    if isinstance(value, (list, tuple)):
+        return "; ".join(str(x).strip() for x in value if str(x).strip())
+    return str(value).strip()
 
 
 def _clean_name(text: str) -> str:
@@ -295,8 +307,9 @@ def _parse_json_holdings(text: str) -> list[dict] | None:
             m = _WEIGHT_RE.search(weight) or re.search(r"\d+(?:[.,]\d+)?", weight)
             weight = float(m.group(m.lastindex or 0).replace(",", ".")) if m else None
         thesis = next((str(item[k]).strip() for k in _THESIS_KEYS if item.get(k)), "")
-        kill = next((str(item[k]).strip() for k in _KILL_KEYS
-                     if item.get(k) not in (None, "")), "")
+        kill_val = next((item[k] for k in _KILL_KEYS
+                         if item.get(k) not in (None, "", [])), "")
+        kill = _join_kill(kill_val)
         confidence = _safe_confidence(item.get("confidence"))
         holdings.append({
             "ticker": ticker,
@@ -576,6 +589,95 @@ def _cache_price_history(store: Store, tickers: list[str], lookback_days: int = 
             continue
 
 
+# ── Structured import (broker tickers → Yahoo) ────────────────────────────────
+
+# Broker/Montrose-style tickers → Yahoo symbols, for `fund paper-import` of a
+# structured answer that quotes broker tickers rather than Yahoo symbols. Bare
+# US symbols (TSM, NVDA, GOOGL, GEV, VRT, CEG) are already valid and pass
+# through unchanged; only the ones that mis-resolve on Yahoo are mapped.
+MONTROSE_YAHOO = {
+    "KOG": "KOG.OL",       # Kongsberg Gruppen (bare KOG = Kodiak Gas on Yahoo)
+    "ENR": "ENR.DE",       # Siemens Energy (Xetra)
+    "BESI": "BESI.AS",     # BE Semiconductor (Euronext Amsterdam)
+    "ASML": "ASML.AS",     # ASML — Amsterdam listing (EUR) to match the sleeve
+    "SKHY": "000660.KS",   # SK Hynix — Korea line (no clean Yahoo ADR feed)
+}
+
+
+def montrose_to_yahoo(ticker: str, currency: str | None = None,
+                      name: str | None = None) -> str:
+    """Map a broker/Montrose ticker to a Yahoo symbol. Explicit map first, then
+    an already-suffixed symbol as-is, then the company name's home-listing
+    alias, else the bare ticker (correct for US names)."""
+    t = (ticker or "").strip().upper()
+    if t in MONTROSE_YAHOO:
+        return MONTROSE_YAHOO[t]
+    if "." in t:
+        return t
+    alias = _lookup_alias(_clean_name(name or "")) if name else None
+    if alias and "." in alias:
+        return alias
+    return t
+
+
+def parse_structured_portfolio(data: dict) -> dict:
+    """Turn a structured LLM answer (positions[] with broker tickers, cluster,
+    kill_criteria, next_earnings, plus a top-level portfolio_kill_criterion and
+    meta.deployable_capital_sek) into the pieces create_portfolio consumes.
+
+    Broker tickers are mapped to Yahoo symbols; `excluded_holdings` are dropped
+    entirely (never bought, never sized). Returns a dict with holdings_override,
+    position_meta, capex_kill, capital_sek, name and excluded.
+    """
+    holdings: list[dict] = []
+    position_meta: dict[str, dict] = {}
+    for p in data.get("positions") or []:
+        raw = str(p.get("ticker") or "").strip()
+        if not raw:
+            continue
+        yt = montrose_to_yahoo(raw, p.get("currency"), p.get("name"))
+        holdings.append({
+            "ticker": yt,
+            "name": p.get("name") or yt,
+            "weight_pct": p.get("target_weight_pct"),
+            "thesis": p.get("thesis") or "",
+            "kill_criterion": _join_kill(p.get("kill_criteria")
+                                         or p.get("kill_criterion") or ""),
+            "cluster": p.get("cluster") or "",
+            "confidence": None,
+        })
+        position_meta[yt] = {
+            "watch": p.get("watch") or "",
+            "thesis": p.get("thesis") or "",
+            "bear_case": p.get("bear_case") or "",
+            "next_earnings": p.get("next_earnings") or "",
+        }
+
+    capex = data.get("portfolio_kill_criterion") or {}
+    capex_kill: dict = {}
+    if (capex.get("trigger") or "").strip():
+        capex_kill = {
+            "trigger": capex.get("trigger", ""),
+            "action": capex.get("action", ""),
+            "note": capex.get("note", ""),
+            "hyperscalers": capex.get("hyperscalers") or DEFAULT_HYPERSCALERS,
+        }
+
+    meta = data.get("meta") or {}
+    excluded = [
+        (e.get("ticker") or e.get("name") or "").strip()
+        for e in (meta.get("excluded_holdings") or [])
+    ]
+    return {
+        "holdings_override": holdings,
+        "position_meta": position_meta,
+        "capex_kill": capex_kill,
+        "capital_sek": meta.get("deployable_capital_sek") or data.get("capital_sek"),
+        "name": meta.get("name") or data.get("name") or "Imported portfolio",
+        "excluded": [e for e in excluded if e],
+    }
+
+
 # ── Creation ──────────────────────────────────────────────────────────────────
 
 def create_portfolio(
@@ -586,11 +688,18 @@ def create_portfolio(
     model_label: str = "",
     benchmark: str = DEFAULT_BENCHMARK,
     holdings_override: list[dict] | None = None,
+    position_meta: dict[str, dict] | None = None,
+    capex_kill: dict | None = None,
 ) -> tuple[str, list[str]]:
     """Create a paper portfolio and execute its initial buys at live prices.
 
     holdings_override (e.g. the user-edited preview table) bypasses text
     parsing; holdings_text is still stored as the pasted record either way.
+
+    position_meta ({ticker: {watch, thesis, bear_case, next_earnings}}) and
+    capex_kill (a portfolio-level kill criterion + the hyperscaler ticker set)
+    are optional extras the monitors quote — populated by `fund paper-import`
+    from a structured answer; unused by the plain web-paste path.
 
     Returns (slug, log_lines). Raises ValueError on bad input (name taken,
     nothing parseable, no prices available).
@@ -674,6 +783,19 @@ def create_portfolio(
             h["ticker"]: (h.get("kill_criterion") or "").strip()
             for h in priced if (h.get("kill_criterion") or "").strip()
         }))
+        # Target weights drive the 1.5×-drift rebalance watch; per-position
+        # notes + the portfolio-level capex kill criterion let the monitors
+        # quote the specific line to act on (watched daily in track_portfolio).
+        store.set_meta("paper_target_weights", json.dumps({
+            h["ticker"]: round(float(h["weight_pct"]), 4) for h in priced
+        }))
+        if position_meta:
+            store.set_meta("paper_position_notes", json.dumps({
+                t: v for t, v in position_meta.items()
+                if t in {h["ticker"] for h in priced}
+            }))
+        if capex_kill:
+            store.set_meta("paper_capex_kill", json.dumps(capex_kill))
 
         prices_sek = sek_prices_for(store, [h["ticker"] for h in priced], currency_map, native)
 
@@ -817,6 +939,26 @@ def track_portfolio(slug: str) -> list[str]:
     except Exception as e:
         log.append(f"⚠ kill-criterion watch failed: {e}")
 
+    # Portfolio-level capex kill criterion (e.g. "2 of 5 hyperscalers guide
+    # 2027 capex flat/down"), the master trigger for the whole sleeve.
+    try:
+        log += check_capex_kill(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ capex-kill watch failed: {e}")
+
+    # Earnings-calendar heads-up before each print and a check-the-numbers
+    # reminder after — the decision moments the whole schedule turns on.
+    try:
+        log += check_earnings_calendar(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ earnings watch failed: {e}")
+
+    # Weight drift: alert when a position appreciates past 1.5× its target.
+    try:
+        log += check_weight_drift(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ drift watch failed: {e}")
+
     # Learning pipeline — identical to the weekly fund runs
     from fundmgr.engine.evaluator import (
         evaluate_pending_outcomes,
@@ -943,6 +1085,316 @@ def _judge_kill_hit(ticker: str, criterion: str, headlines: list[str]) -> str | 
         return None
     except Exception:
         return None
+
+
+# ── Portfolio-level capex kill criterion ──────────────────────────────────────
+
+# Five largest hyperscalers by AI capex — the default watch set when a portfolio
+# stores a capex kill criterion without naming its own tickers.
+DEFAULT_HYPERSCALERS = ["MSFT", "AMZN", "GOOGL", "META", "ORCL"]
+
+# How far back a flat/down capex signal still counts toward the trigger — one
+# earnings season. The prints that resolve the criterion cluster within a
+# fortnight, so a ~7-week window comfortably spans a single reporting round.
+_CAPEX_WINDOW_DAYS = 49
+
+
+def check_capex_kill(slug: str, store: Store | None = None) -> list[str]:
+    """Watch the largest hyperscalers' capex guidance — the sleeve's master kill
+    criterion (e.g. "any two guide 2027 capex flat or down").
+
+    For each hyperscaler, judge recent headlines for a flat/down 2027 capex
+    signal (once per ticker per day). Count distinct flat/down names in a
+    rolling earnings-season window: one is a warning to resize, two or more
+    fires the portfolio kill alert quoting the pre-registered action. Each
+    threshold alerts once. Judgement uses gpt-4o-mini — skipped without
+    OPENAI_API_KEY. No-op on portfolios without a stored capex criterion.
+    """
+    if store is None:
+        meta, store = open_portfolio(slug)
+        name = meta["name"]
+    else:
+        name = store.get_meta("paper_name") or slug
+
+    cfg = json.loads(store.get_meta("paper_capex_kill") or "{}")
+    if not cfg or not (cfg.get("trigger") or "").strip():
+        return []
+    if not os.getenv("OPENAI_API_KEY"):
+        return ["capex-kill watch skipped (no OPENAI_API_KEY)"]
+
+    hyperscalers = cfg.get("hyperscalers") or DEFAULT_HYPERSCALERS
+    log: list[str] = []
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for ticker in hyperscalers:
+        if store.get_meta(f"paper_capexwatch:{ticker}:{today}") == today:
+            continue
+        headlines = _recent_headlines(ticker)
+        store.set_meta(f"paper_capexwatch:{ticker}:{today}", today)
+        if not headlines:
+            continue
+        signal = _judge_capex_signal(ticker, headlines)
+        if signal:  # "down" | "flat"
+            store.set_meta(f"capex_signal:{ticker}:{today}", signal)
+            log.append(f"⚠ {ticker}: 2027 capex guidance reads {signal.upper()}")
+
+    flagged = _recent_capex_signals(store, _CAPEX_WINDOW_DAYS)
+    count = len(flagged)
+    prior = store.get_meta("paper_capex_status") or "none"
+    status = "triggered" if count >= 2 else "warning" if count == 1 else "none"
+
+    trigger = cfg.get("trigger", "")
+    action = cfg.get("action", "")
+    if status == "triggered" and prior != "triggered":
+        names = ", ".join(f"{t} ({s})" for t, s in sorted(flagged.items()))
+        _send_capex_alert(
+            name, level="🚨 KILL CRITERION TRIGGERED",
+            body=[f"<b>{count} hyperscalers</b> now guiding 2027 capex flat/down: {names}",
+                  f"\nTrigger: {trigger}",
+                  f"Action: <b>{action}</b>" if action else ""],
+        )
+        log.append(f"🚨 capex kill criterion TRIGGERED — {count} hyperscalers flat/down")
+    elif status == "warning" and prior == "none":
+        t, s = next(iter(flagged.items()))
+        _send_capex_alert(
+            name, level="⚠ Capex warning (1 of 2)",
+            body=[f"<b>{t}</b> guided 2027 capex {s.upper()}.",
+                  "One weak print is a warning to resize, not the trigger. "
+                  "A second flat/down hyperscaler fires the kill criterion.",
+                  f"\nTrigger: {trigger}"],
+        )
+        log.append(f"⚠ capex warning — 1 of 2 ({t} {s})")
+    store.set_meta("paper_capex_status", status)
+    return log
+
+
+def _recent_capex_signals(store: Store, window_days: int) -> dict[str, str]:
+    """Distinct hyperscalers with a flat/down capex signal inside the window,
+    as {ticker: latest_signal}. Reads the capex_signal:<TICKER>:<date> flags."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    with store._conn() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM app_meta WHERE key LIKE 'capex_signal:%' ORDER BY key ASC"
+        ).fetchall()
+    out: dict[str, str] = {}
+    for r in rows:
+        _, ticker, date = r["key"].split(":", 2)
+        if date >= cutoff:
+            out[ticker] = r["value"]  # ascending key order → latest wins
+    return out
+
+
+def _judge_capex_signal(ticker: str, headlines: list[str]) -> str | None:
+    """Ask gpt-4o-mini whether headlines say this hyperscaler guided next-year
+    capex FLAT or DOWN. Returns 'down', 'flat', or None (raised/unclear/any API
+    failure — the watch must never break tracking)."""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "You track hyperscaler AI capital-expenditure (capex) guidance. "
+                    "Given recent headlines for one company, decide the DIRECTION of "
+                    "its forward (next-year) capex guidance. Be strict: only a "
+                    "headline explicitly about capex/capital spending guidance "
+                    "counts — spending on a single project, revenue, or generic "
+                    "AI-investment enthusiasm does NOT. Reply with exactly one of: "
+                    "'RAISED', 'FLAT', 'DOWN', or 'NONE' (no capex-guidance signal)."
+                )},
+                {"role": "user", "content": (
+                    f"Company: {ticker}\nRecent headlines:\n"
+                    + "\n".join(f"- {h}" for h in headlines)
+                )},
+            ],
+            max_tokens=8,
+            temperature=0.0,
+        )
+        answer = (resp.choices[0].message.content or "").strip().upper()
+        if answer.startswith("DOWN"):
+            return "down"
+        if answer.startswith("FLAT"):
+            return "flat"
+        return None
+    except Exception:
+        return None
+
+
+def _send_capex_alert(name: str, level: str, body: list[str]) -> None:
+    from fundmgr.notify.send import send_telegram
+    lines = [f"<b>📋 Paper portfolio — {name}</b>", level]
+    lines += [b for b in body if b]
+    lines.append("\nVerify against the actual print before acting.")
+    send_telegram("\n".join(lines))
+
+
+# ── Earnings-calendar watch ────────────────────────────────────────────────────
+
+def check_earnings_calendar(slug: str, store: Store | None = None) -> list[str]:
+    """Heads-up the day before/of each holding's earnings, and a check-the-print
+    reminder the day after — quoting that name's `watch` line and kill criterion.
+
+    Earnings dates come from yfinance (falling back to the seeded next_earnings
+    date when it's a clean YYYY-MM-DD). One alert per earnings event. No-op for
+    holdings whose earnings date can't be resolved.
+    """
+    if store is None:
+        meta, store = open_portfolio(slug)
+        name = meta["name"]
+    else:
+        name = store.get_meta("paper_name") or slug
+
+    held = [p.ticker for p in store.get_positions()]
+    if not held:
+        return []
+    notes = json.loads(store.get_meta("paper_position_notes") or "{}")
+    kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
+    today = datetime.now(timezone.utc).date()
+
+    log: list[str] = []
+    for ticker in held:
+        edate = _next_earnings_date(ticker)
+        if edate is None:
+            seeded = (notes.get(ticker) or {}).get("next_earnings", "")
+            edate = _parse_iso_date(seeded)
+        if edate is None:
+            continue
+        delta = (edate - today).days
+        estr = edate.strftime("%Y-%m-%d")
+        note = notes.get(ticker) or {}
+        watch = (note.get("watch") or "").strip()
+        kill = (kills.get(ticker) or "").strip()
+
+        from fundmgr.notify.send import send_telegram
+        if 0 <= delta <= 1 and not store.get_meta(f"paper_earnhint:{ticker}:{estr}"):
+            store.set_meta(f"paper_earnhint:{ticker}:{estr}", today.isoformat())
+            when = "today" if delta == 0 else "tomorrow"
+            lines = [f"<b>📅 {name} — {ticker} reports {when}</b> ({estr})"]
+            if watch:
+                lines.append(f"Watch: {watch}")
+            if kill:
+                lines.append(f"Kill criterion: {kill}")
+            send_telegram("\n".join(lines))
+            log.append(f"📅 {ticker} earnings heads-up ({estr}, in {delta}d)")
+        elif delta == -1 and not store.get_meta(f"paper_earnpost:{ticker}:{estr}"):
+            store.set_meta(f"paper_earnpost:{ticker}:{estr}", today.isoformat())
+            lines = [f"<b>📊 {name} — {ticker} reported yesterday</b> ({estr})",
+                     "Check the print against the thesis:"]
+            if watch:
+                lines.append(f"Watch: {watch}")
+            if kill:
+                lines.append(f"Kill criterion: {kill}")
+            lines.append("If the kill criterion is met, act per the plan.")
+            send_telegram("\n".join(lines))
+            log.append(f"📊 {ticker} post-earnings reminder ({estr})")
+    return log
+
+
+def _next_earnings_date(ticker: str):
+    """Next (future) earnings date for a ticker via yfinance, or None. Handles
+    both the dict-shaped `.calendar` and the older DataFrame."""
+    try:
+        import yfinance as yf
+        cal = yf.Ticker(ticker).calendar
+    except Exception:
+        return None
+    dates = []
+    try:
+        if isinstance(cal, dict):
+            raw = cal.get("Earnings Date") or cal.get("Earnings Date High") or []
+            dates = raw if isinstance(raw, list) else [raw]
+        elif cal is not None and hasattr(cal, "loc"):
+            val = cal.loc["Earnings Date"]
+            dates = list(val) if hasattr(val, "__iter__") else [val]
+    except Exception:
+        return None
+    today = datetime.now(timezone.utc).date()
+    parsed = []
+    for d in dates:
+        try:
+            dd = d.date() if hasattr(d, "date") else d
+            if dd >= today:
+                parsed.append(dd)
+        except Exception:
+            continue
+    return min(parsed) if parsed else None
+
+
+def _parse_iso_date(text: str):
+    """Pull a YYYY-MM-DD out of a fuzzy next_earnings string, else None.
+    Deliberately strict — 'late August 2026 (unverified)' yields nothing."""
+    import re as _re
+    m = _re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(0), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+# ── Weight-drift / rebalance watch ─────────────────────────────────────────────
+
+_DRIFT_TRIGGER = 1.5   # alert once a position exceeds 1.5× its target weight
+_DRIFT_RESET = 1.4     # …and reset (re-arm) only after it falls back below 1.4×
+
+
+def check_weight_drift(slug: str, store: Store | None = None) -> list[str]:
+    """Alert when any position appreciates past 1.5× its target weight — the
+    pre-registered rebalance rule. Transition-based (fires on crossing up, then
+    re-arms below 1.4×) so a persistently-large winner isn't a daily nag.
+
+    Uses the latest cached closes (track_portfolio refreshes them first).
+    No-op on portfolios without stored target weights.
+    """
+    if store is None:
+        meta, store = open_portfolio(slug)
+    targets = json.loads(store.get_meta("paper_target_weights") or "{}")
+    if not targets:
+        return []
+    currency_map = json.loads(store.get_meta("paper_currency_map") or "{}")
+    positions = store.get_positions()
+    tickers = [p.ticker for p in positions]
+
+    native = {}
+    for t in tickers:
+        rows = store.get_prices(t)
+        if rows:
+            native[t] = rows[-1]["close"]
+    prices_sek = sek_prices_for(store, tickers, currency_map, native)
+    market_value = {p.ticker: p.shares * prices_sek.get(p.ticker, p.avg_cost_sek)
+                    for p in positions}
+    nav = sum(market_value.values()) + store.get_cash()
+    if nav <= 0:
+        return []
+
+    log: list[str] = []
+    breaches: list[tuple[str, float, float, float]] = []
+    for p in positions:
+        target = targets.get(p.ticker)
+        if not target:
+            continue
+        weight = market_value[p.ticker] / nav * 100
+        ratio = weight / target
+        state = store.get_meta(f"paper_drift_state:{p.ticker}") or "under"
+        if ratio >= _DRIFT_TRIGGER and state != "over":
+            store.set_meta(f"paper_drift_state:{p.ticker}", "over")
+            breaches.append((p.ticker, weight, target, ratio))
+            log.append(f"⚖ {p.ticker} {weight:.1f}% vs {target:.1f}% target ({ratio:.2f}×)")
+        elif ratio < _DRIFT_RESET and state == "over":
+            store.set_meta(f"paper_drift_state:{p.ticker}", "under")
+
+    if breaches:
+        name = store.get_meta("paper_name") or slug
+        from fundmgr.notify.send import send_telegram
+        lines = [f"<b>📋 Paper portfolio — {name}</b>",
+                 "⚖ Rebalance rule: position(s) past 1.5× target weight"]
+        for ticker, weight, target, ratio in breaches:
+            lines.append(f"\n<b>{ticker}</b>: {weight:.1f}% (target {target:.1f}%, "
+                         f"{ratio:.2f}×) — trim back toward target")
+        send_telegram("\n".join(lines))
+    return log
 
 
 def track_all() -> list[str]:

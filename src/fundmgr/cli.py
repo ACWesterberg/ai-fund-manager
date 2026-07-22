@@ -1458,5 +1458,149 @@ def paper_list():
         )
 
 
+@cli.command("paper-import")
+@click.argument("json_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--name", default=None, help="Override the portfolio name.")
+@click.option("--capital", type=float, default=None,
+              help="Override deployable capital (SEK). Defaults to meta.deployable_capital_sek.")
+@click.option("--benchmark", default=None, help="Benchmark symbol (default: URTH).")
+@click.option("--model", "model_label", default="Claude Fable",
+              help="Label for who produced the picks.")
+def paper_import(json_file: str, name: str | None, capital: float | None,
+                 benchmark: str | None, model_label: str):
+    """Create a monitored mirror portfolio from a structured LLM answer (JSON).
+
+    Maps broker/Montrose tickers to Yahoo symbols, drops excluded_holdings, and
+    stores per-position kill criteria, target weights, notes and the
+    portfolio-level capex kill criterion — then buys at live prices. The book is
+    then watched daily by 'fund paper-track' (kill criteria, capex, earnings,
+    drift → Telegram).
+    """
+    from fundmgr import paper
+
+    data = json.loads(open(json_file).read())
+    parsed = paper.parse_structured_portfolio(data)
+    cap = capital if capital is not None else parsed["capital_sek"]
+    if not cap:
+        click.echo("No capital found in the JSON — pass --capital.", err=True)
+        sys.exit(1)
+    if parsed["excluded"]:
+        click.echo(f"  Excluded (never bought/sized): {', '.join(parsed['excluded'])}")
+
+    try:
+        slug, log = paper.create_portfolio(
+            name=name or parsed["name"],
+            capital_sek=float(cap),
+            holdings_text=json.dumps(data, indent=2, ensure_ascii=False),
+            model_label=model_label,
+            benchmark=(benchmark or paper.DEFAULT_BENCHMARK),
+            holdings_override=parsed["holdings_override"],
+            position_meta=parsed["position_meta"],
+            capex_kill=parsed["capex_kill"],
+        )
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    for line in log:
+        click.echo(f"  {line}")
+    if parsed["capex_kill"]:
+        click.echo(f"  ✓ Portfolio kill criterion armed: {parsed['capex_kill']['trigger']}")
+    click.echo(f"\n✓ Imported as '{slug}'. Watched daily by 'fund paper-track'; "
+               f"record fills with 'fund paper-fill {slug} …'.")
+
+
+@cli.command("paper-fill")
+@click.argument("slug")
+@click.argument("ticker")
+@click.argument("shares", type=float)
+@click.argument("price", type=float)
+@click.argument("fee", type=float)
+@click.option("--side", type=click.Choice(["buy", "sell"]), default="buy", show_default=True)
+@click.option("--date", "trade_date", default=None, metavar="YYYY-MM-DD",
+              help="Trade date (defaults to today). Use when recording a past fill.")
+def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
+               side: str, trade_date: str | None):
+    """Record a real broker fill into a mirror portfolio (price in SEK, like 'fund fill').
+
+    \b
+    Example:
+        fund paper-fill kf-chokepoint-satellite VRT 20 610.00 39.00
+        fund paper-fill kf-chokepoint-satellite ASML.AS 5 8420 39 --side sell
+    """
+    from fundmgr import paper
+
+    try:
+        meta, store = paper.open_portfolio(slug)
+    except KeyError:
+        click.echo(f"No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+
+    if trade_date:
+        try:
+            ts = datetime.strptime(trade_date, "%Y-%m-%d").replace(hour=12, minute=0)
+        except ValueError:
+            click.echo(f"Invalid date '{trade_date}' — expected YYYY-MM-DD", err=True)
+            sys.exit(1)
+    else:
+        ts = datetime.utcnow()
+
+    ticker = ticker.upper()
+    currency = meta["currency_map"].get(ticker, "SEK")
+    store.apply_fill(Transaction(
+        ticker=ticker, side=side, shares=shares,
+        price_sek=price, fee_sek=fee, source="fill",
+        currency=currency, timestamp=ts,
+    ))
+
+    gross = shares * price
+    direction = "Bought" if side == "buy" else "Sold"
+    click.echo(f"✓ {direction} {shares:g} × {ticker} @ {price:.2f} SEK = "
+               f"{gross:,.0f} SEK (fee {fee:.2f} SEK)")
+    click.echo(f"  Cash remaining: {store.get_cash():,.0f} SEK")
+
+    # Cost-basis NAV snapshot so the chart reflects the fill event
+    try:
+        bench_rows = store.get_benchmark()
+        positions_after = store.get_positions()
+        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + store.get_cash()
+        store.upsert_nav(NavPoint(
+            date=ts.strftime("%Y-%m-%d"),
+            portfolio_nav_sek=nav_cost,
+            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+            cash_sek=store.get_cash(),
+        ))
+    except Exception:
+        pass
+
+
+@cli.command("paper-status")
+@click.argument("slug")
+def paper_status(slug: str):
+    """Print a mirror portfolio's positions, cash and cost-basis NAV."""
+    from fundmgr import paper
+
+    try:
+        meta, store = paper.open_portfolio(slug)
+    except KeyError:
+        click.echo(f"No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+
+    positions = store.get_positions()
+    cash = store.get_cash()
+    click.echo(f"\n─── {meta['name']} ({slug}) ───")
+    if not positions:
+        click.echo("  No open positions.")
+    else:
+        click.echo(f"  {'Ticker':<14} {'Shares':>10} {'Avg Cost':>10} {'Cost Value':>13}")
+        click.echo(f"  {'─'*14} {'─'*10} {'─'*10} {'─'*13}")
+        for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
+            cv = p.shares * p.avg_cost_sek
+            click.echo(f"  {p.ticker:<14} {p.shares:>10.4g} {p.avg_cost_sek:>10.2f} {cv:>10,.0f} SEK")
+    nav = sum(p.shares * p.avg_cost_sek for p in positions) + cash
+    click.echo(f"\n  Cash:       {cash:>12,.0f} SEK")
+    click.echo(f"  NAV (cost): {nav:>12,.0f} SEK")
+
+
 if __name__ == "__main__":
     cli()

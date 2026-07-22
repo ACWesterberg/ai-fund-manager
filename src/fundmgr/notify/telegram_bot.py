@@ -54,6 +54,10 @@ FUND_BIN = ROOT / ".venv" / "bin" / "fund"
 # Pending vision-extracted fills awaiting user confirmation: chat_id -> data dict
 _pending_fills: dict[int, dict] = {}
 
+# Active paper/mirror book per chat: when set, /pfill and Montrose screenshots
+# record into this paper slug instead of the main fund. Set via /ptarget.
+_active_book: dict[int, str] = {}
+
 # Lazy-loaded ISIN -> yahoo_ticker map
 _isin_map: dict[str, str] | None = None
 
@@ -247,6 +251,80 @@ async def cmd_setcash(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     await _send(update, output)
 
 
+# ── Paper / mirror portfolio commands ─────────────────────────────────────────
+
+async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/ptarget [SLUG] — route /pfill + Montrose screenshots into a paper book.
+
+    No argument shows the current target; 'off' clears it (fills go back to the
+    main fund)."""
+    args = context.args or []
+    chat_id = update.effective_chat.id
+    if not args:
+        cur = _active_book.get(chat_id)
+        await update.message.reply_text(
+            f"📋 Active paper book: {cur}\n/pfill and screenshots record here."
+            if cur else
+            "No active paper book. Set one with /ptarget <slug> — /plist to see them."
+        )
+        return
+    slug = args[0].strip().lower()
+    if slug in ("off", "none", "clear", "main"):
+        _active_book.pop(chat_id, None)
+        await update.message.reply_text("✅ Cleared — fills now record to the main fund.")
+        return
+    _active_book[chat_id] = slug
+    await update.message.reply_text(
+        f"✅ Active paper book: <b>{slug}</b>\n"
+        f"/pfill and Montrose screenshots now record here.\n"
+        f"/ptarget off to switch back to the main fund.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_pfill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/pfill TICKER SHARES PRICE FEE [buy|sell] — fill into the active paper book."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active paper book — set one with /ptarget <slug> first (/plist to see them)."
+        )
+        return
+    args = context.args or []
+    if len(args) < 4:
+        await update.message.reply_text(
+            "Usage: /pfill TICKER SHARES PRICE FEE [buy|sell]\n"
+            "Example: /pfill VRT 20 610.00 39.00\n\n"
+            f"(records into <b>{slug}</b> — or send a Montrose screenshot)",
+            parse_mode="HTML",
+        )
+        return
+    ticker, shares, price, fee = args[0], args[1], args[2], args[3]
+    side = args[4] if len(args) > 4 else "buy"
+    output = _run_cli("paper-fill", slug, ticker, shares, price, fee, "--side", side, timeout=30)
+    await _send(update, output)
+
+
+async def cmd_pstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/pstatus — snapshot of the active paper book."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active paper book — set one with /ptarget <slug> first (/plist to see them)."
+        )
+        return
+    output = _run_cli("paper-status", slug, timeout=30)
+    await _send(update, output)
+
+
+async def cmd_plist(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/plist — list the paper/mirror portfolios and their NAV."""
+    output = _run_cli("paper-list", timeout=30)
+    await _send(update, output)
+
+
 async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/review [TICKER] — advisory stop-loss review.
 
@@ -277,8 +355,14 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
         "/setcash AMOUNT — correct the cash balance (SEK)\n"
+        "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
+        "/plist — list paper/mirror portfolios\n"
+        "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
+        "/pfill TICKER SHARES PRICE FEE [side] — fill into the active book\n"
+        "/pstatus — snapshot of the active book\n"
         "/help — this message\n\n"
-        "📸 Send a screenshot of a Montrose confirmation to auto-record a fill."
+        "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
+        "   (into the active mirror book if one is set with /ptarget)."
     )
 
 
@@ -530,11 +614,16 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         )
         return
 
-    cli_args = ["fill", ticker, str(shares), str(price), str(fee), "--side", side]
+    slug = _active_book.get(chat_id)
+    if slug:
+        cli_args = ["paper-fill", slug, ticker, str(shares), str(price), str(fee), "--side", side]
+    else:
+        cli_args = ["fill", ticker, str(shares), str(price), str(fee), "--side", side]
     if trade_date:
         cli_args += ["--date", trade_date]
     output = _run_cli(*cli_args, timeout=30)
-    await query.edit_message_text(f"✅ Fill recorded!\n\n{output}")
+    dest = f" → {slug}" if slug else ""
+    await query.edit_message_text(f"✅ Fill recorded{dest}!\n\n{output}")
 
 
 async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -599,6 +688,10 @@ def main() -> None:
     app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
     app.add_handler(CommandHandler("review",   cmd_review))
     app.add_handler(CommandHandler("setcash",  cmd_setcash))
+    app.add_handler(CommandHandler("plist",    cmd_plist))
+    app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
+    app.add_handler(CommandHandler("pfill",    cmd_pfill))
+    app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

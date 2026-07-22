@@ -453,6 +453,239 @@ def test_track_all_survives_broken_portfolio(paper_dir, mock_market):
     assert any("Ok" in line for line in log)
 
 
+# ── Structured import (broker tickers → Yahoo) ────────────────────────────────
+
+def test_montrose_to_yahoo_mapping():
+    assert paper.montrose_to_yahoo("KOG", "NOK", "Kongsberg Gruppen") == "KOG.OL"
+    assert paper.montrose_to_yahoo("ENR", "EUR", "Siemens Energy") == "ENR.DE"
+    assert paper.montrose_to_yahoo("BESI", "EUR", "BE Semiconductor") == "BESI.AS"
+    assert paper.montrose_to_yahoo("SKHY", "USD", "SK Hynix ADR") == "000660.KS"
+    assert paper.montrose_to_yahoo("ASML", "EUR", "ASML Holding NV") == "ASML.AS"
+    # Bare US symbols already resolve correctly — pass through
+    assert paper.montrose_to_yahoo("NVDA", "USD", "NVIDIA") == "NVDA"
+    assert paper.montrose_to_yahoo("GEV", "USD", "GE Vernova") == "GEV"
+    # Already-suffixed symbols are kept
+    assert paper.montrose_to_yahoo("VOLV-B.ST", "SEK", "Volvo") == "VOLV-B.ST"
+
+
+def test_parse_structured_portfolio():
+    data = {
+        "meta": {"name": "KF Sleeve", "deployable_capital_sek": 800000,
+                 "excluded_holdings": [{"name": "SELLAS", "ticker": "SLS"}]},
+        "portfolio_kill_criterion": {
+            "trigger": "Any two of the five largest hyperscalers guide 2027 capex flat or down.",
+            "action": "Halve the compute cluster.",
+        },
+        "positions": [
+            {"ticker": "KOG", "currency": "NOK", "name": "Kongsberg Gruppen",
+             "target_weight_pct": 7.5, "cluster": "defense",
+             "kill_criteria": ["Order intake declining YoY", "Budget targets cut"],
+             "next_earnings": "2026-07-13"},
+            {"ticker": "NVDA", "currency": "USD", "name": "NVIDIA",
+             "target_weight_pct": 10.0, "watch": "DC revenue vs hyperscaler capex"},
+        ],
+    }
+    parsed = paper.parse_structured_portfolio(data)
+    by_ticker = {h["ticker"]: h for h in parsed["holdings_override"]}
+    assert set(by_ticker) == {"KOG.OL", "NVDA"}
+    # list kill criteria joined into one clause
+    assert by_ticker["KOG.OL"]["kill_criterion"] == "Order intake declining YoY; Budget targets cut"
+    # excluded holding never appears
+    assert "SLS" not in by_ticker and "SELLAS" not in by_ticker
+    assert parsed["excluded"] == ["SLS"]
+    # capex kill criterion + default hyperscaler set
+    assert "two of the five" in parsed["capex_kill"]["trigger"]
+    assert parsed["capex_kill"]["hyperscalers"] == paper.DEFAULT_HYPERSCALERS
+    # per-position notes carried through
+    assert parsed["position_meta"]["NVDA"]["watch"] == "DC revenue vs hyperscaler capex"
+    assert parsed["position_meta"]["KOG.OL"]["next_earnings"] == "2026-07-13"
+    assert parsed["capital_sek"] == 800000
+
+
+def test_create_persists_targets_notes_capex(paper_dir, mock_market):
+    slug, _ = paper.create_portfolio(
+        "Meta Rich", 100_000, "record",
+        holdings_override=[
+            {"ticker": "AAPL", "weight_pct": 60, "thesis": "t"},
+            {"ticker": "MSFT", "weight_pct": 40, "thesis": "t"},
+        ],
+        position_meta={"AAPL": {"watch": "Services growth", "next_earnings": "2026-08-01"}},
+        capex_kill={"trigger": "2 of 5 hyperscalers flat/down", "action": "halve compute",
+                    "hyperscalers": ["MSFT", "AMZN"]},
+    )
+    _, store = paper.open_portfolio(slug)
+    targets = json.loads(store.get_meta("paper_target_weights"))
+    assert targets == {"AAPL": 60.0, "MSFT": 40.0}
+    notes = json.loads(store.get_meta("paper_position_notes"))
+    assert notes["AAPL"]["watch"] == "Services growth"
+    capex = json.loads(store.get_meta("paper_capex_kill"))
+    assert capex["hyperscalers"] == ["MSFT", "AMZN"]
+
+
+def test_paper_import_cli(paper_dir, mock_market, tmp_path):
+    from click.testing import CliRunner
+    from fundmgr.cli import cli
+
+    data = {
+        "meta": {"name": "Import Test", "deployable_capital_sek": 100000,
+                 "excluded_holdings": [{"ticker": "SLS", "name": "SELLAS"}]},
+        "portfolio_kill_criterion": {"trigger": "2 of 5 capex flat/down",
+                                     "action": "halve compute"},
+        "positions": [
+            {"ticker": "AAPL", "currency": "USD", "name": "Apple", "target_weight_pct": 60},
+            {"ticker": "MSFT", "currency": "USD", "name": "Microsoft", "target_weight_pct": 40},
+        ],
+    }
+    jf = tmp_path / "picks.json"
+    jf.write_text(json.dumps(data))
+
+    result = CliRunner().invoke(cli, ["paper-import", str(jf)])
+    assert result.exit_code == 0, result.output
+    _, store = paper.open_portfolio("import-test")
+    assert {p.ticker for p in store.get_positions()} == {"AAPL", "MSFT"}
+    assert "SLS" not in {p.ticker for p in store.get_positions()}
+    assert json.loads(store.get_meta("paper_capex_kill"))["trigger"].startswith("2 of 5")
+
+
+def test_paper_fill_cli(paper_dir, mock_market):
+    from click.testing import CliRunner
+    from fundmgr.cli import cli
+
+    paper.create_portfolio("Fillable", 100_000, "AAPL 100%")
+    before = {p.ticker: p.shares for p in paper.open_portfolio("fillable")[1].get_positions()}
+
+    result = CliRunner().invoke(
+        cli, ["paper-fill", "fillable", "AAPL", "5", "2000", "1"])
+    assert result.exit_code == 0, result.output
+    _, store = paper.open_portfolio("fillable")
+    after = {p.ticker: p.shares for p in store.get_positions()}
+    assert after["AAPL"] == pytest.approx(before["AAPL"] + 5)
+
+    # unknown slug exits non-zero
+    bad = CliRunner().invoke(cli, ["paper-fill", "nope", "AAPL", "5", "2000", "1"])
+    assert bad.exit_code != 0
+
+
+# ── Monitors: capex kill, earnings calendar, weight drift ─────────────────────
+
+def _capture_telegram(monkeypatch):
+    sent = []
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: sent.append(text) or True)
+    return sent
+
+
+def test_check_capex_kill_triggers_on_two(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio(
+        "Capex", 100_000, "AAPL 100%",
+        capex_kill={"trigger": "2 of 5 hyperscalers guide 2027 capex flat/down",
+                    "action": "Halve the compute cluster.",
+                    "hyperscalers": ["MSFT", "AMZN"]})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(paper, "_recent_headlines", lambda t, max_items=8: [f"{t} capex headline"])
+    monkeypatch.setattr(paper, "_judge_capex_signal", lambda ticker, headlines: "down")
+    sent = _capture_telegram(monkeypatch)
+
+    log = paper.check_capex_kill(slug)
+    assert any("TRIGGERED" in line for line in log)
+    assert any("KILL CRITERION TRIGGERED" in m for m in sent)
+    assert "Halve the compute cluster" in "".join(sent)
+    _, store = paper.open_portfolio(slug)
+    assert store.get_meta("paper_capex_status") == "triggered"
+    # already triggered → a second run sends nothing new
+    sent.clear()
+    paper.check_capex_kill(slug)
+    assert sent == []
+
+
+def test_check_capex_kill_one_is_warning(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio(
+        "CapexWarn", 100_000, "AAPL 100%",
+        capex_kill={"trigger": "2 of 5 flat/down", "action": "halve",
+                    "hyperscalers": ["MSFT", "AMZN"]})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(paper, "_recent_headlines", lambda t, max_items=8: [f"{t} news"])
+    # only MSFT reads down; AMZN unclear
+    monkeypatch.setattr(paper, "_judge_capex_signal",
+                        lambda ticker, headlines: "down" if ticker == "MSFT" else None)
+    sent = _capture_telegram(monkeypatch)
+
+    log = paper.check_capex_kill(slug)
+    assert any("warning" in line for line in log)
+    assert any("1 of 2" in m for m in sent)
+    _, store = paper.open_portfolio(slug)
+    assert store.get_meta("paper_capex_status") == "warning"
+
+
+def test_check_capex_kill_noop_without_config(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio("NoCapex", 100_000, "AAPL 100%")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert paper.check_capex_kill(slug) == []
+
+
+def test_check_capex_kill_skips_without_key(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio(
+        "CapexNoKey", 100_000, "AAPL 100%",
+        capex_kill={"trigger": "x", "action": "y", "hyperscalers": ["MSFT"]})
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert any("no OPENAI_API_KEY" in line for line in paper.check_capex_kill(slug))
+
+
+def test_check_earnings_calendar_heads_up_and_post(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio(
+        "Earnings", 100_000, "AAPL 100%",
+        position_meta={"AAPL": {"watch": "Services growth vs 10%", "next_earnings": ""}})
+    sent = _capture_telegram(monkeypatch)
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1))
+    monkeypatch.setattr(paper, "_next_earnings_date", lambda t: tomorrow)
+
+    log = paper.check_earnings_calendar(slug)
+    assert any("heads-up" in line for line in log)
+    assert any("reports tomorrow" in m and "Services growth" in m for m in sent)
+    # dedup: same event, same day → silent
+    sent.clear()
+    assert paper.check_earnings_calendar(slug) == []
+
+    # after the print (yesterday) → check-the-numbers reminder
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1))
+    monkeypatch.setattr(paper, "_next_earnings_date", lambda t: yesterday)
+    log = paper.check_earnings_calendar(slug)
+    assert any("post-earnings" in line for line in log)
+    assert any("reported yesterday" in m for m in sent)
+
+
+def test_check_weight_drift_alerts_past_1_5x(paper_dir, mock_market, monkeypatch):
+    slug, _ = paper.create_portfolio("Drift", 100_000, PICKS)  # AAPL 40 / MSFT 30 / VOLV 20
+    _, store = paper.open_portfolio(slug)
+    sent = _capture_telegram(monkeypatch)
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    # Triple AAPL's price (native 200→600) so its weight blows past 1.5× its 40% target
+    store.save_prices("AAPL", [{"date": today, "open": 600, "high": 600,
+                                "low": 600, "close": 600, "volume": 1000}])
+    log = paper.check_weight_drift(slug, store=store)
+    assert any("AAPL" in line and "×" in line for line in log)
+    assert any("Rebalance rule" in m for m in sent)
+    assert store.get_meta("paper_drift_state:AAPL") == "over"
+
+    # still over next run → no repeat alert (transition-based)
+    sent.clear()
+    assert paper.check_weight_drift(slug, store=store) == []
+
+    # price falls back below 1.4× → state re-arms
+    store.save_prices("AAPL", [{"date": today, "open": 200, "high": 200,
+                                "low": 200, "close": 200, "volume": 1000}])
+    paper.check_weight_drift(slug, store=store)
+    assert store.get_meta("paper_drift_state:AAPL") == "under"
+
+
+def test_check_weight_drift_noop_without_targets(paper_dir, mock_market):
+    slug, _ = paper.create_portfolio("NoTargets", 100_000, "AAPL 100%")
+    _, store = paper.open_portfolio(slug)
+    store.set_meta("paper_target_weights", "{}")
+    assert paper.check_weight_drift(slug, store=store) == []
+
+
 # ── Web routes ────────────────────────────────────────────────────────────────
 
 @pytest.fixture

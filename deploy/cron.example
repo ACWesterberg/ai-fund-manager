@@ -57,10 +57,15 @@
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,
-# snapshot NAV at real market prices, check each position's pre-registered kill
-# criterion against fresh news (Telegram alert on a hit), evaluate matured
-# outcomes (~4 weeks) and distil learnings — same pipeline as the funds.
-# 22:15 CET = after NYSE close.
+# snapshot NAV at real market prices, evaluate matured outcomes (~4 weeks) and
+# distil learnings — same pipeline as the funds. Also runs the four Telegram
+# watches (mirror/monitored sleeves like KF Chokepoint):
+#   • per-position kill criteria vs fresh news
+#   • portfolio-level capex kill criterion (2-of-5 hyperscalers guide capex down)
+#   • earnings-calendar heads-up before / check-the-print after each report
+#   • weight drift past 1.5× target (rebalance rule)
+# Daily cadence is what drives the capex + earnings alerts through a reporting
+# season, so keep this running every weekday. 22:15 CET = after NYSE close.
 
 15 22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-track >> data/logs/paper.log 2>&1
 

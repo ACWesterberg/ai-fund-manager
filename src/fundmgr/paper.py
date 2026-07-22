@@ -143,7 +143,7 @@ NAME_ALIASES: dict[str, str] = {
     "roche": "ROG.SW", "equinor": "EQNR.OL", "kongsberg": "KOG.OL",
     "kongsberg gruppen": "KOG.OL", "be semiconductor": "BESI.AS",
     "be semiconductor industries": "BESI.AS", "besi": "BESI.AS",
-    "sk hynix": "000660.KS", "sk hynix inc": "000660.KS", "vertiv holdings": "VRT",
+    "sk hynix": "SKHY", "sk hynix inc": "SKHY", "vertiv holdings": "VRT",
     "rheinmetall": "RHM.DE", "airbus": "AIR.PA", "safran": "SAF.PA",
     "bae systems": "BA.L", "rolls royce": "RR.L", "totalenergies": "TTE.PA",
     # Sweden / Nordics (Stockholm listings)
@@ -600,7 +600,8 @@ MONTROSE_YAHOO = {
     "ENR": "ENR.DE",       # Siemens Energy (Xetra)
     "BESI": "BESI.AS",     # BE Semiconductor (Euronext Amsterdam)
     "ASML": "ASML.AS",     # ASML — Amsterdam listing (EUR) to match the sleeve
-    "SKHY": "000660.KS",   # SK Hynix — Korea line (no clean Yahoo ADR feed)
+    # SK Hynix trades as SKHY on NasdaqGS (USD) — a valid Yahoo feed, so the
+    # bare ticker passes through unchanged; no mapping needed.
 }
 
 

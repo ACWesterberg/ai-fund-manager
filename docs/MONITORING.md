@@ -17,10 +17,9 @@ fund paper-import path/to/kf_chokepoint.json
 `paper-import`:
 
 - maps broker/Montrose tickers to Yahoo symbols
-  (`KOG`→`KOG.OL`, `ENR`→`ENR.DE`, `BESI`→`BESI.AS`, `ASML`→`ASML.AS`,
-  `SKHY`→`000660.KS`; bare US symbols like `TSM`/`NVDA`/`GEV`/`VRT`/`CEG` pass
-  through). `SKHY`→`000660.KS` is the Korea line — verify the feed and the
-  KRW→SEK rate resolve for you; there is no clean Yahoo ADR feed for SK Hynix.
+  (`KOG`→`KOG.OL`, `ENR`→`ENR.DE`, `BESI`→`BESI.AS`, `ASML`→`ASML.AS`; bare US
+  symbols like `TSM`/`NVDA`/`GEV`/`VRT`/`CEG`/`SKHY` pass through — SK Hynix
+  trades as `SKHY` on NasdaqGS in USD).
 - **drops `excluded_holdings`** (SELLAS) entirely — never bought, never sized.
 - stores per-position kill criteria, **target weights**, per-position notes
   (`watch`, `next_earnings`), and the **portfolio-level capex kill criterion**.

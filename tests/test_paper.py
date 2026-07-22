@@ -459,7 +459,7 @@ def test_montrose_to_yahoo_mapping():
     assert paper.montrose_to_yahoo("KOG", "NOK", "Kongsberg Gruppen") == "KOG.OL"
     assert paper.montrose_to_yahoo("ENR", "EUR", "Siemens Energy") == "ENR.DE"
     assert paper.montrose_to_yahoo("BESI", "EUR", "BE Semiconductor") == "BESI.AS"
-    assert paper.montrose_to_yahoo("SKHY", "USD", "SK Hynix ADR") == "000660.KS"
+    assert paper.montrose_to_yahoo("SKHY", "USD", "SK Hynix ADR") == "SKHY"  # NasdaqGS line
     assert paper.montrose_to_yahoo("ASML", "EUR", "ASML Holding NV") == "ASML.AS"
     # Bare US symbols already resolve correctly — pass through
     assert paper.montrose_to_yahoo("NVDA", "USD", "NVIDIA") == "NVDA"

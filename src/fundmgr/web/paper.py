@@ -379,7 +379,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         except Exception:
             pass
         verb = "Bought" if side == "buy" else "Sold"
-        return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK.", 1)
+        return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK in {meta['name']}.", 1)
 
     # ── Per-book dashboard ──────────────────────────────────────────────────
 

@@ -905,6 +905,8 @@ def test_live_record_fill_seed_and_trim(client):
     assert r.status_code == 303 and "ok=1" in r.headers["location"]
     _, store = paper.open_portfolio("fill-web")
     assert {p.ticker: p.shares for p in store.get_positions()} == {"AAPL": 41}
+    # the confirmation names the sleeve, so a wrong target is obvious
+    assert "in Fill Web" in client.get(r.headers["location"]).text
 
     # trim 8 via a sell
     client.post("/live/fill-web/fill",

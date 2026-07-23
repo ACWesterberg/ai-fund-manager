@@ -253,6 +253,32 @@ async def cmd_setcash(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
 
 # ── Paper / mirror portfolio commands ─────────────────────────────────────────
 
+def _all_books() -> dict[str, str]:
+    """{slug: name} for every paper/live book, or {} if unavailable."""
+    try:
+        from fundmgr import paper
+        return {m["slug"]: m["name"] for m in paper.list_portfolios()}
+    except Exception:
+        return {}
+
+
+def _book_name(slug: str) -> str | None:
+    """Display name for a book slug, or None if it can't be resolved."""
+    try:
+        from fundmgr import paper
+        meta, _ = paper.open_portfolio(slug)
+        return meta["name"]
+    except Exception:
+        return None
+
+
+def _active_book_line(chat_id: int) -> str:
+    slug = _active_book.get(chat_id)
+    if not slug:
+        return "⚠ No active book — fills go to the main fund. /ptarget <slug> to aim at a sleeve."
+    return f"📋 Active book: {_book_name(slug) or slug} ({slug})"
+
+
 async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/ptarget [SLUG] — route /pfill + Montrose screenshots into a paper book.
 
@@ -260,22 +286,35 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     main fund)."""
     args = context.args or []
     chat_id = update.effective_chat.id
+    books = _all_books()
+
+    def _listing() -> str:
+        return "\n".join(f"  {s} — {n}" for s, n in books.items()) or "  (none yet — /plist)"
+
     if not args:
         cur = _active_book.get(chat_id)
-        await update.message.reply_text(
-            f"📋 Active paper book: {cur}\n/pfill and screenshots record here."
-            if cur else
-            "No active paper book. Set one with /ptarget <slug> — /plist to see them."
-        )
+        if cur:
+            await update.message.reply_text(
+                f"📋 Active book: {books.get(cur, _book_name(cur) or cur)} ({cur})\n"
+                f"/pfill and screenshots record here. /ptarget off to switch back.")
+        else:
+            await update.message.reply_text(
+                "No active book set. Aim at a sleeve with /ptarget <slug>:\n" + _listing())
         return
+
     slug = args[0].strip().lower()
     if slug in ("off", "none", "clear", "main"):
         _active_book.pop(chat_id, None)
         await update.message.reply_text("✅ Cleared — fills now record to the main fund.")
         return
+    if books and slug not in books:
+        await update.message.reply_text(
+            f"No book '{slug}'. Available:\n{_listing()}")
+        return
     _active_book[chat_id] = slug
+    name = books.get(slug) or _book_name(slug) or slug
     await update.message.reply_text(
-        f"✅ Active paper book: <b>{slug}</b>\n"
+        f"✅ Active book: <b>{name}</b> (<code>{slug}</code>)\n"
         f"/pfill and Montrose screenshots now record here.\n"
         f"/ptarget off to switch back to the main fund.",
         parse_mode="HTML",
@@ -291,19 +330,21 @@ async def cmd_pfill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> N
             "No active paper book — set one with /ptarget <slug> first (/plist to see them)."
         )
         return
+    name = _book_name(slug) or slug
     args = context.args or []
     if len(args) < 4:
         await update.message.reply_text(
             "Usage: /pfill TICKER SHARES PRICE FEE [buy|sell]\n"
             "Example: /pfill VRT 20 610.00 39.00\n\n"
-            f"(records into <b>{slug}</b> — or send a Montrose screenshot)",
+            f"(records into <b>{name}</b> — or send a Montrose screenshot)",
             parse_mode="HTML",
         )
         return
     ticker, shares, price, fee = args[0], args[1], args[2], args[3]
     side = args[4] if len(args) > 4 else "buy"
     output = _run_cli("paper-fill", slug, ticker, shares, price, fee, "--side", side, timeout=30)
-    await _send(update, output)
+    # Lead with the book so a stale /ptarget can't slip a fill into the wrong sleeve.
+    await _send(update, f"📋 {name} ({slug})\n{output}")
 
 
 async def cmd_pstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -572,6 +613,9 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         "trade_date": trade_date,
     }
 
+    _book = _active_book.get(chat_id)
+    lines.append(f"\n📋 Records into: <b>{_book_name(_book) or _book if _book else 'main fund'}</b>")
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),
         InlineKeyboardButton("✗ Cancel",      callback_data="fill_cancel"),
@@ -622,7 +666,7 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     if trade_date:
         cli_args += ["--date", trade_date]
     output = _run_cli(*cli_args, timeout=30)
-    dest = f" → {slug}" if slug else ""
+    dest = f" → {_book_name(slug) or slug}" if slug else " → main fund"
     await query.edit_message_text(f"✅ Fill recorded{dest}!\n\n{output}")
 
 
@@ -651,6 +695,8 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     lines.append(f"Fee: <b>{data['fee']} SEK</b>")
     if data.get("trade_date"):
         lines.append(f"Date: <b>{data['trade_date']}</b>")
+    _book = _active_book.get(chat_id)
+    lines.append(f"\n📋 Records into: <b>{_book_name(_book) or _book if _book else 'main fund'}</b>")
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),

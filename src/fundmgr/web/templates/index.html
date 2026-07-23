@@ -127,7 +127,7 @@
     <summary class="flex items-center gap-2" style="cursor:pointer;list-style:none">
       <span class="material-symbols-outlined text-sky-400" style="font-size:17px">add_circle</span>
       <span class="card-title">Record a fill</span>
-      <span class="text-xs text-slate-600 ml-1">seed a holding you already own, or log a buy / trim</span>
+      <span class="text-xs text-slate-500 ml-1">into <b class="text-sky-400">{{ sim_label }}</b> — seed a holding you own, or log a buy / trim</span>
     </summary>
     {% set fcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
     <form method="post" action="{{ fill_action }}" class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">

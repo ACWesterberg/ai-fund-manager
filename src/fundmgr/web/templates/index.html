@@ -28,6 +28,14 @@
 {% endif %}
 {% endif %}
 
+{% if flash %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border flex items-center gap-2 text-xs font-semibold
+            {% if flash.ok %}border-emerald-500/20 bg-emerald-500/5 text-emerald-400{% else %}border-red-500/20 bg-red-500/5 text-red-400{% endif %}">
+  <span class="material-symbols-outlined" style="font-size:15px">{{ 'check_circle' if flash.ok else 'error' }}</span>
+  {{ flash.msg }}
+</div>
+{% endif %}
+
 {% if watch %}
 <!-- ── Watch status (live sleeves) ── -->
 <section class="card mb-5" style="border-color:rgba(14,165,233,.18)">
@@ -109,6 +117,60 @@
     the daily watch pings before each report and after. Verify every alert before acting.
   </p>
   {% endif %}
+</section>
+{% endif %}
+
+{% if fill_action %}
+<!-- ── Record a fill (live sleeves) ── -->
+<section class="card mb-5" style="border-color:rgba(14,165,233,.18)">
+  <details>
+    <summary class="flex items-center gap-2" style="cursor:pointer;list-style:none">
+      <span class="material-symbols-outlined text-sky-400" style="font-size:17px">add_circle</span>
+      <span class="card-title">Record a fill</span>
+      <span class="text-xs text-slate-600 ml-1">seed a holding you already own, or log a buy / trim</span>
+    </summary>
+    {% set fcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
+    <form method="post" action="{{ fill_action }}" class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+      <div>
+        <label class="kpi-label" for="ff-ticker">Ticker</label>
+        <input id="ff-ticker" name="ticker" list="ff-tickers" required placeholder="NVDA" class="{{ fcls }}" />
+        {% if watch and watch.rows %}
+        <datalist id="ff-tickers">
+          {% for r in watch.rows %}<option value="{{ r.ticker }}"></option>{% endfor %}
+        </datalist>
+        {% endif %}
+      </div>
+      <div>
+        <label class="kpi-label" for="ff-side">Side</label>
+        <select id="ff-side" name="side" class="{{ fcls }}">
+          <option value="buy">Buy</option>
+          <option value="sell">Sell (trim)</option>
+        </select>
+      </div>
+      <div>
+        <label class="kpi-label" for="ff-shares">Shares</label>
+        <input id="ff-shares" name="shares" type="number" step="any" min="0" required placeholder="41" class="{{ fcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="ff-price">Price (SEK)</label>
+        <input id="ff-price" name="price_sek" type="number" step="0.01" min="0" required placeholder="avg cost" class="{{ fcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="ff-fee">Fee (SEK)</label>
+        <input id="ff-fee" name="fee_sek" type="number" step="0.01" min="0" value="0" class="{{ fcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="ff-date">Date (optional)</label>
+        <input id="ff-date" name="trade_date" type="date" class="{{ fcls }}" />
+      </div>
+      <div class="col-span-2 md:col-span-6 flex flex-wrap items-center gap-3">
+        <button type="submit" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white">Record fill</button>
+        <span class="text-[11px] text-slate-600">
+          Price in SEK (your Montrose average cost). To seed a holding you already own, enter the shares at your avg cost with fee 0; a trim is a Sell.
+        </span>
+      </div>
+    </form>
+  </details>
 </section>
 {% endif %}
 

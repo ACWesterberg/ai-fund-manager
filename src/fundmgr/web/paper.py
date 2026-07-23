@@ -180,6 +180,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "book_section": kind,
             "book_prefix": book_prefix,
             "book_name": meta["name"],
+            # live sleeves get a "Record fill" form on the dashboard
+            "fill_action": f"{book_prefix}/fill" if real else None,
         }
 
     def _home_ctx(request: Request, error: str | None = None, form: dict | None = None) -> dict:
@@ -312,6 +314,73 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             pass
         return RedirectResponse(url=prefix, status_code=303)
 
+    @router.post("/{slug}/fill")
+    async def record_fill(
+        slug: str,
+        ticker: str = Form(...),
+        shares: str = Form(...),
+        price_sek: str = Form(...),
+        fee_sek: str = Form("0"),
+        side: str = Form("buy"),
+        trade_date: str = Form(""),
+    ):
+        """Record a real broker fill into the sleeve (buy or sell, price in SEK).
+
+        Seeds pre-existing holdings (buy at your average cost) and trims (sell),
+        the browser equivalent of `/pfill` / `fund paper-fill`."""
+        from datetime import datetime as _dt, timezone as _tz
+        from fundmgr.state.models import NavPoint, Transaction
+
+        def _back(msg: str, ok: int) -> RedirectResponse:
+            from urllib.parse import urlencode
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}),
+                status_code=303)
+
+        try:
+            meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            return _not_found()
+
+        tkr = (ticker or "").strip().upper()
+        side = "sell" if side == "sell" else "buy"
+        try:
+            n_shares = float(str(shares).replace(",", "."))
+            price = float(str(price_sek).replace(",", "."))
+            fee = float(str(fee_sek).replace(",", ".") or 0)
+        except ValueError:
+            return _back("Shares, price and fee must be numbers.", 0)
+        if not tkr or n_shares <= 0 or price <= 0:
+            return _back("Enter a ticker, positive shares and a positive SEK price.", 0)
+
+        ts = _dt.now(_tz.utc)
+        if trade_date.strip():
+            try:
+                ts = _dt.strptime(trade_date.strip(), "%Y-%m-%d").replace(
+                    hour=12, tzinfo=_tz.utc)
+            except ValueError:
+                return _back(f"Bad date '{trade_date}' — use YYYY-MM-DD.", 0)
+
+        currency = meta["currency_map"].get(tkr, "SEK")
+        store.apply_fill(Transaction(
+            ticker=tkr, side=side, shares=n_shares, price_sek=price, fee_sek=fee,
+            source="fill", currency=currency, timestamp=ts,
+        ))
+        _price_cache.pop(slug, None)
+        try:
+            bench_rows = store.get_benchmark()
+            nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
+            store.upsert_nav(NavPoint(
+                date=ts.strftime("%Y-%m-%d"),
+                portfolio_nav_sek=nav_cost,
+                benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+                cash_sek=store.get_cash(),
+            ))
+        except Exception:
+            pass
+        verb = "Bought" if side == "buy" else "Sold"
+        return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK.", 1)
+
     # ── Per-book dashboard ──────────────────────────────────────────────────
 
     @router.get("/{slug}", response_class=HTMLResponse)
@@ -363,6 +432,11 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         pnl_sek = round(nav - meta["capital_sek"], 0)
         pnl_pct = round((nav / meta["capital_sek"] - 1) * 100, 2) if meta["capital_sek"] else 0.0
 
+        flash = None
+        msg = request.query_params.get("msg")
+        if msg:
+            flash = {"msg": msg, "ok": request.query_params.get("ok") == "1"}
+
         last_run = None
         last_rec = store.get_last_recommendation()
         if last_rec:
@@ -407,6 +481,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "pnl_pct": pnl_pct,
             "active_page": "portfolio",
             "watch": _watch_status(store, positions_data) if real else None,
+            "flash": flash,
             **_base_ctx(meta),
         })
 

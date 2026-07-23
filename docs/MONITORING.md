@@ -68,3 +68,9 @@ Same workflow as the main fund, pointed at the mirror book. In Telegram:
 
 Prices are entered in **SEK** (the KF account settles in SEK), exactly like
 `fund fill`. On the CLI: `fund paper-fill <slug> <TICKER> <SHARES> <PRICE> <FEE>`.
+
+Or from the browser: the live dashboard has a **"Record a fill"** form
+(ticker / side / shares / price SEK / fee / optional date). Use it to **seed a
+holding you already own** — enter the shares at your Montrose average cost with
+fee 0 — and to log buys and trims (a trim is a Sell). Positions and drift update
+immediately.

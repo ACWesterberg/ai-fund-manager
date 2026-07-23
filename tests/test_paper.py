@@ -881,6 +881,55 @@ def test_live_and_paper_lists_are_separate(client):
     assert "A Live Book" in rl and "A Paper Book" not in rl
 
 
+def _import_live(client, name):
+    data = {"meta": {"name": name, "deployable_capital_sek": 100000},
+            "positions": [{"ticker": "AAPL", "currency": "USD", "name": "Apple",
+                           "target_weight_pct": 100}]}
+    client.post("/live/import", data={"json_text": json.dumps(data)}, follow_redirects=False)
+
+
+def test_live_record_fill_seed_and_trim(client):
+    _import_live(client, "Fill Web")
+    _, store = paper.open_portfolio("fill-web")
+    assert store.get_positions() == []                       # plan-only
+
+    # dashboard exposes the fill form
+    r = client.get("/live/fill-web")
+    assert 'action="/live/fill-web/fill"' in r.text
+    assert "Record a fill" in r.text
+
+    # seed an existing holding (opening buy) → position appears
+    r = client.post("/live/fill-web/fill",
+                    data={"ticker": "AAPL", "side": "buy", "shares": "41",
+                          "price_sek": "2000", "fee_sek": "0"}, follow_redirects=False)
+    assert r.status_code == 303 and "ok=1" in r.headers["location"]
+    _, store = paper.open_portfolio("fill-web")
+    assert {p.ticker: p.shares for p in store.get_positions()} == {"AAPL": 41}
+
+    # trim 8 via a sell
+    client.post("/live/fill-web/fill",
+                data={"ticker": "AAPL", "side": "sell", "shares": "8",
+                      "price_sek": "2100", "fee_sek": "1"}, follow_redirects=False)
+    _, store = paper.open_portfolio("fill-web")
+    assert store.get_positions()[0].shares == pytest.approx(33)
+
+
+def test_live_fill_rejects_bad_input(client):
+    _import_live(client, "Fill Val")
+    r = client.post("/live/fill-val/fill",
+                    data={"ticker": "AAPL", "side": "buy", "shares": "0",
+                          "price_sek": "2000"}, follow_redirects=False)
+    assert r.status_code == 303 and "ok=0" in r.headers["location"]
+    _, store = paper.open_portfolio("fill-val")
+    assert store.get_positions() == []                       # nothing recorded
+
+
+def test_paper_dashboard_has_no_fill_form(client):
+    paper.create_portfolio("No Fill", 50_000, "AAPL 100%", kind="paper")
+    r = client.get("/paper/no-fill")
+    assert "Record a fill" not in r.text                     # fill form is live-only
+
+
 def test_paper_book_has_no_watch_panel(client):
     """Paper books keep the simulation framing — no live Watch panel."""
     paper.create_portfolio("Plain Paper", 50_000, "AAPL 100%", kind="paper")

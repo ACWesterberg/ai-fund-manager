@@ -87,3 +87,10 @@ symbol before snap existed (e.g. a bare `ENR` that the dashboard prices as the
 wrong instrument), retag it in place — no cash movement:
 `fund paper-retag <slug> ENR` (NEW defaults to the plan symbol, here `ENR.DE`),
 or on Telegram `/ptarget <slug>` then `/pretag ENR`.
+
+**Fixing the cost basis of a foreign holding:** if the dashboard P&L on a
+USD/EUR position disagrees with Montrose, the seeded cost basis was likely the
+purchase price converted at *today's* FX instead of the SEK you actually paid.
+Set it to the broker's **Inköpsvärde ÷ shares** (SEK/share):
+`fund paper-setcost <slug> GOOGL 3429` or Telegram `/psetcost GOOGL 3429`. Cash
+is adjusted by the difference so NAV stays consistent.

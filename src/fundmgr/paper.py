@@ -1017,6 +1017,33 @@ def retag_position(store: Store, old_ticker: str, new_ticker: str) -> dict:
     return {"old": old, "new": new, "shares": old_shares}
 
 
+def set_cost_basis(store: Store, ticker: str, new_avg_sek: float) -> dict:
+    """Set a position's SEK average cost to the broker's real figure (Montrose
+    Inköpsvärde ÷ shares), refunding or charging the cash difference so NAV
+    stays consistent.
+
+    Fixes the case where a USD/EUR holding was seeded with the purchase price
+    converted at *today's* FX instead of the SEK you actually paid, which made
+    the dashboard P&L diverge from the broker. Returns a summary dict.
+    """
+    t, _note = snap_ticker_to_plan(store, ticker)
+    try:
+        new_avg = float(new_avg_sek)
+    except (TypeError, ValueError):
+        raise ValueError("New average cost must be a number (SEK per share).")
+    if new_avg <= 0:
+        raise ValueError("New average cost must be a positive SEK amount.")
+    pos = next((p for p in store.get_positions() if p.ticker == t), None)
+    if pos is None:
+        raise ValueError(f"No position '{t}' in this book.")
+    old_avg = pos.avg_cost_sek
+    cash_delta = pos.shares * (old_avg - new_avg)   # refund overpayment (or charge)
+    store.upsert_position(t, pos.shares, round(new_avg, 4))
+    store.adjust_cash(round(cash_delta, 2))
+    return {"ticker": t, "shares": pos.shares, "old_avg": old_avg,
+            "new_avg": new_avg, "cash_delta": cash_delta}
+
+
 # ── Daily tracking + learning ─────────────────────────────────────────────────
 
 def track_portfolio(slug: str) -> list[str]:

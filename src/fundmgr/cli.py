@@ -1629,6 +1629,46 @@ def paper_retag(slug: str, old: str, new: str | None):
         pass
 
 
+@cli.command("paper-setcost")
+@click.argument("slug")
+@click.argument("ticker")
+@click.argument("avg_sek", type=float)
+def paper_setcost(slug: str, ticker: str, avg_sek: float):
+    """Correct a position's SEK cost basis to the broker's actual figure.
+
+    Use the broker's Inköpsvärde ÷ shares (SEK per share) so the dashboard P&L
+    matches Montrose. Cash is adjusted by the difference so NAV stays
+    consistent — nothing else moves.
+    """
+    from fundmgr import paper
+
+    try:
+        meta, store = paper.open_portfolio(slug)
+    except KeyError:
+        click.echo(f"No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+    try:
+        res = paper.set_cost_basis(store, ticker, avg_sek)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✓ {res['ticker']}: cost basis {res['old_avg']:,.2f} → "
+               f"{res['new_avg']:,.2f} SEK/share ({res['shares']:g} sh). "
+               f"Cash {res['cash_delta']:+,.0f} SEK.")
+    try:
+        bench_rows = store.get_benchmark()
+        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
+        store.upsert_nav(NavPoint(
+            date=datetime.utcnow().strftime("%Y-%m-%d"),
+            portfolio_nav_sek=nav_cost,
+            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+            cash_sek=store.get_cash(),
+        ))
+    except Exception:
+        pass
+
+
 @cli.command("paper-status")
 @click.argument("slug")
 def paper_status(slug: str):

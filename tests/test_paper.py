@@ -1017,6 +1017,44 @@ def test_paper_retag_cli(paper_dir, mock_market):
     assert [p.ticker for p in store.get_positions()] == ["BESI.AS"]
 
 
+def test_set_cost_basis_adjusts_cash(paper_dir, mock_market):
+    from fundmgr.state.models import Transaction
+    slug, _ = paper.create_portfolio(
+        "Cost", 500_000, "record", kind="live", execute_buys=False,
+        holdings_override=[{"ticker": "AAPL", "weight_pct": 100}])
+    _, store = paper.open_portfolio(slug)
+    # seeded at an FX-inflated cost basis
+    store.apply_fill(Transaction(ticker="AAPL", side="buy", shares=33, price_sek=3588.33,
+                                 fee_sek=0, source="fill", currency="USD",
+                                 timestamp=datetime.now(timezone.utc)))
+    cash_before = store.get_cash()
+
+    res = paper.set_cost_basis(store, "AAPL", 3429.03)
+    assert res["new_avg"] == pytest.approx(3429.03)
+    pos = {p.ticker: p for p in store.get_positions()}["AAPL"]
+    assert pos.avg_cost_sek == pytest.approx(3429.03, rel=1e-4)
+    # cash refunded by shares × (old − new); NAV (cost) unchanged overall
+    assert store.get_cash() == pytest.approx(cash_before + 33 * (3588.33 - 3429.03), rel=1e-3)
+
+
+def test_paper_setcost_cli(paper_dir, mock_market):
+    from click.testing import CliRunner
+    from fundmgr.cli import cli
+    from fundmgr.state.models import Transaction
+
+    slug, _ = paper.create_portfolio(
+        "Cost CLI", 500_000, "record", kind="live", execute_buys=False,
+        holdings_override=[{"ticker": "AAPL", "weight_pct": 100}])
+    _, store = paper.open_portfolio(slug)
+    store.apply_fill(Transaction(ticker="AAPL", side="buy", shares=10, price_sek=2000,
+                                 fee_sek=0, source="fill", currency="USD",
+                                 timestamp=datetime.now(timezone.utc)))
+    r = CliRunner().invoke(cli, ["paper-setcost", "cost-cli", "AAPL", "1800"])
+    assert r.exit_code == 0, r.output
+    _, store = paper.open_portfolio("cost-cli")
+    assert {p.ticker: p for p in store.get_positions()}["AAPL"].avg_cost_sek == pytest.approx(1800)
+
+
 def test_paper_dashboard_has_no_fill_form(client):
     paper.create_portfolio("No Fill", 50_000, "AAPL 100%", kind="paper")
     r = client.get("/paper/no-fill")

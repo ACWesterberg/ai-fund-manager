@@ -926,6 +926,52 @@ def test_live_fill_rejects_bad_input(client):
     assert store.get_positions() == []                       # nothing recorded
 
 
+def test_snap_ticker_to_plan(paper_dir, mock_market):
+    slug, _ = paper.create_portfolio(
+        "Snap", 100_000, "record", kind="live", execute_buys=False,
+        holdings_override=[{"ticker": "ASML.AS", "weight_pct": 50},
+                           {"ticker": "NVDA", "weight_pct": 50}])
+    _, store = paper.open_portfolio(slug)
+    # bare/broker symbol snaps onto the suffixed plan symbol
+    assert paper.snap_ticker_to_plan(store, "ASML") == ("ASML.AS", "→ matched to plan symbol ASML.AS")
+    # exact plan symbols pass through untouched
+    assert paper.snap_ticker_to_plan(store, "ASML.AS") == ("ASML.AS", None)
+    assert paper.snap_ticker_to_plan(store, "NVDA") == ("NVDA", None)
+    # genuinely-not-in-plan is kept as-is, with a warning
+    tkr, note = paper.snap_ticker_to_plan(store, "TSLA")
+    assert tkr == "TSLA" and "isn't in this book" in note
+
+
+def test_paper_fill_snaps_to_plan(paper_dir, mock_market):
+    from click.testing import CliRunner
+    from fundmgr.cli import cli
+
+    paper.create_portfolio("Snap Fill", 100_000, "record", kind="live", execute_buys=False,
+                           holdings_override=[{"ticker": "ASML.AS", "weight_pct": 100}])
+    r = CliRunner().invoke(cli, ["paper-fill", "snap-fill", "ASML", "2", "17433.50", "34.86"])
+    assert r.exit_code == 0, r.output
+    assert "ASML.AS" in r.output                         # snapped in the confirmation
+    _, store = paper.open_portfolio("snap-fill")
+    assert [p.ticker for p in store.get_positions()] == ["ASML.AS"]  # not a stray "ASML"
+
+
+def test_live_fill_snaps_to_plan(client):
+    data = {"meta": {"name": "Snap Web", "deployable_capital_sek": 100000},
+            "positions": [{"ticker": "ASML", "currency": "EUR", "name": "ASML Holding",
+                           "exchange": "Euronext Amsterdam", "target_weight_pct": 100}]}
+    client.post("/live/import", data={"json_text": json.dumps(data)}, follow_redirects=False)
+    _, store = paper.open_portfolio("snap-web")
+    assert set(json.loads(store.get_meta("paper_target_weights"))) == {"ASML.AS"}
+
+    # typing bare ASML records ASML.AS, matching the plan
+    r = client.post("/live/snap-web/fill",
+                    data={"ticker": "ASML", "side": "buy", "shares": "2",
+                          "price_sek": "17433.50", "fee_sek": "34.86"}, follow_redirects=False)
+    assert r.status_code == 303 and "ok=1" in r.headers["location"]
+    _, store = paper.open_portfolio("snap-web")
+    assert [p.ticker for p in store.get_positions()] == ["ASML.AS"]
+
+
 def test_paper_dashboard_has_no_fill_form(client):
     paper.create_portfolio("No Fill", 50_000, "AAPL 100%", kind="paper")
     r = client.get("/paper/no-fill")

@@ -74,3 +74,10 @@ Or from the browser: the live dashboard has a **"Record a fill"** form
 holding you already own** — enter the shares at your Montrose average cost with
 fee 0 — and to log buys and trims (a trim is a Sell). Positions and drift update
 immediately.
+
+**Ticker auto-snap:** a fill ticker is matched onto the book's plan symbol when
+there's a single base match — type `ASML` and it records `ASML.AS`, `ENR` →
+`ENR.DE`, etc. — so a fill lands on the intended, correctly-priced instrument
+instead of a mismatched one. A symbol that genuinely isn't in the plan is kept
+as-is with a warning. Applies to `fund paper-fill`, the web form, `/pfill`, and
+the screenshot flow alike.

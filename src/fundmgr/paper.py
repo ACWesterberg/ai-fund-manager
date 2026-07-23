@@ -938,6 +938,39 @@ def _safe_confidence(value) -> float | None:
         return None
 
 
+# ── Fill ticker resolution ────────────────────────────────────────────────────
+
+def plan_tickers(store: Store) -> set[str]:
+    """Every Yahoo symbol this book knows: plan targets, its currency map, and
+    anything already held. Used to snap a fill ticker onto the plan symbol."""
+    out = set(json.loads(store.get_meta("paper_target_weights") or "{}"))
+    out |= set(json.loads(store.get_meta("paper_currency_map") or "{}"))
+    out |= {p.ticker for p in store.get_positions()}
+    return out
+
+
+def snap_ticker_to_plan(store: Store, ticker: str) -> tuple[str, str | None]:
+    """Resolve a user-entered fill ticker to this book's plan symbol.
+
+    A broker/bare symbol is snapped to the plan's Yahoo symbol when there's a
+    single plan ticker with the same base (e.g. 'ASML' → 'ASML.AS', 'ENR' →
+    'ENR.DE'), so a fill lands on the intended, correctly-priced instrument
+    instead of a mismatched one. Returns (resolved_ticker, note) — note is a
+    short human message when a snap happened or the ticker isn't in the plan.
+    """
+    t = (ticker or "").strip().upper()
+    plan = plan_tickers(store)
+    if t in plan:
+        return t, None
+    base = t.split(".")[0]
+    matches = sorted(p for p in plan if p.split(".")[0] == base)
+    if len(matches) == 1:
+        return matches[0], f"→ matched to plan symbol {matches[0]}"
+    if not plan:
+        return t, None  # nothing to match against (e.g. a fresh book)
+    return t, f"⚠ {t} isn't in this book's plan — recording as-is"
+
+
 # ── Daily tracking + learning ─────────────────────────────────────────────────
 
 def track_portfolio(slug: str) -> list[str]:

@@ -361,6 +361,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             except ValueError:
                 return _back(f"Bad date '{trade_date}' — use YYYY-MM-DD.", 0)
 
+        tkr, snap_note = paper.snap_ticker_to_plan(store, tkr)
         currency = meta["currency_map"].get(tkr, "SEK")
         store.apply_fill(Transaction(
             ticker=tkr, side=side, shares=n_shares, price_sek=price, fee_sek=fee,
@@ -379,7 +380,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         except Exception:
             pass
         verb = "Bought" if side == "buy" else "Sold"
-        return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK in {meta['name']}.", 1)
+        tail = f" ({snap_note})" if snap_note else ""
+        return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK in {meta['name']}.{tail}", 1)
 
     # ── Per-book dashboard ──────────────────────────────────────────────────
 

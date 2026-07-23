@@ -1552,7 +1552,9 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
     else:
         ts = datetime.utcnow()
 
-    ticker = ticker.upper()
+    ticker, snap_note = paper.snap_ticker_to_plan(store, ticker)
+    if snap_note:
+        click.echo(f"  {snap_note}")
     currency = meta["currency_map"].get(ticker, "SEK")
     store.apply_fill(Transaction(
         ticker=ticker, side=side, shares=shares,

@@ -81,3 +81,9 @@ there's a single base match — type `ASML` and it records `ASML.AS`, `ENR` →
 instead of a mismatched one. A symbol that genuinely isn't in the plan is kept
 as-is with a warning. Applies to `fund paper-fill`, the web form, `/pfill`, and
 the screenshot flow alike.
+
+**Fixing a mis-tagged holding:** if a position was recorded under the wrong
+symbol before snap existed (e.g. a bare `ENR` that the dashboard prices as the
+wrong instrument), retag it in place — no cash movement:
+`fund paper-retag <slug> ENR` (NEW defaults to the plan symbol, here `ENR.DE`),
+or on Telegram `/ptarget <slug>` then `/pretag ENR`.

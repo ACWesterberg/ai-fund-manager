@@ -972,6 +972,51 @@ def test_live_fill_snaps_to_plan(client):
     assert [p.ticker for p in store.get_positions()] == ["ASML.AS"]
 
 
+def test_retag_position_fixes_mistagged_ticker(paper_dir, mock_market):
+    from fundmgr.state.models import Transaction
+    slug, _ = paper.create_portfolio(
+        "Retag", 100_000, "record", kind="live", execute_buys=False,
+        holdings_override=[{"ticker": "ENR.DE", "weight_pct": 100}])
+    _, store = paper.open_portfolio(slug)
+    # a fill went in under the wrong bare symbol
+    store.apply_fill(Transaction(ticker="ENR", side="buy", shares=45, price_sek=1677.56,
+                                 fee_sek=75.49, source="fill", currency="SEK",
+                                 timestamp=datetime.now(timezone.utc)))
+    cash_before = store.get_cash()
+    assert {p.ticker for p in store.get_positions()} == {"ENR"}
+
+    # NEW inferred from the plan: ENR → ENR.DE
+    assert paper.intended_plan_symbol(store, "ENR") == "ENR.DE"
+    res = paper.retag_position(store, "ENR", paper.intended_plan_symbol(store, "ENR"))
+    assert res["new"] == "ENR.DE" and res["shares"] == 45
+
+    pos = {p.ticker: p.shares for p in store.get_positions()}
+    assert pos == {"ENR.DE": 45}                    # renamed, shares/cost preserved
+    assert store.get_cash() == pytest.approx(cash_before)   # cash untouched
+    # transactions moved across too
+    assert all(t.ticker == "ENR.DE" for t in store.get_transactions())
+
+
+def test_paper_retag_cli(paper_dir, mock_market):
+    from click.testing import CliRunner
+    from fundmgr.cli import cli
+    from fundmgr.state.models import Transaction
+
+    slug, _ = paper.create_portfolio(
+        "Retag CLI", 100_000, "record", kind="live", execute_buys=False,
+        holdings_override=[{"ticker": "BESI.AS", "weight_pct": 100}])
+    _, store = paper.open_portfolio(slug)
+    store.apply_fill(Transaction(ticker="BESI", side="buy", shares=21, price_sek=2637,
+                                 fee_sek=55.37, source="fill", currency="SEK",
+                                 timestamp=datetime.now(timezone.utc)))
+    # NEW omitted → inferred from the plan
+    r = CliRunner().invoke(cli, ["paper-retag", "retag-cli", "BESI"])
+    assert r.exit_code == 0, r.output
+    assert "BESI.AS" in r.output
+    _, store = paper.open_portfolio("retag-cli")
+    assert [p.ticker for p in store.get_positions()] == ["BESI.AS"]
+
+
 def test_paper_dashboard_has_no_fill_form(client):
     paper.create_portfolio("No Fill", 50_000, "AAPL 100%", kind="paper")
     r = client.get("/paper/no-fill")

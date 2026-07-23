@@ -1583,6 +1583,52 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
         pass
 
 
+@cli.command("paper-retag")
+@click.argument("slug")
+@click.argument("old")
+@click.argument("new", required=False)
+def paper_retag(slug: str, old: str, new: str | None):
+    """Fix a mis-tagged position: move OLD ticker to its correct Yahoo symbol.
+
+    NEW defaults to the plan's matching symbol (e.g. `paper-retag <slug> ENR`
+    moves ENR → ENR.DE). Cash is untouched — this only corrects the instrument
+    and its currency, so a wrong-ticker holding is priced right again.
+    """
+    from fundmgr import paper
+
+    try:
+        meta, store = paper.open_portfolio(slug)
+    except KeyError:
+        click.echo(f"No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+
+    old = old.upper()
+    new = (new or "").upper() or paper.intended_plan_symbol(store, old)
+    if not new:
+        click.echo(f"Couldn't infer the target symbol for {old} — pass it explicitly "
+                   f"(e.g. fund paper-retag {slug} {old} {old}.DE).", err=True)
+        sys.exit(1)
+    try:
+        res = paper.retag_position(store, old, new)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✓ Retagged {res['shares']:g} × {res['old']} → {res['new']} "
+               f"(cash unchanged).")
+    try:
+        bench_rows = store.get_benchmark()
+        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
+        store.upsert_nav(NavPoint(
+            date=datetime.utcnow().strftime("%Y-%m-%d"),
+            portfolio_nav_sek=nav_cost,
+            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+            cash_sek=store.get_cash(),
+        ))
+    except Exception:
+        pass
+
+
 @cli.command("paper-status")
 @click.argument("slug")
 def paper_status(slug: str):

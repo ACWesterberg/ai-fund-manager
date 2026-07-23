@@ -347,6 +347,27 @@ async def cmd_pfill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> N
     await _send(update, f"📋 {name} ({slug})\n{output}")
 
 
+async def cmd_pretag(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/pretag OLD [NEW] — fix a mis-tagged holding in the active book.
+
+    Renames a position to its correct Yahoo symbol without touching cash. NEW
+    defaults to the plan's matching symbol (e.g. /pretag ENR → ENR.DE)."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active book — /ptarget <slug> first, then /pretag OLD [NEW].")
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Usage: /pretag OLD [NEW]\nExample: /pretag ENR   (→ ENR.DE)")
+        return
+    cli_args = ["paper-retag", slug, args[0]] + ([args[1]] if len(args) > 1 else [])
+    output = _run_cli(*cli_args, timeout=30)
+    await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
+
+
 async def cmd_pstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/pstatus — snapshot of the active paper book."""
     chat_id = update.effective_chat.id
@@ -400,6 +421,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/plist — list paper/mirror portfolios\n"
         "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
         "/pfill TICKER SHARES PRICE FEE [side] — fill into the active book\n"
+        "/pretag OLD [NEW] — fix a mis-tagged holding (e.g. ENR → ENR.DE)\n"
         "/pstatus — snapshot of the active book\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
@@ -737,6 +759,7 @@ def main() -> None:
     app.add_handler(CommandHandler("plist",    cmd_plist))
     app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
     app.add_handler(CommandHandler("pfill",    cmd_pfill))
+    app.add_handler(CommandHandler("pretag",   cmd_pretag))
     app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))

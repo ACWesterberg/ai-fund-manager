@@ -971,6 +971,52 @@ def snap_ticker_to_plan(store: Store, ticker: str) -> tuple[str, str | None]:
     return t, f"⚠ {t} isn't in this book's plan — recording as-is"
 
 
+def intended_plan_symbol(store: Store, ticker: str) -> str | None:
+    """The plan's target symbol a stray position should carry — a unique
+    target-weight ticker sharing the base, other than the ticker itself
+    (e.g. a mis-recorded 'ENR' → 'ENR.DE')."""
+    t = (ticker or "").strip().upper()
+    targets = set(json.loads(store.get_meta("paper_target_weights") or "{}"))
+    base = t.split(".")[0]
+    cands = sorted(s for s in targets if s != t and s.split(".")[0] == base)
+    return cands[0] if len(cands) == 1 else None
+
+
+def retag_position(store: Store, old_ticker: str, new_ticker: str) -> dict:
+    """Rename a position (and its transactions) from a mis-tagged symbol to the
+    correct Yahoo symbol, merging into any existing position at the new symbol.
+    Cash is untouched — this only fixes the instrument, not the money. The new
+    symbol's plan currency is preserved (or detected if unknown)."""
+    old = (old_ticker or "").strip().upper()
+    new = (new_ticker or "").strip().upper()
+    if not old or not new or old == new:
+        raise ValueError("Give distinct old and new tickers.")
+    with store._conn() as conn:
+        pos = conn.execute(
+            "SELECT shares, avg_cost_sek FROM positions WHERE ticker=?", (old,)).fetchone()
+        if not pos or float(pos["shares"]) <= 0:
+            raise ValueError(f"No position '{old}' to retag.")
+        old_shares, old_avg = float(pos["shares"]), float(pos["avg_cost_sek"])
+        newpos = conn.execute(
+            "SELECT shares, avg_cost_sek FROM positions WHERE ticker=?", (new,)).fetchone()
+        if newpos and float(newpos["shares"]) > 0:
+            tot = old_shares + float(newpos["shares"])
+            avg = (old_shares * old_avg + float(newpos["shares"]) * float(newpos["avg_cost_sek"])) / tot
+            conn.execute("UPDATE positions SET shares=?, avg_cost_sek=?, updated_at=? WHERE ticker=?",
+                         (tot, avg, datetime.utcnow().isoformat(), new))
+            conn.execute("DELETE FROM positions WHERE ticker=?", (old,))
+        else:
+            conn.execute("UPDATE positions SET ticker=?, updated_at=? WHERE ticker=?",
+                         (new, datetime.utcnow().isoformat(), old))
+        conn.execute("UPDATE transactions SET ticker=? WHERE ticker=?", (new, old))
+
+    cmap = json.loads(store.get_meta("paper_currency_map") or "{}")
+    if new not in cmap:
+        cmap[new] = detect_currency(new)
+        store.set_meta("paper_currency_map", json.dumps(cmap))
+    return {"old": old, "new": new, "shares": old_shares}
+
+
 # ── Daily tracking + learning ─────────────────────────────────────────────────
 
 def track_portfolio(slug: str) -> list[str]:

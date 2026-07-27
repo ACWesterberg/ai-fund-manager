@@ -49,6 +49,42 @@ is directly portable.
 
 ---
 
+## Should MIPRO optimize the whole prompt, or stay an appended guidance block?
+
+**Current design (deliberate).** MIPRO optimizes the `WeeklyDecision` signature's
+*instruction* (`engine/dspy_program.py`), with the mandate held fixed as an
+`InputField`. The live run path (`engine/prompt.py` + `client.py`) does **not**
+execute the DSPy program — it extracts the winning instruction string
+(`optimizer._compiled_instructions`) and *appends* it to the human-authored
+mandate as a labeled "Decision Guidance" block. So MIPRO owns the full
+instruction layer but never the mandate, and at runtime its output is grafted on
+rather than run as the program.
+
+**Two known gaps this creates.**
+- **Context drift** — the instruction is tuned inside DSPy's assembly
+  (ChainOfThought scaffolding, mandate-as-input-field) but applied at runtime
+  inside a differently-built prompt. Detectable via the per-run `guidance_hash`
+  (`prompt.snapshot_to_dict` regime) → guided vs unguided alpha.
+- **Discarded demos** — MIPRO also proposes few-shot demonstrations; we keep only
+  the instruction string and drop them.
+
+**Decision (2026-07): change nothing now.** No fund has history yet — MIPRO can't
+compile until ~30 evaluated outcomes + 8 scored runs (≈autumn). The fixed mandate
+is what keeps the five funds' GPT-vs-Claude / global-vs-Buffett comparison
+legible, and the drift gap only bites once guidance exists. Keep `fund optimize`
+enabled (harmless no-op until thresholds met) and let data decide.
+
+**Revisit when** the first guidance artifacts compile: group each fund's runs by
+`guidance_hash` and compare realized alpha, guided vs unguided. *Then*, and only
+then:
+- If guidance clearly helps but looks capped → wire the live path to the DSPy
+  `FundManager` program (closes drift + recovers demos; also swallows the N=3
+  consensus + JSON-parsing path, so it's a meaty change — earn it with evidence).
+- **Do not** fold the mandate into the optimizable instruction — that trades away
+  the auditable baseline and cross-fund comparability for little gain.
+
+---
+
 ## Align dashboard design with DeepSwing
 
 DeepSwing = single-page **tabbed** SPA (Comparison / per-track / Decisions /

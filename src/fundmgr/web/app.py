@@ -45,6 +45,12 @@ app.include_router(make_sim_router(
 app.include_router(make_sim_router(
     "config/config_claude.yaml", "/sim-claude", "Claude Opus Global Fund", sim_accent="violet"
 ))
+app.include_router(make_sim_router(
+    "config/config_buffett_gpt.yaml", "/sim-buffett", "GPT-5.6-sol Buffett Screen Fund", sim_accent="amber"
+))
+app.include_router(make_sim_router(
+    "config/config_buffett_claude.yaml", "/sim-buffett-claude", "Claude Opus Buffett Screen Fund", sim_accent="violet"
+))
 
 # Paper portfolios — user-created from pasted LLM picks, tracked like the sims.
 # Live sleeves — real monitored books imported via `fund paper-import`.

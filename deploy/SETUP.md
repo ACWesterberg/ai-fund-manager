@@ -93,7 +93,7 @@ DEPLOY_BRANCH=deploy
 
 ---
 
-## 4. Initialise the three funds
+## 4. Initialise the funds
 
 Each `fund init` seeds that fund's DB with its config's `capital_sek`:
 
@@ -101,9 +101,12 @@ Each `fund init` seeds that fund's DB with its config's `capital_sek`:
 .venv/bin/fund init                                              # 🇸🇪 Nordic REAL — 50k
 FUND_CONFIG=config/config_global.yaml .venv/bin/fund init        # 🌍 Global sim GPT-5.6-sol — 150k
 FUND_CONFIG=config/config_claude.yaml .venv/bin/fund init        # 🤖 Global sim Claude — 150k
+FUND_CONFIG=config/config_buffett_gpt.yaml .venv/bin/fund init   # 🧱 Buffett screen GPT-5.6-sol — 1M
+FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund init # 🧱 Buffett screen Claude — 1M
 ```
 
-This creates `data/fund.db`, `data/fund_global.db`, `data/fund_claude.db`.
+This creates `data/fund.db`, `data/fund_global.db`, `data/fund_claude.db`,
+`data/fund_buffett_gpt.db`, `data/fund_buffett_claude.db`.
 
 > **Restoring instead of starting fresh?** If you have a Google Drive backup
 > (see `deploy/BACKUP.md`), skip `init` and restore the `.db` files from the
@@ -120,7 +123,7 @@ Copy the service files and enable them:
 ```bash
 sudo cp deploy/fundmgr-bot.service        /etc/systemd/system/
 sudo cp deploy/fundmgr-web.service        /etc/systemd/system/   # real-fund dashboard
-sudo cp deploy/fundmgr-global-web.service /etc/systemd/system/   # sim dashboards (/sim, /sim-claude)
+sudo cp deploy/fundmgr-global-web.service /etc/systemd/system/   # sim dashboards (/sim, /sim-claude, /sim-buffett, /sim-buffett-claude)
 ```
 
 Edit each file if your username is not `pi` or the repo path differs

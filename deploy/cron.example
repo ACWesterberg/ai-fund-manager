@@ -54,6 +54,23 @@
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_claude.log 2>&1
 
 
+# ═══ BUFFETT SCREEN SIMULATION FUNDS — curated ~95-name quality universe ══════
+#
+# Both funds trade the same pre-filtered Buffett quality screen (US large/mid +
+# Nordic). Staggered after the Global/Claude funds so all four see the same
+# market conditions but decide independently. 1,000,000 SEK start capital each.
+
+# GPT-5.6-sol Buffett — weekly decision run Monday 17:00 CET
+0 17 * * 1 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_gpt.yaml .venv/bin/fund run >> data/logs/weekly_buffett_gpt.log 2>&1
+0 14,18,21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_gpt.yaml .venv/bin/fund check-news >> data/logs/news_buffett_gpt.log 2>&1
+*/15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_gpt.yaml .venv/bin/fund check-stops >> data/logs/stops_buffett_gpt.log 2>&1
+
+# Claude Opus Buffett — weekly decision run Monday 17:30 CET
+30 17 * * 1 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund run >> data/logs/weekly_buffett_claude.log 2>&1
+0 14,18,21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund check-news >> data/logs/news_buffett_claude.log 2>&1
+*/15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_buffett_claude.log 2>&1
+
+
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,
@@ -77,6 +94,8 @@
 0 2 * * 0 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund optimize >> data/logs/optimize.log 2>&1
 30 2 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund optimize >> data/logs/optimize_global.log 2>&1
 0 3 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_claude.yaml .venv/bin/fund optimize >> data/logs/optimize_claude.log 2>&1
+30 3 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_gpt.yaml .venv/bin/fund optimize >> data/logs/optimize_buffett_gpt.log 2>&1
+0 4 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund optimize >> data/logs/optimize_buffett_claude.log 2>&1
 
 
 # ═══ BACKUPS — SQLite DBs → Google Drive (rclone) ════════════════════════════

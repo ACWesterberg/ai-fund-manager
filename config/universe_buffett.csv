@@ -1,0 +1,96 @@
+name,yahoo_ticker,isin,country,exchange,sector,enabled
+Adobe Inc.,ADBE,,US,NASDAQ,Software,true
+"AppFolio, Inc.",APPF,,US,NASDAQ,Software,true
+"BioCryst Pharmaceuticals, Inc.",BCRX,,US,NASDAQ,Biotechnology,true
+Booking Holdings Inc.,BKNG,,US,NASDAQ,"Hotels, Restaurants and Leisure",true
+"CarGurus, Inc.",CARG,,US,NASDAQ,Interactive Media and Services,true
+"Celsius Holdings, Inc.",CELH,,US,NASDAQ,Beverages,true
+"Cirrus Logic, Inc.",CRUS,,US,NASDAQ,Semiconductors and Semiconductor Equipment,true
+"Coca-Cola Consolidated, Inc.",COKE,,US,NASDAQ,Beverages,true
+"Copart, Inc.",CPRT,,US,NASDAQ,Commercial Services and Supplies,true
+"DexCom, Inc.",DXCM,,US,NASDAQ,Health Care Equipment and Supplies,true
+"Duolingo, Inc.",DUOL,,US,NASDAQ,Diversified Consumer Services,true
+"Exelixis, Inc.",EXEL,,US,NASDAQ,Biotechnology,true
+"ExlService Holdings, Inc.",EXLS,,US,NASDAQ,Professional Services,true
+"First Solar, Inc.",FSLR,,US,NASDAQ,Semiconductors and Semiconductor Equipment,true
+"Frontdoor, Inc.",FTDR,,US,NASDAQ,Diversified Consumer Services,true
+"Grand Canyon Education, Inc.",LOPE,,US,NASDAQ,Diversified Consumer Services,true
+"Halozyme Therapeutics, Inc.",HALO,,US,NASDAQ,Biotechnology,true
+"Harmony Biosciences Holdings, Inc.",HRMY,,US,NASDAQ,Pharmaceuticals,true
+Incyte Corporation,INCY,,US,NASDAQ,Biotechnology,true
+"InterDigital, Inc.",IDCC,,US,NASDAQ,Software,true
+"Interparfums, Inc.",IPAR,,US,NASDAQ,Personal Care Products,true
+"Lantheus Holdings, Inc.",LNTH,,US,NASDAQ,Health Care Equipment and Supplies,true
+"Manhattan Associates, Inc.",MANH,,US,NASDAQ,Software,true
+Maplebear Inc.,CART,,US,NASDAQ,Consumer Staples Distribution and Retail,true
+"Medpace Holdings, Inc.",MEDP,,US,NASDAQ,Life Sciences Tools and Services,true
+"Monarch Casino & Resort, Inc.",MCRI,,US,NASDAQ,"Hotels, Restaurants and Leisure",true
+"Neurocrine Biosciences, Inc.",NBIX,,US,NASDAQ,Biotechnology,true
+PTC Inc.,PTC,,US,NASDAQ,Software,true
+QUALCOMM Incorporated,QCOM,,US,NASDAQ,Semiconductors and Semiconductor Equipment,true
+"Qualys, Inc.",QLYS,,US,NASDAQ,Software,true
+"The Trade Desk, Inc.",TTD,,US,NASDAQ,Media,true
+"Ulta Beauty, Inc.",ULTA,,US,NASDAQ,Specialty Retail,true
+United Therapeutics Corporation,UTHR,,US,NASDAQ,Biotechnology,true
+"VeriSign, Inc.",VRSN,,US,NASDAQ,IT Services,true
+"Zoom Communications, Inc.",ZM,,US,NASDAQ,Software,true
+A. O. Smith Corporation,AOS,,US,NYSE,Building Products,true
+Abercrombie & Fitch Co.,ANF,,US,NYSE,Specialty Retail,true
+"Advanced Drainage Systems, Inc.",WMS,,US,NYSE,Building Products,true
+AngloGold Ashanti plc,AU,,US,NYSE,Metals and Mining,true
+"Badger Meter, Inc.",BMI,,US,NYSE,"Electronic Equipment, Instruments and Components",true
+Brady Corporation,BRC,,US,NYSE,Commercial Services and Supplies,true
+Carlisle Companies Incorporated,CSL,,US,NYSE,Building Products,true
+"CF Industries Holdings, Inc.",CF,,US,NYSE,Chemicals,true
+Colgate-Palmolive Company,CL,,US,NYSE,Household Products,true
+Deckers Outdoor Corporation,DECK,,US,NYSE,"Textiles, Apparel and Luxury Goods",true
+"Doximity, Inc.",DOCS,,US,NYSE,Health Care Technology,true
+Grindr Inc.,GRND,,US,NYSE,Interactive Media and Services,true
+Gulfport Energy Corporation,GPOR,,US,NYSE,"Oil, Gas and Consumable Fuels",true
+Hecla Mining Company,HL,,US,NYSE,Metals and Mining,true
+"Kontoor Brands, Inc.",KTB,,US,NYSE,"Textiles, Apparel and Luxury Goods",true
+"Merck & Co., Inc.",MRK,,US,NYSE,Pharmaceuticals,true
+MSA Safety Incorporated,MSA,,US,NYSE,Commercial Services and Supplies,true
+Newmont Corporation,NEM,,US,NYSE,Metals and Mining,true
+ResMed Inc.,RMD,,US,NYSE,Health Care Equipment and Supplies,true
+"Stride, Inc.",LRN,,US,NYSE,Diversified Consumer Services,true
+"Tapestry, Inc.",TPR,,US,NYSE,"Textiles, Apparel and Luxury Goods",true
+The New York Times Company,NYT,,US,NYSE,Media,true
+Tidewater Inc.,TDW,,US,NYSE,Energy Equipment and Services,true
+Veeva Systems Inc.,VEEV,,US,NYSE,Health Care Technology,true
+Veralto Corporation,VLTO,,US,NYSE,Commercial Services and Supplies,true
+Zoetis Inc.,ZTS,,US,NYSE,Pharmaceuticals,true
+ALK-Abelló A/S,ALK-B.CO,,DK,OMXC,Pharmaceuticals,true
+Gubra A/S,GUBRA.CO,,DK,OMXC,Life Sciences Tools and Services,true
+Novo Nordisk A/S,NOVO-B.CO,,DK,OMXC,Pharmaceuticals,true
+Pandora A/S,PNDORA.CO,,DK,OMXC,"Textiles, Apparel and Luxury Goods",true
+Zealand Pharma A/S,ZEAL.CO,,DK,OMXC,Biotechnology,true
+Alma Media Oyj,ALMA.HE,,FI,OMXH,Media,true
+Konecranes Plc,KCR.HE,,FI,OMXH,Machinery,true
+Marimekko Oyj,MEKKO.HE,,FI,OMXH,"Textiles, Apparel and Luxury Goods",true
+Olvi Oyj,OLVAS.HE,,FI,OMXH,Beverages,true
+Orion Oyj,ORNBV.HE,,FI,OMXH,Pharmaceuticals,true
+Puuilo Oyj,PUUILO.HE,,FI,OMXH,Broadline Retail,true
+Revenio Group Oyj,REG1V.HE,,FI,OMXH,Health Care Equipment and Supplies,true
+Vaisala Oyj,VAIAS.HE,,FI,OMXH,"Electronic Equipment, Instruments and Components",true
+Betsson AB (publ),BETS-B.ST,,SE,OMXS,"Hotels, Restaurants and Leisure",true
+CellaVision AB (publ),CEVI.ST,,SE,OMXS,Health Care Equipment and Supplies,true
+Dynavox Group AB (publ),DYVOX.ST,,SE,OMXS,"Technology Hardware, Storage and Peripherals",true
+Evolution AB (publ),EVO.ST,,SE,OMXS,"Hotels, Restaurants and Leisure",true
+Hemnet Group AB (publ),HEM.ST,,SE,OMXS,Interactive Media and Services,true
+Karnov Group AB (publ),KAR.ST,,SE,OMXS,Interactive Media and Services,true
+MedCap AB (publ),MCAP.ST,,SE,OMXS,Life Sciences Tools and Services,true
+RaySearch Laboratories AB (publ),RAY-B.ST,,SE,OMXS,Health Care Technology,true
+RVRC Holding AB (publ),RVRC.ST,,SE,OMXS,Specialty Retail,true
+Storytel AB (publ),STORY-B.ST,,SE,OMXS,Media,true
+Swedish Orphan Biovitrum AB (publ),SOBI.ST,,SE,OMXS,Biotechnology,true
+Truecaller AB (publ),TRUE-B.ST,,SE,OMXS,Software,true
+Cambi ASA,CAMBI.OL,,NO,OSLO,Machinery,true
+DOF Group ASA,DOFG.OL,,NO,OSLO,Energy Equipment and Services,true
+Höegh Autoliners ASA,HAUTO.OL,,NO,OSLO,Marine Transportation,true
+Medistim ASA,MEDI.OL,,NO,OSLO,Health Care Equipment and Supplies,true
+MPC Container Ships ASA,MPCC.OL,,NO,OSLO,Marine Transportation,true
+Norbit ASA,NORBT.OL,,NO,OSLO,"Electronic Equipment, Instruments and Components",true
+Norsk Hydro ASA,NHY.OL,,NO,OSLO,Metals and Mining,true
+Pexip Holding ASA,PEXIP.OL,,NO,OSLO,Software,true
+Wallenius Wilhelmsen ASA,WAWI.OL,,NO,OSLO,Marine Transportation,true

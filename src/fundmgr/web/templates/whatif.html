@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}What-If Lab{% endblock %}
+{% block page_title %}What-If Lab{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">What-If Lab</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Generate a fresh portfolio from scratch — pick a fund profile (mandate + universe travel together),
+      a model, and how many runs should argue it out via majority-vote consensus.
+      Nothing here touches any fund's book or learnings.
+    </p>
+  </div>
+</div>
+
+<!-- ── Generator form ── -->
+<section class="card mb-5">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-blue-400" style="font-size:17px">auto_awesome</span>
+      <h2 class="card-title">New generation</h2>
+    </div>
+    <span class="text-xs text-slate-600">uses the profile's cached market data · costs LLM calls only</span>
+  </div>
+
+  <form id="whatif-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div>
+      <label class="kpi-label block">Fund profile</label>
+      <select id="f-profile" class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200">
+        {% for p in profiles %}
+        <option value="{{ p.config }}"
+                data-universe="{{ p.universe }}" data-mandate="{{ p.mandate }}"
+                data-benchmark="{{ p.benchmark }}" data-capital="{{ p.capital_sek }}"
+                data-default-model="{{ p.default_provider }}/{{ p.default_model }}"
+                data-default-n="{{ p.default_n_samples }}">
+          {{ p.name }}
+        </option>
+        {% endfor %}
+      </select>
+      <p id="profile-hint" class="text-[10px] text-slate-600 mt-1.5"></p>
+    </div>
+
+    <div>
+      <label class="kpi-label block">Model</label>
+      <select id="f-model" class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200">
+        <option value="">Profile default</option>
+        {% for m in model_options %}
+        <option value="{{ m.provider }}|{{ m.model_id }}">{{ m.label }}</option>
+        {% endfor %}
+      </select>
+      <p id="model-hint" class="text-[10px] text-slate-600 mt-1.5"></p>
+    </div>
+
+    <div>
+      <label class="kpi-label block">Runs (consensus)</label>
+      <select id="f-runs" class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200">
+        <option value="1">1 — single shot</option>
+        <option value="3" selected>3 — majority vote</option>
+        <option value="5">5 — strong consensus</option>
+      </select>
+      <p class="text-[10px] text-slate-600 mt-1.5">N parallel samples; a ticker needs &gt;half the runs to agree</p>
+    </div>
+
+    <div class="flex flex-col justify-between">
+      <label class="flex items-center gap-2 mt-5 text-sm text-slate-300 select-none cursor-pointer">
+        <input id="f-macro" type="checkbox" checked
+               class="rounded bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
+        Include fresh macro context
+      </label>
+      <button id="f-submit" type="submit"
+              class="mt-3 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed
+                     text-white text-sm font-semibold rounded-lg px-4 py-2 transition-colors">
+        Generate portfolio
+      </button>
+    </div>
+  </form>
+
+  <!-- Progress / error -->
+  <div id="job-progress" class="hidden mt-4 flex items-center gap-3 text-sm text-slate-400">
+    <svg class="animate-spin h-4 w-4 text-blue-400" viewBox="0 0 24 24" fill="none">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+    </svg>
+    <span id="job-progress-text">Generating…</span>
+  </div>
+  <div id="job-error" class="hidden mt-4 text-sm text-red-400"></div>
+</section>
+
+<!-- ── Fresh result ── -->
+<div id="fresh-result"></div>
+
+<!-- ── Past results ── -->
+<section class="card">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-slate-500" style="font-size:17px">history</span>
+      <h2 class="card-title">Past what-if runs</h2>
+    </div>
+    <span class="text-xs text-slate-600">{{ results|length }} stored</span>
+  </div>
+  {% if results %}
+  <div id="past-results" class="space-y-2"></div>
+  {% else %}
+  <p class="empty">No what-if runs yet — generate one above.</p>
+  {% endif %}
+</section>
+
+<script>
+  const PAST_RESULTS  = {{ results | tojson }};
+  const ACTIVE_JOB_ID = {{ active_job_id | tojson }};
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+
+  // ── Form hints ──────────────────────────────────────────────────────────
+  function refreshHints() {
+    const opt = $('f-profile').selectedOptions[0];
+    if (!opt) return;
+    $('profile-hint').textContent =
+      `universe ${opt.dataset.universe} · mandate ${opt.dataset.mandate} · ` +
+      `vs ${opt.dataset.benchmark} · ${Number(opt.dataset.capital).toLocaleString()} SEK`;
+    $('model-hint').textContent = $('f-model').value === ''
+      ? `profile default: ${opt.dataset.defaultModel}` : '';
+  }
+  $('f-profile').addEventListener('change', refreshHints);
+  $('f-model').addEventListener('change', refreshHints);
+  refreshHints();
+
+  // ── Result rendering (DOM-built; theses are model output, never innerHTML) ─
+  function sideBadge(side) {
+    const b = el('span', 'badge badge-' + side, side);
+    return b;
+  }
+
+  function resultCard(r, collapsed) {
+    const card = el('section', 'card mb-4');
+
+    // Header line
+    const head = el('div', 'flex flex-wrap items-center justify-between gap-2 cursor-pointer');
+    const left = el('div', 'flex flex-wrap items-center gap-2');
+    left.appendChild(el('span', 'font-display font-bold text-sm text-slate-100', r.profile.name));
+    left.appendChild(el('span', 'text-xs text-slate-500',
+      `${r.model.provider}/${r.model.model_id} · ${r.model.n_runs} run${r.model.n_runs > 1 ? 's' : ''}`));
+    if (r.sampling && r.sampling.failed > 0) {
+      left.appendChild(el('span', 'text-[10px] text-amber-400',
+        `${r.sampling.failed}/${r.sampling.requested} sample(s) failed`));
+    }
+    const right = el('div', 'flex items-center gap-3');
+    right.appendChild(el('span', 'text-xs text-slate-600', r.created_at + (r.elapsed_s ? ` · ${r.elapsed_s}s` : '')));
+    const chevron = el('span', 'material-symbols-outlined text-slate-600', collapsed ? 'expand_more' : 'expand_less');
+    chevron.style.fontSize = '18px';
+    right.appendChild(chevron);
+    head.appendChild(left);
+    head.appendChild(right);
+    card.appendChild(head);
+
+    // Body
+    const body = el('div', collapsed ? 'hidden mt-4' : 'mt-4');
+    card.appendChild(body);
+    head.addEventListener('click', () => {
+      body.classList.toggle('hidden');
+      chevron.textContent = body.classList.contains('hidden') ? 'expand_more' : 'expand_less';
+    });
+
+    // KPI strip
+    const kpis = el('div', 'grid grid-cols-2 md:grid-cols-4 gap-3 mb-4');
+    const kpi = (label, value, sub) => {
+      const k = el('div', 'kpi-card');
+      k.appendChild(el('p', 'kpi-label', label));
+      k.appendChild(el('p', 'kpi-value', value));
+      if (sub) k.appendChild(el('p', 'kpi-sub', sub));
+      return k;
+    };
+    kpis.appendChild(kpi('Positions', String(r.buy_count), `${r.invested_pct}% invested`));
+    kpis.appendChild(kpi('Cash target', `${r.cash_target_pct}%`, `of ${Number(r.profile.capital_sek).toLocaleString()} SEK`));
+    kpis.appendChild(kpi('Consensus', r.consensus ? `${r.model.n_runs}-run vote` : 'single shot',
+      r.consensus ? 'ticker needs >half the runs' : ''));
+    kpis.appendChild(kpi('Data', `${r.data.candidates_to_llm} candidates`,
+      `median age ${r.data.median_age_days ?? '?'}d` +
+      (r.data.stale_count ? ` · ${r.data.stale_count} stale` : '') +
+      (r.data.macro_included ? ' · macro ✓' : ' · no macro')));
+    body.appendChild(kpis);
+
+    // Market summary
+    if (r.market_summary) {
+      const ms = el('div', 'border-l-2 border-blue-500/40 pl-3 mb-4');
+      ms.appendChild(el('p', 'text-[10px] font-semibold uppercase tracking-wider text-slate-600 mb-1', 'Market read'));
+      ms.appendChild(el('p', 'text-sm text-slate-300 leading-relaxed', r.market_summary));
+      body.appendChild(ms);
+    }
+
+    // Actions table
+    const wrap = el('div', 'overflow-x-auto');
+    const table = el('table', 'data-table');
+    const thead = el('thead');
+    const hr = el('tr');
+    [['Ticker',''], ['Side',''], ['Weight','num'], ['≈SEK','num'], ['Conf','num'],
+     ['Votes','num'], ['Stop','num'], ['Status',''], ['Thesis','']].forEach(([h, c]) => {
+      const th = el('th', c, h); hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const tbody = el('tbody');
+    r.actions.forEach(a => {
+      const tr = el('tr', a.approved ? '' : 'opacity-45');
+      const tick = el('td');
+      tick.appendChild(el('div', 'font-semibold text-slate-200', a.ticker));
+      tick.appendChild(el('div', 'text-[10px] text-slate-600', a.name));
+      tr.appendChild(tick);
+      const sideTd = el('td'); sideTd.appendChild(sideBadge(a.side)); tr.appendChild(sideTd);
+      tr.appendChild(el('td', 'num', a.target_weight_pct ? a.target_weight_pct.toFixed(1) + '%' : '—'));
+      tr.appendChild(el('td', 'num', a.sek_estimate ? Number(a.sek_estimate).toLocaleString() : '—'));
+      tr.appendChild(el('td', 'num', a.confidence != null ? a.confidence.toFixed(2) : '—'));
+      tr.appendChild(el('td', 'num', a.votes != null ? `${a.votes}/${r.model.n_runs}` : '—'));
+      tr.appendChild(el('td', 'num', a.stop_loss_pct ? `-${a.stop_loss_pct}%` : '—'));
+      const st = el('td');
+      const stSpan = el('span', 'text-[10px] font-bold ' + (
+        a.status === 'APPROVED' ? 'text-emerald-400' :
+        a.status === 'CLIPPED'  ? 'text-amber-400'  : 'text-red-400'), a.status);
+      st.appendChild(stSpan);
+      if (a.reason) st.appendChild(el('div', 'text-[10px] text-slate-600 max-w-[160px]', a.reason));
+      tr.appendChild(st);
+      tr.appendChild(el('td', 'text-xs text-slate-400 leading-snug min-w-[260px]', a.thesis || ''));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    body.appendChild(wrap);
+
+    if (r.notes) {
+      const notes = el('p', 'text-xs text-slate-500 italic mt-3');
+      notes.textContent = 'Notes: ' + r.notes;
+      body.appendChild(notes);
+    }
+    return card;
+  }
+
+  // Past results
+  const pastWrap = $('past-results');
+  if (pastWrap) PAST_RESULTS.forEach(r => pastWrap.appendChild(resultCard(r, true)));
+
+  // ── Job submission + polling ────────────────────────────────────────────
+  let pollTimer = null;
+
+  function setBusy(busy, text) {
+    $('f-submit').disabled = busy;
+    $('job-progress').classList.toggle('hidden', !busy);
+    if (text) $('job-progress-text').textContent = text;
+  }
+
+  function pollJob(jobId) {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/whatif/api/jobs/${jobId}`);
+        if (!res.ok) { clearInterval(pollTimer); setBusy(false); return; }
+        const job = await res.json();
+        if (job.status === 'running') {
+          setBusy(true, `Generating… ${Math.round(job.elapsed_s)}s elapsed ` +
+            `(${job.params.n_runs} run${job.params.n_runs > 1 ? 's' : ''}, this can take a few minutes)`);
+        } else if (job.status === 'done') {
+          clearInterval(pollTimer); setBusy(false);
+          $('fresh-result').prepend(resultCard(job.result, false));
+        } else {
+          clearInterval(pollTimer); setBusy(false);
+          $('job-error').textContent = 'Generation failed: ' + (job.error || 'unknown error');
+          $('job-error').classList.remove('hidden');
+        }
+      } catch (e) { /* transient — keep polling */ }
+    }, 3000);
+  }
+
+  $('whatif-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    $('job-error').classList.add('hidden');
+    const modelVal = $('f-model').value;
+    const [provider, model_id] = modelVal ? modelVal.split('|') : [null, null];
+    const payload = {
+      profile: $('f-profile').value,
+      provider, model_id,
+      n_runs: parseInt($('f-runs').value, 10),
+      include_macro: $('f-macro').checked,
+    };
+    setBusy(true, 'Starting…');
+    try {
+      const res = await fetch('/whatif/api/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const {job_id} = await res.json();
+      pollJob(job_id);
+    } catch (e) {
+      setBusy(false);
+      $('job-error').textContent = 'Could not start generation: ' + e.message;
+      $('job-error').classList.remove('hidden');
+    }
+  });
+
+  // Resume polling if a job was already running when the page loaded
+  if (ACTIVE_JOB_ID) { setBusy(true, 'Generation in progress…'); pollJob(ACTIVE_JOB_ID); }
+</script>
+
+{% endblock %}

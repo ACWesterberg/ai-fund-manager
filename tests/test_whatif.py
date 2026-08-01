@@ -1,0 +1,382 @@
+"""Tests for the What-If Lab: profile discovery, synthetic clean-slate snapshot,
+consensus plumbing and the web routes. The LLM is always stubbed."""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from fundmgr.engine import whatif
+from fundmgr.engine.schema import Action, DecisionRun
+from fundmgr.state.store import Store
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+UNIVERSE_CSV = """name,yahoo_ticker,isin,country,exchange,sector,enabled
+Alfa AB,ALFA.ST,SE0001,SE,OMXS,Industrials,true
+Beta AB,BETA.ST,SE0002,SE,OMXS,Technology,true
+Gamma AB,GAMMA.ST,SE0003,SE,OMXS,Healthcare,true
+Delta AB,DELTA.ST,SE0004,SE,OMXS,Financials,false
+"""
+
+MANDATE = "You are a test fund manager. Buy good things."
+
+
+def _price_rows(n: int = 260, start: float = 100.0) -> list[dict]:
+    """Daily closes ending today so features are fresh (not stale)."""
+    rows = []
+    today = datetime.utcnow().date()
+    for i in range(n):
+        d = today - timedelta(days=n - 1 - i)
+        px = start + i * 0.1
+        rows.append({
+            "date": d.strftime("%Y-%m-%d"),
+            "open": px, "high": px * 1.01, "low": px * 0.99,
+            "close": px, "volume": 10_000 + i,
+        })
+    return rows
+
+
+@pytest.fixture
+def profile(tmp_path, monkeypatch):
+    """A complete fund profile on disk: config + mandate + universe + warm store."""
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir()
+    data_dir.mkdir()
+
+    (config_dir / "universe_test.csv").write_text(UNIVERSE_CSV)
+    (config_dir / "mandate_test.md").write_text(MANDATE)
+
+    db_path = data_dir / "fund_test.db"
+    cfg_yaml = f"""
+name: "🧪 Test Fund"
+capital_sek: 100000
+benchmark: "^OMXSPI"
+db_path: "{db_path}"
+mandate_path: "{config_dir / 'mandate_test.md'}"
+universe_path: "{config_dir / 'universe_test.csv'}"
+llm:
+  provider: openai
+  model_id: "gpt-5.6-sol"
+  n_samples: 3
+risk:
+  max_position_pct: 20
+  max_positions: 5
+  min_cash_pct: 5
+  max_cash_pct: 10
+  min_trade_sek: 1000
+  max_turnover_pct: 25
+  cold_start_cash_threshold: 80
+  cold_start_turnover_pct: 100
+screener:
+  top_n: 10
+"""
+    (config_dir / "config_test.yaml").write_text(cfg_yaml)
+
+    # Warm the store's price cache — this is what the what-if run reads.
+    store = Store(db_path)
+    store.initialise(100000)
+    for ticker in ("ALFA.ST", "BETA.ST", "GAMMA.ST"):
+        store.save_prices(ticker, _price_rows())
+
+    monkeypatch.setattr(whatif, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(whatif, "WHATIF_DIR", data_dir / "whatif")
+    return {"config_dir": config_dir, "data_dir": data_dir, "db_path": db_path}
+
+
+def _stub_consensus(actions: list[Action], vote_counts: dict | None = None, n: int = 3):
+    """Replace call_llm_consensus with a deterministic decision."""
+    def _fake(system, user, cfg):
+        decision = DecisionRun(
+            run_id="stub",
+            market_summary="Stubbed market read.",
+            actions=actions,
+            cash_target_pct=8.0,
+            notes="stub notes",
+        )
+        sampling = {"requested": n, "succeeded": n, "failed": 0, "errors": []}
+        return decision, decision.model_dump_json(), vote_counts, sampling
+    return _fake
+
+
+# ── Profile discovery ─────────────────────────────────────────────────────────
+
+def test_list_profiles_bundles_mandate_and_universe(profile):
+    profiles = whatif.list_profiles()
+    assert len(profiles) == 1
+    p = profiles[0]
+    assert p["config"] == "config_test.yaml"
+    assert p["name"] == "🧪 Test Fund"
+    assert p["universe"] == "universe_test.csv"
+    assert p["mandate"] == "mandate_test.md"
+    assert p["default_n_samples"] == 3
+
+
+def test_real_repo_profiles_pair_each_mandate_with_its_own_universe():
+    """The Buffett profile must not be generatable against the Nordic universe."""
+    profiles = whatif.list_profiles()
+    by_config = {p["config"]: p for p in profiles}
+    buffett = by_config["config_buffett_gpt.yaml"]
+    assert buffett["mandate"] == "mandate_buffett.md"
+    assert buffett["universe"] == "universe_buffett.csv"
+    main = by_config["config.yaml"]
+    assert main["universe"] == "universe.csv"
+
+
+@pytest.mark.parametrize("bad", ["../secrets.yaml", "/etc/passwd", "config.txt", "sub/config.yaml"])
+def test_profile_path_traversal_rejected(profile, bad):
+    with pytest.raises(ValueError):
+        whatif._load_profile_config(bad)
+
+
+# ── Generation ────────────────────────────────────────────────────────────────
+
+def test_generate_uses_clean_slate_snapshot(profile, monkeypatch):
+    """The prompt must describe an all-cash book, never the fund's real positions."""
+    captured = {}
+
+    def _capture(system, user, cfg):
+        captured["user"] = user
+        captured["cfg"] = cfg
+        decision = DecisionRun(
+            run_id="stub", market_summary="ok",
+            actions=[Action(ticker="ALFA.ST", side="buy", target_weight_pct=15,
+                            sek_estimate=15000, confidence=0.8, thesis="t")],
+            cash_target_pct=8.0,
+        )
+        return decision, "{}", {"ALFA.ST": 3}, {"requested": 3, "succeeded": 3, "failed": 0, "errors": []}
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
+    whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+
+    assert "No open positions — fully in cash." in captured["user"]
+    assert "NAV: 100,000 SEK  |  Cash: 100,000 SEK (100.0%)" in captured["user"]
+    # 100% cash trips the cold-start turnover lift
+    assert captured["cfg"].risk.max_turnover_pct == 100
+
+
+def test_generate_applies_model_override_and_run_count(profile, monkeypatch):
+    seen = {}
+
+    def _capture(system, user, cfg):
+        seen["provider"] = cfg.llm.provider
+        seen["model_id"] = cfg.llm.model_id
+        seen["n_samples"] = cfg.llm.n_samples
+        decision = DecisionRun(
+            run_id="stub", market_summary="ok",
+            actions=[Action(ticker="ALFA.ST", side="buy", target_weight_pct=10,
+                            sek_estimate=10000, confidence=0.7, thesis="t")],
+            cash_target_pct=8.0,
+        )
+        return decision, "{}", None, {"requested": 5, "succeeded": 5, "failed": 0, "errors": []}
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
+    result = whatif.generate_whatif(
+        "config_test.yaml", provider="anthropic", model_id="claude-opus-4-8",
+        n_runs=5, include_macro=False,
+    )
+
+    assert seen == {"provider": "anthropic", "model_id": "claude-opus-4-8", "n_samples": 5}
+    assert result["model"]["provider"] == "anthropic"
+    assert result["model"]["n_runs"] == 5
+
+
+def test_n_runs_is_clamped(profile, monkeypatch):
+    seen = {}
+
+    def _capture(system, user, cfg):
+        seen["n"] = cfg.llm.n_samples
+        decision = DecisionRun(
+            run_id="stub", market_summary="ok",
+            actions=[Action(ticker="ALFA.ST", side="buy", target_weight_pct=10,
+                            sek_estimate=10000, confidence=0.7, thesis="t")],
+            cash_target_pct=8.0,
+        )
+        return decision, "{}", None, {"requested": 1, "succeeded": 1, "failed": 0, "errors": []}
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
+    whatif.generate_whatif("config_test.yaml", n_runs=99, include_macro=False)
+    assert seen["n"] == whatif.MAX_RUNS
+
+
+def test_generate_records_votes_and_guardrail_verdicts(profile, monkeypatch):
+    actions = [
+        # Approved
+        Action(ticker="ALFA.ST", side="buy", target_weight_pct=15,
+               sek_estimate=15000, confidence=0.85, thesis="good"),
+        # Rejected — not in universe
+        Action(ticker="NOPE.ST", side="buy", target_weight_pct=10,
+               sek_estimate=10000, confidence=0.6, thesis="bad"),
+        # Clipped — above max_position_pct of 20
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=35,
+               sek_estimate=35000, confidence=0.75, thesis="big"),
+    ]
+    votes = {"ALFA.ST": 3, "NOPE.ST": 2, "BETA.ST": 2}
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(actions, votes))
+
+    result = whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+
+    by_ticker = {a["ticker"]: a for a in result["actions"]}
+    assert by_ticker["ALFA.ST"]["status"] == "APPROVED"
+    assert by_ticker["ALFA.ST"]["votes"] == 3
+    assert by_ticker["ALFA.ST"]["name"] == "Alfa AB"
+    assert by_ticker["NOPE.ST"]["status"] == "REJECTED"
+    assert "not in universe" in by_ticker["NOPE.ST"]["reason"]
+    assert by_ticker["BETA.ST"]["status"] == "CLIPPED"
+    assert by_ticker["BETA.ST"]["target_weight_pct"] == 20
+    assert result["consensus"] is True
+    assert result["market_summary"] == "Stubbed market read."
+
+
+def test_generate_never_writes_to_the_fund_book(profile, monkeypatch):
+    """A what-if run must leave recommendations, NAV history and positions untouched."""
+    store = Store(profile["db_path"])
+    before = (
+        store.count_recommendations(),
+        len(store.get_nav_history()),
+        len(store.get_positions()),
+        store.get_cash(),
+    )
+
+    actions = [Action(ticker="ALFA.ST", side="buy", target_weight_pct=15,
+                      sek_estimate=15000, confidence=0.85, thesis="good")]
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(actions, {"ALFA.ST": 3}))
+    whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+
+    after = (
+        store.count_recommendations(),
+        len(store.get_nav_history()),
+        len(store.get_positions()),
+        store.get_cash(),
+    )
+    assert before == after
+
+
+def test_result_is_persisted_and_listed(profile, monkeypatch):
+    actions = [Action(ticker="ALFA.ST", side="buy", target_weight_pct=15,
+                      sek_estimate=15000, confidence=0.85, thesis="good")]
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(actions, {"ALFA.ST": 3}))
+
+    result = whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+    path = whatif.WHATIF_DIR / f"{result['id']}.json"
+    assert path.exists()
+    assert json.loads(path.read_text())["id"] == result["id"]
+
+    listed = whatif.list_results()
+    assert [r["id"] for r in listed] == [result["id"]]
+
+
+def test_generate_errors_when_no_cached_data(tmp_path, monkeypatch):
+    """A profile whose fund has never run has no cached prices to work from."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "universe_cold.csv").write_text(UNIVERSE_CSV)
+    (config_dir / "mandate_cold.md").write_text(MANDATE)
+    (config_dir / "config_cold.yaml").write_text(f"""
+name: "Cold Fund"
+capital_sek: 50000
+db_path: "{tmp_path / 'cold.db'}"
+mandate_path: "{config_dir / 'mandate_cold.md'}"
+universe_path: "{config_dir / 'universe_cold.csv'}"
+""")
+    monkeypatch.setattr(whatif, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(whatif, "WHATIF_DIR", tmp_path / "whatif")
+
+    with pytest.raises(RuntimeError, match="No cached price data"):
+        whatif.generate_whatif("config_cold.yaml", include_macro=False)
+
+
+# ── Web routes ────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def client():
+    from fundmgr.web.app import app
+    return TestClient(app)
+
+
+def test_whatif_page_renders(client):
+    res = client.get("/whatif/")
+    assert res.status_code == 200
+    assert "What-If Lab" in res.text
+    # Every real profile is offered
+    assert "config_buffett_gpt.yaml" in res.text
+
+
+def test_generate_rejects_unknown_profile(client):
+    res = client.post("/whatif/api/generate", json={"profile": "config_nope.yaml"})
+    assert res.status_code == 400
+
+
+def test_generate_rejects_unknown_model(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "provider": "openai", "model_id": "gpt-fake",
+    })
+    assert res.status_code == 400
+
+
+def test_generate_rejects_out_of_range_run_count(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "n_runs": whatif.MAX_RUNS + 1,
+    })
+    assert res.status_code == 422
+
+
+def test_job_lifecycle_and_single_slot(client, monkeypatch):
+    """A job runs to completion, is pollable, and blocks a concurrent second job."""
+    import threading
+
+    from fundmgr.web import whatif as web_whatif
+
+    release = threading.Event()
+
+    def _slow_generate(**kwargs):
+        release.wait(timeout=5)
+        return {"id": "whatif-stub", "actions": [], "profile": {"name": "x"}}
+
+    monkeypatch.setattr(web_whatif, "generate_whatif", _slow_generate)
+    monkeypatch.setattr(web_whatif, "_job", None)
+
+    res = client.post("/whatif/api/generate", json={"profile": "config.yaml", "n_runs": 1})
+    assert res.status_code == 200
+    job_id = res.json()["job_id"]
+
+    assert client.get(f"/whatif/api/jobs/{job_id}").json()["status"] == "running"
+    # Second submission is refused while the first is in flight
+    assert client.post("/whatif/api/generate", json={"profile": "config.yaml"}).status_code == 409
+
+    release.set()
+    for _ in range(50):
+        job = client.get(f"/whatif/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        __import__("time").sleep(0.1)
+    assert job["status"] == "done"
+    assert job["result"]["id"] == "whatif-stub"
+
+
+def test_job_reports_generation_failure(client, monkeypatch):
+    from fundmgr.web import whatif as web_whatif
+
+    def _boom(**kwargs):
+        raise RuntimeError("no cached price data")
+
+    monkeypatch.setattr(web_whatif, "generate_whatif", _boom)
+    monkeypatch.setattr(web_whatif, "_job", None)
+
+    job_id = client.post("/whatif/api/generate",
+                         json={"profile": "config.yaml", "n_runs": 1}).json()["job_id"]
+    for _ in range(50):
+        job = client.get(f"/whatif/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        __import__("time").sleep(0.1)
+    assert job["status"] == "error"
+    assert "no cached price data" in job["error"]
+
+
+def test_unknown_job_id_is_404(client):
+    assert client.get("/whatif/api/jobs/deadbeef").status_code == 404

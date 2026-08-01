@@ -58,6 +58,10 @@ from fundmgr.web.paper import router as paper_router, live_router  # noqa: E402
 app.include_router(paper_router)
 app.include_router(live_router)
 
+# What-If Lab — generate a fresh hypothetical portfolio for any fund profile.
+from fundmgr.web.whatif import router as whatif_router  # noqa: E402
+app.include_router(whatif_router)
+
 # Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
 

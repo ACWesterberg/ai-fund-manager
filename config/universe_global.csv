@@ -5033,7 +5033,7 @@ H. Lundbeck A/S,0ABR.L,DK0061804697,GB,LSE,Unknown,true
 Kalray S.A.,0ABT.L,,GB,LSE,Unknown,true
 Odfjell Technology Ltd.,0ABV.L,BMG6716L1081,GB,LSE,Unknown,true
 Egetis Therapeutics AB,0ABW.L,,GB,LSE,Unknown,true
-Hemnet Group AB,0ABY.L,,GB,LSE,Unknown,true
+Hemnet Group AB,0ABY.L,,GB,LSE,Unknown,false
 Hydrogen Refueling Solutions,0ABZ.L,,GB,LSE,Unknown,true
 Hexagon Purus ASA,0AC1.L,NO0010904923,GB,LSE,Unknown,true
 VIB Vermoegen AG,0AC3.L,,GB,LSE,Unknown,true
@@ -10157,7 +10157,7 @@ Real Heart,HEART.ST,SE0006256798,SE,OMXS,Unknown,true
 HEBA Fastighets AB (publ),HEBA-B.ST,SE0017911480,SE,OMXS,Unknown,true
 Heimstaden AB Pfd.,HEIM-PREF.ST,SE0015949037,SE,OMXS,Unknown,true
 Heliospectra publ AB,HELIO.ST,SE0005933082,SE,OMXS,Unknown,true
-Hemnet Group AB,HEM.ST,SE0015671995,SE,OMXS,Technology,true
+Hemnet Group AB,HEM.ST,SE0015671995,SE,OMXS,Technology,false
 Vuxen Group AB,HERNO-B.ST,SE0017767494,SE,OMXS,Unknown,true
 Hexagon AB (publ),HEXA-B.ST,SE0015961909,SE,OMXS,Technology,true
 Hexicon AB,HEXI.ST,SE0004898799,SE,OMXS,Unknown,true

@@ -130,7 +130,7 @@ def _load_snapshot_rows(path: Path) -> list[dict[str, str]]:
 
 
 def _load_existing_meta() -> dict[str, dict[str, str]]:
-    """Preserve sector / fine-grained exchange from the current CSVs."""
+    """Preserve sector / fine-grained exchange / manual disables from the current CSVs."""
     meta: dict[str, dict[str, str]] = {}
     for path in (NORDIC_CSV, GLOBAL_CSV):
         if not path.is_file():
@@ -147,6 +147,11 @@ def _load_existing_meta() -> dict[str, dict[str, str]]:
                 exchange = row.get("exchange", "").strip()
                 if exchange:
                     prev["exchange"] = exchange
+                # A hand-disabled ticker stays disabled across syncs. The broker
+                # snapshot has no opinion on this — without the carry-forward,
+                # every sync would silently re-enable names we chose to drop.
+                if row.get("enabled", "").strip().lower() == "false":
+                    prev["enabled"] = "false"
                 meta[yahoo] = prev
     return meta
 
@@ -198,7 +203,7 @@ def _convert_row(row: dict[str, str], meta: dict[str, dict[str, str]]) -> dict[s
         "country": country,
         "exchange": exchange,
         "sector": sector,
-        "enabled": "true",
+        "enabled": prev.get("enabled", "true"),
     }
 
 

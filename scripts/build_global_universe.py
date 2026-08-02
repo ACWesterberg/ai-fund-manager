@@ -2438,7 +2438,6 @@ GLOBAL_TICKERS: list[tuple[str, str, str, str, str, str]] = [
     ("Atrium Ljungberg",        "ATLJ-B.ST","SE0000556463","SE","STOCKHOLM","Real Estate"),
     ("Cloetta",                 "CLA-B.ST","SE0009155211","SE","STOCKHOLM","Consumer Staples"),
     ("BioGaia",                 "BIOG-B.ST","SE0000435485","SE","STOCKHOLM","Healthcare"),
-    ("Hemnet Group",            "HEM.ST",  "SE0015670994","SE","STOCKHOLM","Technology"),
     ("Truecaller",              "TRUE-B.ST","SE0015810218","SE","STOCKHOLM","Technology"),
     ("Thule Group",             "THULE.ST","SE0006422390","SE","STOCKHOLM","Consumer Discretionary"),
     ("Nolato",                  "NOLA-B.ST","SE0000109811","SE","STOCKHOLM","Industrials"),

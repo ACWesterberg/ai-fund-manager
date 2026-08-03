@@ -32,12 +32,18 @@ _job_lock = threading.Lock()
 _job: dict | None = None  # {id, status: running|done|error, params, result, error, started}
 
 
+MAX_CAPITAL_SEK = 1_000_000_000  # sanity ceiling on the amount being placed
+
+
 class GenerateRequest(BaseModel):
     profile: str
     provider: str | None = None
     model_id: str | None = None
     n_runs: int = Field(default=1, ge=1, le=MAX_RUNS)
     include_macro: bool = True
+    # None = use the profile's own capital
+    capital_sek: float | None = Field(default=None, gt=0, le=MAX_CAPITAL_SEK)
+    deploy_full: bool = False
 
 
 def _run_job(job_id: str, req: GenerateRequest) -> None:
@@ -49,6 +55,8 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             model_id=req.model_id,
             n_runs=req.n_runs,
             include_macro=req.include_macro,
+            capital_sek=req.capital_sek,
+            deploy_full=req.deploy_full,
         )
         with _job_lock:
             if _job and _job["id"] == job_id:

@@ -270,6 +270,135 @@ def test_result_is_persisted_and_listed(profile, monkeypatch):
     assert [r["id"] for r in listed] == [result["id"]]
 
 
+# ── Amount to place / deployment mode ─────────────────────────────────────────
+
+def _capture_cfg(monkeypatch, seen: dict):
+    """Stub the LLM while recording the config the prompt was built with."""
+    def _fake(system, user, cfg):
+        seen["cfg"] = cfg
+        seen["user"] = user
+        decision = DecisionRun(
+            run_id="stub", market_summary="ok",
+            actions=[Action(ticker="ALFA.ST", side="buy", target_weight_pct=15,
+                            sek_estimate=9000, confidence=0.8, thesis="t")],
+            cash_target_pct=0.0,
+        )
+        return decision, "{}", None, {"requested": 1, "succeeded": 1, "failed": 0, "errors": []}
+    monkeypatch.setattr(whatif, "call_llm_consensus", _fake)
+
+
+def test_capital_override_sets_the_placed_amount(profile, monkeypatch):
+    seen = {}
+    _capture_cfg(monkeypatch, seen)
+
+    result = whatif.generate_whatif("config_test.yaml", capital_sek=60000, include_macro=False)
+
+    assert seen["cfg"].capital_sek == 60000
+    # The synthetic book the model sees is the placed amount, not the profile's
+    assert "NAV: 60,000 SEK  |  Cash: 60,000 SEK (100.0%)" in seen["user"]
+    assert result["deployment"]["placed_sek"] == 60000
+    assert result["deployment"]["profile_capital_sek"] == 100000
+    assert result["deployment"]["amount_overridden"] is True
+
+
+def test_amount_defaults_to_profile_capital(profile, monkeypatch):
+    seen = {}
+    _capture_cfg(monkeypatch, seen)
+
+    result = whatif.generate_whatif("config_test.yaml", include_macro=False)
+
+    assert seen["cfg"].capital_sek == 100000
+    assert result["deployment"]["placed_sek"] == 100000
+    assert result["deployment"]["amount_overridden"] is False
+
+
+def test_full_deploy_lifts_turnover_cap_and_cash_floor(profile, monkeypatch):
+    seen = {}
+    _capture_cfg(monkeypatch, seen)
+
+    result = whatif.generate_whatif("config_test.yaml", deploy_full=True, include_macro=False)
+
+    risk = seen["cfg"].risk
+    assert risk.max_turnover_pct == 100.0
+    assert risk.min_cash_pct == 0.0
+    assert risk.max_cash_pct == 0.0  # or the guardrail would allow cash up to the ceiling
+    assert "Deploy the ENTIRE amount in this single run" in seen["user"]
+    assert result["deployment"]["full_deploy"] is True
+    assert result["cash_target_pct"] == 0.0
+
+
+def test_staged_deploy_keeps_the_cold_start_cap(profile, monkeypatch):
+    seen = {}
+    _capture_cfg(monkeypatch, seen)
+
+    result = whatif.generate_whatif("config_test.yaml", deploy_full=False, include_macro=False)
+
+    risk = seen["cfg"].risk
+    assert risk.max_turnover_pct == 100.0  # fixture's cold_start_turnover_pct
+    assert risk.min_cash_pct == 5.0        # mandate floor still applies
+    assert "Deploy the ENTIRE amount" not in seen["user"]
+    assert result["deployment"]["full_deploy"] is False
+
+
+def test_full_deploy_does_not_mutate_the_profile_defaults(profile, monkeypatch):
+    """The risk overrides are per-run — a later staged run must be unaffected."""
+    seen = {}
+    _capture_cfg(monkeypatch, seen)
+
+    whatif.generate_whatif("config_test.yaml", deploy_full=True, include_macro=False)
+    whatif.generate_whatif("config_test.yaml", deploy_full=False, include_macro=False)
+
+    assert seen["cfg"].risk.min_cash_pct == 5.0  # restored from the yaml, not leaked as 0
+
+
+@pytest.mark.parametrize("amount", [0, -5000])
+def test_non_positive_amount_rejected(profile, monkeypatch, amount):
+    _capture_cfg(monkeypatch, {})
+    with pytest.raises(ValueError, match="greater than 0"):
+        whatif.generate_whatif("config_test.yaml", capital_sek=amount, include_macro=False)
+
+
+def test_amount_below_min_trade_size_rejected_before_spending_calls(profile, monkeypatch):
+    """min_trade_sek is 1000 in the fixture — 500 SEK can never trade."""
+    called = {"n": 0}
+
+    def _should_not_run(system, user, cfg):
+        called["n"] += 1
+        raise AssertionError("LLM must not be called for an unusable amount")
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _should_not_run)
+    with pytest.raises(ValueError, match="below this profile's minimum trade size"):
+        whatif.generate_whatif("config_test.yaml", capital_sek=500, include_macro=False)
+    assert called["n"] == 0
+
+
+def test_undersized_amount_is_flagged_but_still_runs(profile, monkeypatch):
+    """Between the hard floor and the comfortable floor, run but warn.
+
+    Fixture: min_trade 1000, max_position_pct 20 → comfortable floor 5000 SEK.
+    """
+    seen = {}
+    _capture_cfg(monkeypatch, seen)
+
+    result = whatif.generate_whatif("config_test.yaml", capital_sek=3000, include_macro=False)
+
+    assert result["deployment"]["undersized"] is True
+    assert result["deployment"]["comfortable_floor_sek"] == 5000
+
+
+def test_deployment_floors_derive_from_risk_config(profile):
+    cfg = whatif._load_profile_config("config_test.yaml")
+    hard, comfortable = whatif.deployment_floors(cfg)
+    assert hard == 1000              # min_trade_sek
+    assert comfortable == 5000       # 1000 / 0.20
+
+
+def test_profiles_expose_the_minimum_sensible_amount(profile):
+    p = whatif.list_profiles()[0]
+    assert p["min_amount_sek"] == 5000
+    assert p["staged_turnover_pct"] == 100
+
+
 def test_generate_errors_when_no_cached_data(tmp_path, monkeypatch):
     """A profile whose fund has never run has no cached prices to work from."""
     config_dir = tmp_path / "config"
@@ -323,6 +452,40 @@ def test_generate_rejects_out_of_range_run_count(client):
         "profile": "config.yaml", "n_runs": whatif.MAX_RUNS + 1,
     })
     assert res.status_code == 422
+
+
+@pytest.mark.parametrize("amount", [0, -1, 10_000_000_000])
+def test_generate_rejects_invalid_amount(client, amount):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "capital_sek": amount,
+    })
+    assert res.status_code == 422
+
+
+def test_deployment_options_reach_the_engine(client, monkeypatch):
+    from fundmgr.web import whatif as web_whatif
+
+    seen = {}
+
+    def _capture(**kwargs):
+        seen.update(kwargs)
+        return {"id": "whatif-stub", "actions": [], "profile": {"name": "x"}}
+
+    monkeypatch.setattr(web_whatif, "generate_whatif", _capture)
+    monkeypatch.setattr(web_whatif, "_job", None)
+
+    job_id = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "capital_sek": 25000, "deploy_full": True, "n_runs": 1,
+    }).json()["job_id"]
+
+    for _ in range(50):
+        job = client.get(f"/whatif/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        __import__("time").sleep(0.1)
+
+    assert seen["capital_sek"] == 25000
+    assert seen["deploy_full"] is True
 
 
 def test_job_lifecycle_and_single_slot(client, monkeypatch):

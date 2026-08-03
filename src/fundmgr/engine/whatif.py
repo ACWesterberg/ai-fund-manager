@@ -54,6 +54,17 @@ MODEL_OPTIONS: list[dict] = [
 
 MAX_RUNS = 5  # cap on consensus samples per what-if generation
 
+# Deployment directive appended to the user message when the full-deploy toggle
+# is on. The rendered risk-limits block already carries the lifted caps; this
+# states the intent in words so the model doesn't hedge into cash anyway.
+_FULL_DEPLOY_DIRECTIVE = (
+    "\n\n## Deployment Instruction\n"
+    "Deploy the ENTIRE amount in this single run. Hold no cash back: the cash "
+    "target is 0% and there is no staged-entry turnover cap. Size positions so "
+    "the approved buys account for essentially all of NAV. Do not phase in over "
+    "future runs — this is a one-shot allocation of the full amount."
+)
+
 
 def list_profiles() -> list[dict]:
     """Fund profiles = the config/*.yaml files. Each bundles mandate + universe
@@ -66,6 +77,9 @@ def list_profiles() -> list[dict]:
         except Exception:
             continue
         llm = raw.get("llm", {})
+        risk = raw.get("risk", {})
+        min_trade = float(risk.get("min_trade_sek", 2500))
+        max_pos_pct = float(risk.get("max_position_pct", 18))
         profiles.append({
             "config": path.name,
             "name": raw.get("name") or path.stem.replace("config_", "").replace("config", "main"),
@@ -76,6 +90,10 @@ def list_profiles() -> list[dict]:
             "default_provider": llm.get("provider", "openai"),
             "default_model": llm.get("model_id", ""),
             "default_n_samples": llm.get("n_samples", 1),
+            # Smallest amount that still supports a max-weight position clearing
+            # the min trade size — the form warns below this.
+            "min_amount_sek": round(min_trade / (max_pos_pct / 100)) if max_pos_pct > 0 else round(min_trade),
+            "staged_turnover_pct": float(risk.get("cold_start_turnover_pct", 50)),
         })
     return profiles
 
@@ -115,25 +133,49 @@ def _freshness(features: dict) -> dict:
     }
 
 
+def deployment_floors(cfg: AppConfig) -> tuple[float, float]:
+    """(hard_floor, comfortable_floor) in SEK for the amount being placed.
+
+    Below the hard floor no trade can clear risk.min_trade_sek at all. Below the
+    comfortable floor a position sized at the max single-name weight still comes
+    out under the min trade size, so the book degenerates to a couple of names.
+    """
+    hard = cfg.risk.min_trade_sek
+    comfortable = (
+        cfg.risk.min_trade_sek / (cfg.risk.max_position_pct / 100)
+        if cfg.risk.max_position_pct > 0 else hard
+    )
+    return hard, comfortable
+
+
 def generate_whatif(
     config_name: str,
     provider: str | None = None,
     model_id: str | None = None,
     n_runs: int = 1,
     include_macro: bool = True,
+    capital_sek: float | None = None,
+    deploy_full: bool = False,
 ) -> dict:
     """
     Generate a hypothetical from-scratch portfolio for one fund profile.
 
     provider/model_id override the profile's configured LLM (both or neither);
-    n_runs sets consensus sampling (1 = single shot). Blocking — call from a
-    background thread in the web layer.
+    n_runs sets consensus sampling (1 = single shot).
+
+    capital_sek overrides how much is being placed (defaults to the profile's
+    own capital). deploy_full puts the whole amount to work in this one run —
+    it lifts the staged-entry turnover cap to 100% and drops the cash floor to
+    zero, so the result is a fully-invested book rather than a first tranche.
+
+    Blocking — call from a background thread in the web layer.
     """
     started = time.time()
     n_runs = max(1, min(MAX_RUNS, int(n_runs)))
 
     cfg = _load_profile_config(config_name)
     profile_name = cfg.display_name
+    profile_capital = cfg.capital_sek
 
     # Model override + sample count. copy so the module-level config cache in
     # load_config callers is never mutated.
@@ -143,6 +185,22 @@ def generate_whatif(
         cfg.llm.provider = provider
         cfg.llm.model_id = model_id
     cfg.llm.n_samples = n_runs
+
+    # Amount to place
+    if capital_sek is not None:
+        capital_sek = float(capital_sek)
+        if capital_sek <= 0:
+            raise ValueError("Amount to place must be greater than 0.")
+        cfg.capital_sek = capital_sek
+
+    hard_floor, comfortable_floor = deployment_floors(cfg)
+    if cfg.capital_sek < hard_floor:
+        raise ValueError(
+            f"{cfg.capital_sek:,.0f} SEK is below this profile's minimum trade size "
+            f"({hard_floor:,.0f} SEK) — no trade could clear it. Place at least "
+            f"{comfortable_floor:,.0f} SEK for a workable book."
+        )
+    undersized = cfg.capital_sek < comfortable_floor
 
     store = Store(cfg.db_path)
 
@@ -168,19 +226,29 @@ def generate_whatif(
         except Exception:
             macro_block = ""  # macro is context, not a hard dependency
 
-    # Synthetic clean-slate book: full capital, zero positions. cash_pct = 100
-    # trips the same cold-start turnover lift the real run would get.
+    # Synthetic clean-slate book: the full amount in cash, zero positions.
     snap = PortfolioSnapshot(positions=[], cash_sek=cfg.capital_sek)
-    effective_cfg = cfg
-    if snap.cash_pct >= cfg.risk.cold_start_cash_threshold:
-        effective_cfg = copy.copy(cfg)
-        effective_cfg.risk = copy.copy(cfg.risk)
+
+    effective_cfg = copy.copy(cfg)
+    effective_cfg.risk = copy.copy(cfg.risk)
+    if deploy_full:
+        # Put everything to work now: no staged-entry cap, no cash held back.
+        # max_cash_pct goes to 0 too, otherwise the guardrail would happily
+        # approve a cash target up to the mandate's ceiling.
+        effective_cfg.risk.max_turnover_pct = 100.0
+        effective_cfg.risk.min_cash_pct = 0.0
+        effective_cfg.risk.max_cash_pct = 0.0
+    elif snap.cash_pct >= cfg.risk.cold_start_cash_threshold:
+        # Staged: same cold-start turnover lift the real run would get, so this
+        # reads as a realistic first tranche rather than the whole portfolio.
         effective_cfg.risk.max_turnover_pct = cfg.risk.cold_start_turnover_pct
 
     run_id = f"whatif-{datetime.utcnow().strftime('%Y-%m-%d')}-{uuid.uuid4().hex[:6]}"
     system_msg, user_msg, _fields = build_prompt(
         effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block
     )
+    if deploy_full:
+        user_msg += _FULL_DEPLOY_DIRECTIVE
 
     decision, _raw, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, effective_cfg)
 
@@ -230,6 +298,16 @@ def generate_whatif(
             "universe": cfg.universe_path.name,
             "benchmark": cfg.benchmark,
             "capital_sek": cfg.capital_sek,
+        },
+        "deployment": {
+            "placed_sek": cfg.capital_sek,
+            "profile_capital_sek": profile_capital,
+            "amount_overridden": capital_sek is not None and capital_sek != profile_capital,
+            "full_deploy": deploy_full,
+            "turnover_cap_pct": effective_cfg.risk.max_turnover_pct,
+            "min_cash_pct": effective_cfg.risk.min_cash_pct,
+            "undersized": undersized,
+            "comfortable_floor_sek": round(comfortable_floor),
         },
         "model": {
             "provider": cfg.llm.provider,

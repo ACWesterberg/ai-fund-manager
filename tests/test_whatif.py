@@ -3,6 +3,7 @@ consensus plumbing and the web routes. The LLM is always stubbed."""
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 
 import pytest
@@ -433,6 +434,30 @@ def test_whatif_page_renders(client):
     assert "What-If Lab" in res.text
     # Every real profile is offered
     assert "config_buffett_gpt.yaml" in res.text
+
+
+def test_amount_field_accepts_realistic_amounts(client):
+    """Guards a subtle HTML5 trap: with a numeric `step`, browsers only accept
+    values matching min + n*step, so step=1000 off min=1 rejects every round
+    amount ("Ange ett giltigt värde" / "Enter a valid value") — including the
+    prefilled profile defaults.
+    """
+    html = client.get("/whatif/").text
+    tag = re.search(r'<input id="f-amount"[^>]*>', html)
+    assert tag, "amount input not found"
+    attrs = dict(re.findall(r'(\w+)="([^"]*)"', tag.group(0)))
+
+    step = attrs.get("step", "1")
+    minimum = float(attrs.get("min", 0))
+
+    if step != "any":
+        step_val = float(step)
+        # Every amount a user could plausibly type must satisfy the step rule,
+        # as must each profile's own capital (the prefilled value).
+        amounts = [1000, 13889, 25000, 50000, 90000, 150000, 1_000_000]
+        amounts += [float(p["capital_sek"]) for p in whatif.list_profiles()]
+        bad = [a for a in amounts if abs((a - minimum) % step_val) > 1e-9]
+        assert not bad, f'step="{step}" with min="{minimum}" rejects: {sorted(set(bad))}'
 
 
 def test_generate_rejects_unknown_profile(client):

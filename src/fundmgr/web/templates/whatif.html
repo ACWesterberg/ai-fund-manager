@@ -68,7 +68,11 @@
     <div>
       <label class="kpi-label block">Amount to place (SEK)</label>
       <div class="flex gap-2">
-        <input id="f-amount" type="number" min="1" step="1000" inputmode="numeric"
+        <!-- step="any": with a numeric step the browser validates against
+             min + n*step, so a step of 1000 off a min of 1 rejects every round
+             amount (90000, 1000000, …) with "enter a valid value". Bounds are
+             enforced server-side; this field just takes the number. -->
+        <input id="f-amount" type="number" min="1" step="any" inputmode="numeric"
                class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200">
         <button id="f-amount-reset" type="button" title="Reset to the profile's own capital"
                 class="shrink-0 px-2 text-slate-500 hover:text-slate-300 border border-slate-700/60 rounded-lg">

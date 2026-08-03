@@ -15,18 +15,23 @@ def format_action_list(
     snap: PortfolioSnapshot,
     features: dict[str, TickerFeatures],
     cfg: AppConfig,
+    vote_counts: dict[str, int] | None = None,
+    n_samples: int = 1,
 ) -> str:
     nav = snap.nav_sek
     lines: list[str] = []
 
+    consensus_mode = vote_counts is not None and n_samples > 1
+    consensus_tag = f"  ({n_samples}-run consensus)" if consensus_mode else ""
+
     lines.append("═" * 60)
-    lines.append(f"  Weekly Action List — {datetime.utcnow().strftime('%Y-%m-%d')}")
+    lines.append(f"  Weekly Action List — {datetime.utcnow().strftime('%Y-%m-%d')}{consensus_tag}")
     lines.append(f"  Run ID: {decision.run_id}")
     lines.append("═" * 60)
     lines.append("")
 
     # Market summary
-    lines.append("  Market summary (GPT-5.5):")
+    lines.append("  Market summary (GPT-5.6-sol):")
     for sentence in decision.market_summary.split(". "):
         if sentence.strip():
             lines.append(f"  \"{sentence.strip()}.\"")
@@ -38,6 +43,12 @@ def format_action_list(
     holds = [a for a in guardrail.approved_actions if a.side == "hold"]
 
     total_turnover = 0.0
+
+    def _vote_badge(ticker: str) -> str:
+        if not consensus_mode:
+            return ""
+        v = vote_counts.get(ticker, 0)  # type: ignore[union-attr]
+        return f"  [{v}/{n_samples}]"
 
     if buys:
         lines.append("  ── BUYS " + "─" * 50)
@@ -51,7 +62,7 @@ def format_action_list(
             conf_bar = "█" * round(a.confidence * 5)
             lines.append(
                 f"  BUY  {a.ticker:<16} {shares_str:<12} {price_str:<14}"
-                f"≈ {a.sek_estimate:>7,.0f} SEK  fee {fee:.2f}  [{conf_bar:<5}] {a.confidence:.2f}"
+                f"≈ {a.sek_estimate:>7,.0f} SEK  fee {fee:.2f}  [{conf_bar:<5}] {a.confidence:.2f}{_vote_badge(a.ticker)}"
             )
             lines.append(f"       → {a.thesis}")
             if a.stop_loss_pct:
@@ -70,7 +81,7 @@ def format_action_list(
             conf_bar = "█" * round(a.confidence * 5)
             lines.append(
                 f"  SELL {a.ticker:<16} {shares_str:<12} {price_str:<14}"
-                f"≈ {a.sek_estimate:>7,.0f} SEK  fee {fee:.2f}  [{conf_bar:<5}] {a.confidence:.2f}"
+                f"≈ {a.sek_estimate:>7,.0f} SEK  fee {fee:.2f}  [{conf_bar:<5}] {a.confidence:.2f}{_vote_badge(a.ticker)}"
             )
             lines.append(f"       → {a.thesis}")
         lines.append("")
@@ -80,7 +91,7 @@ def format_action_list(
         for a in sorted(holds, key=lambda x: x.ticker):
             feat = features.get(a.ticker)
             price_str = f"{feat.last_price:.2f} SEK" if feat else "n/a"
-            lines.append(f"  HOLD {a.ticker:<16}  {price_str:<12}  {a.thesis[:70]}")
+            lines.append(f"  HOLD {a.ticker:<16}  {price_str:<12}  {a.thesis[:70]}{_vote_badge(a.ticker)}")
         lines.append("")
 
     # Vetoed actions

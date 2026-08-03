@@ -38,9 +38,10 @@
     /* ── Nav links ── */
     .nav-link {
       display: flex; align-items: center; gap: 10px;
-      padding: 7px 10px; border-radius: 8px;
+      padding: 9px 10px; border-radius: 8px;
       font-size: 13px; font-weight: 500; color: #64748b;
       text-decoration: none; transition: background .15s, color .15s;
+      min-height: 40px;
     }
     .nav-link:hover { background: rgba(255,255,255,.05); color: #cbd5e1; }
     .nav-link.active { background: rgba(59,130,246,.12); color: #60a5fa; }
@@ -52,14 +53,14 @@
       border-radius: 14px; padding: 16px 18px;
     }
     .kpi-label {
-      font-size: 10px; font-weight: 600; letter-spacing: .06em;
+      font-size: 11px; font-weight: 600; letter-spacing: .05em;
       text-transform: uppercase; color: #475569; margin-bottom: 6px;
     }
     .kpi-value {
       font-family: Manrope, sans-serif; font-size: 22px; font-weight: 800;
       color: #f1f5f9; line-height: 1.15; letter-spacing: -.5px;
     }
-    .kpi-sub { font-size: 11px; color: #475569; margin-top: 3px; }
+    .kpi-sub { font-size: 12px; color: #475569; margin-top: 3px; }
 
     /* ── Content cards ── */
     .card {
@@ -77,19 +78,20 @@
 
     /* ── Period tabs ── */
     .ptab {
-      padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 600;
+      padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
       color: #475569; background: transparent; border: none; cursor: pointer;
-      transition: background .15s, color .15s;
+      transition: background .15s, color .15s; min-height: 32px;
     }
     .ptab:hover { color: #94a3b8; }
     .ptab.active { background: rgba(59,130,246,.15); color: #60a5fa; }
 
     /* ── Data tables ── */
-    .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .data-table thead th {
-      font-size: 10px; font-weight: 600; letter-spacing: .06em;
+      font-size: 11px; font-weight: 600; letter-spacing: .05em;
       text-transform: uppercase; color: #475569; padding: 8px 12px;
       border-bottom: 1px solid rgba(255,255,255,.06); text-align: left;
+      white-space: nowrap;
     }
     .data-table thead th.num { text-align: right; }
     .data-table tbody td {
@@ -126,6 +128,14 @@
 
     /* ── Empty state ── */
     .empty { font-size: 12px; color: #334155; text-align: center; padding: 24px 0; }
+
+    /* ── Sidebar nav scrollbar (thin, only when it overflows) ── */
+    #app-sidebar nav { scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.25) transparent; }
+    #app-sidebar nav::-webkit-scrollbar { width: 6px; }
+    #app-sidebar nav::-webkit-scrollbar-thumb {
+      background: rgba(148,163,184,.25); border-radius: 3px;
+    }
+    #app-sidebar nav::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.4); }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans antialiased">
@@ -144,7 +154,7 @@
       </a>
     </div>
 
-    <nav class="flex-1 px-3 py-4 space-y-0.5">
+    <nav class="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-0.5">
       <a href="/"             class="nav-link {% if active_page == 'portfolio'     %}active{% endif %}">
         <span class="material-symbols-outlined">area_chart</span>Portfolio
       </a>
@@ -157,17 +167,158 @@
       <a href="/universe" class="nav-link {% if active_page == 'universe' %}active{% endif %}">
         <span class="material-symbols-outlined">format_list_bulleted</span>Universe
       </a>
+      <a href="/learnings" class="nav-link {% if sim_prefix is not defined and active_page == 'learnings' %}active{% endif %}">
+        <span class="material-symbols-outlined">lightbulb</span>Learnings
+      </a>
+      <a href="/prompt" class="nav-link {% if sim_prefix is not defined and active_page == 'prompt' %}active{% endif %}">
+        <span class="material-symbols-outlined">tune</span>Prompt
+      </a>
+      <a href="/whatif" class="nav-link {% if active_page == 'whatif' %}active{% endif %}">
+        <span class="material-symbols-outlined">auto_awesome</span>What-If Lab
+      </a>
 
       <div class="my-3 border-t border-slate-800/50"></div>
       <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Simulation</p>
-      <a href="/sim" class="nav-link {% if sim_prefix is defined and active_page == 'portfolio' %}active{% endif %}"
+
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium text-slate-600">GPT-5.6-sol</p>
+      <a href="/sim" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'portfolio' %}active{% endif %}"
          style="color:#78716c">
-        <span class="material-symbols-outlined" style="color:#78716c">science</span>Global Fund
+        <span class="material-symbols-outlined" style="color:#78716c">science</span>Portfolio
       </a>
-      <a href="/sim/history" class="nav-link {% if sim_prefix is defined and active_page == 'history' %}active{% endif %}"
+      <a href="/sim/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'history' %}active{% endif %}"
          style="color:#78716c">
-        <span class="material-symbols-outlined" style="color:#78716c">history</span>Sim Decisions
+        <span class="material-symbols-outlined" style="color:#78716c">history</span>Decisions
       </a>
+      <a href="/sim/transactions" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'transactions' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">receipt_long</span>Trades
+      </a>
+      <a href="/sim/learnings" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'learnings' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">lightbulb</span>Learnings
+      </a>
+      <a href="/sim/prompt" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim' and active_page == 'prompt' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">tune</span>Prompt
+      </a>
+
+      <p class="px-2 mt-2 mb-0.5 text-[10px] font-medium" style="color:#6d28d9">Claude Opus</p>
+      <a href="/sim-claude" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'portfolio' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">psychology</span>Portfolio
+      </a>
+      <a href="/sim-claude/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'history' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">history</span>Decisions
+      </a>
+      <a href="/sim-claude/transactions" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'transactions' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">receipt_long</span>Trades
+      </a>
+      <a href="/sim-claude/learnings" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'learnings' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">lightbulb</span>Learnings
+      </a>
+      <a href="/sim-claude/prompt" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-claude' and active_page == 'prompt' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">tune</span>Prompt
+      </a>
+
+      <p class="px-2 mt-2 mb-0.5 text-[10px] font-medium" style="color:#78716c">Buffett Screen · GPT-5.6-sol</p>
+      <a href="/sim-buffett" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett' and active_page == 'portfolio' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">verified</span>Portfolio
+      </a>
+      <a href="/sim-buffett/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett' and active_page == 'history' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">history</span>Decisions
+      </a>
+      <a href="/sim-buffett/transactions" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett' and active_page == 'transactions' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">receipt_long</span>Trades
+      </a>
+      <a href="/sim-buffett/learnings" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett' and active_page == 'learnings' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">lightbulb</span>Learnings
+      </a>
+      <a href="/sim-buffett/prompt" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett' and active_page == 'prompt' %}active{% endif %}"
+         style="color:#78716c">
+        <span class="material-symbols-outlined" style="color:#78716c">tune</span>Prompt
+      </a>
+
+      <p class="px-2 mt-2 mb-0.5 text-[10px] font-medium" style="color:#7c3aed">Buffett Screen · Claude Opus</p>
+      <a href="/sim-buffett-claude" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett-claude' and active_page == 'portfolio' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">verified</span>Portfolio
+      </a>
+      <a href="/sim-buffett-claude/history" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett-claude' and active_page == 'history' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">history</span>Decisions
+      </a>
+      <a href="/sim-buffett-claude/transactions" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett-claude' and active_page == 'transactions' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">receipt_long</span>Trades
+      </a>
+      <a href="/sim-buffett-claude/learnings" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett-claude' and active_page == 'learnings' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">lightbulb</span>Learnings
+      </a>
+      <a href="/sim-buffett-claude/prompt" class="nav-link {% if sim_prefix is defined and sim_prefix == '/sim-buffett-claude' and active_page == 'prompt' %}active{% endif %}"
+         style="color:#7c3aed">
+        <span class="material-symbols-outlined" style="color:#7c3aed">tune</span>Prompt
+      </a>
+
+      <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Live</p>
+      <a href="/live" class="nav-link {% if active_page == 'live' %}active{% endif %}"
+         style="color:#0ea5e9">
+        <span class="material-symbols-outlined" style="color:#0ea5e9">radar</span>Live Sleeves
+      </a>
+      {% if book_prefix is defined and book_section == 'live' %}
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium" style="color:#0ea5e9">{{ book_name }}</p>
+      <a href="{{ book_prefix }}" class="nav-link {% if active_page == 'portfolio' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">area_chart</span>Portfolio
+      </a>
+      <a href="{{ book_prefix }}/transactions" class="nav-link {% if active_page == 'transactions' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">receipt_long</span>Trades
+      </a>
+      <a href="{{ book_prefix }}/learnings" class="nav-link {% if active_page == 'learnings' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">lightbulb</span>Learnings
+      </a>
+      <a href="{{ book_prefix }}/prompt" class="nav-link {% if active_page == 'prompt' %}active{% endif %}"
+         style="color:#38bdf8">
+        <span class="material-symbols-outlined" style="color:#38bdf8">gpp_maybe</span>Thesis &amp; kills
+      </a>
+      {% endif %}
+
+      <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Paper</p>
+      <a href="/paper" class="nav-link {% if active_page == 'paper' %}active{% endif %}"
+         style="color:#059669">
+        <span class="material-symbols-outlined" style="color:#059669">content_paste</span>Paper Portfolios
+      </a>
+      {% if book_prefix is defined and book_section == 'paper' %}
+      <p class="px-2 mt-1 mb-0.5 text-[10px] font-medium" style="color:#059669">{{ book_name }}</p>
+      <a href="{{ book_prefix }}" class="nav-link {% if active_page == 'portfolio' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">area_chart</span>Portfolio
+      </a>
+      <a href="{{ book_prefix }}/transactions" class="nav-link {% if active_page == 'transactions' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">receipt_long</span>Trades
+      </a>
+      <a href="{{ book_prefix }}/learnings" class="nav-link {% if active_page == 'learnings' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">lightbulb</span>Learnings
+      </a>
+      <a href="{{ book_prefix }}/prompt" class="nav-link {% if active_page == 'prompt' %}active{% endif %}"
+         style="color:#10b981">
+        <span class="material-symbols-outlined" style="color:#10b981">tune</span>Prompt
+      </a>
+      {% endif %}
     </nav>
 
     <div class="px-5 py-4 border-t border-slate-800/50">

@@ -1,17 +1,23 @@
+name: "🇸🇪 Nordic — REAL money"
 capital_sek: 50000
 cadence: weekly
 benchmark: "^OMXSPI"
+fx_to_sek: true   # Convert native market prices (yfinance) -> SEK at valuation,
+                  # so live/stop/NAV align with the SEK cost basis. Cash and
+                  # cost basis stay SEK (broker ISK settles in SEK).
 
 llm:
   provider: openai          # openai | anthropic
-  model_id: "gpt-5.5"       # locked to gpt-5.5-2026-04-23 for reproducibility; override in .env
+  model_id: "gpt-5.6-sol"   # locked to gpt-5.6-sol for reproducibility; override in .env
   temperature: 0.2
   max_tokens: 16000
   reasoning_effort: "high"  # low | medium | high — activates extended reasoning on gpt-5+/o-series
+  n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled
 
 risk:
   max_position_pct: 18      # max single-name weight
   max_positions: 10
+  max_sector_pct: 35        # max NAV weight in any single GICS sector
   min_cash_pct: 5           # always keep dry powder
   max_cash_pct: 10          # ISK taxed on total balance — minimise idle cash
   min_trade_sek: 2500       # below this, fees eat returns
@@ -51,7 +57,7 @@ screener:
 
 web:
   host: "0.0.0.0"
-  port: 8000
+  port: 8010
 
 reporting:
   currency: SEK

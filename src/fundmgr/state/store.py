@@ -107,11 +107,21 @@ CREATE TABLE IF NOT EXISTS fundamentals_cache (
     fetched_at  TEXT NOT NULL
 );
 
+-- Per-position stop-loss and take-profit levels, persisted independently of run history.
+-- Set when a buy is approved; cleared on full exit.
+CREATE TABLE IF NOT EXISTS position_stops (
+    ticker          TEXT PRIMARY KEY,
+    stop_pct        REAL,
+    take_profit_pct REAL,
+    set_at          TEXT NOT NULL
+);
+
 -- Per-ticker news sentiment cache.
 CREATE TABLE IF NOT EXISTS news_cache (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker          TEXT NOT NULL,
     headline        TEXT NOT NULL,
+    summary         TEXT,
     source_url      TEXT,
     published_at    TEXT,
     sentiment_label TEXT,   -- positive | negative | neutral
@@ -131,6 +141,17 @@ CREATE TABLE IF NOT EXISTS news_triggers (
     article_hash    TEXT NOT NULL UNIQUE  -- SHA1(ticker+headline) — deduplicates across polls
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_ticker ON news_triggers (ticker, triggered_at);
+CREATE TABLE IF NOT EXISTS daily_price_alerts (
+    ticker      TEXT NOT NULL,
+    alert_date  TEXT NOT NULL,
+    PRIMARY KEY (ticker, alert_date)
+);
+
+-- Small key-value store for fund-level flags (e.g. one-shot reminders).
+CREATE TABLE IF NOT EXISTS app_meta (
+    key     TEXT PRIMARY KEY,
+    value   TEXT NOT NULL
+);
 """
 
 
@@ -155,6 +176,19 @@ class Store:
     def _init_db(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+        # Migrations: add columns to existing tables that predate schema changes
+        for stmt in [
+            "ALTER TABLE position_stops ADD COLUMN take_profit_pct REAL",
+            "ALTER TABLE recommendations ADD COLUMN score REAL",
+            "ALTER TABLE recommendations ADD COLUMN sampling_log TEXT",
+            "ALTER TABLE transactions ADD COLUMN currency TEXT",
+            "ALTER TABLE news_cache ADD COLUMN summary TEXT",
+        ]:
+            with self._conn() as conn:
+                try:
+                    conn.execute(stmt)
+                except Exception:
+                    pass  # column already exists
 
     # ── Cash ──────────────────────────────────────────────────────────────────
 
@@ -175,6 +209,25 @@ class Store:
         new_balance = self.get_cash() + delta_sek
         self.set_cash(new_balance)
         return new_balance
+
+    # ── Meta flags ────────────────────────────────────────────────────────────
+
+    def get_meta(self, key: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def count_recommendations(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) AS n FROM recommendations").fetchone()["n"]
 
     # ── Positions ─────────────────────────────────────────────────────────────
 
@@ -203,12 +256,17 @@ class Store:
             )
 
     def apply_fill(self, txn: Transaction) -> None:
-        """Apply a fill to positions and cash atomically."""
+        """Apply a fill to positions and cash atomically.
+
+        Prices/fees are recorded in SEK — the broker (ISK) settles in SEK and
+        fills are entered in SEK (OCR reads Köpesumma/Totalt belopp). The
+        currency tag is metadata only; no conversion happens here.
+        """
         with self._conn() as conn:
-            # Record the transaction
+            # Record the transaction (price/fee native, plus its currency)
             conn.execute(
-                "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source, currency) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     txn.timestamp.isoformat(),
                     txn.ticker,
@@ -217,6 +275,7 @@ class Store:
                     txn.price_sek,
                     txn.fee_sek,
                     txn.source,
+                    txn.currency,
                 ),
             )
 
@@ -273,9 +332,88 @@ class Store:
                 price_sek=r["price_sek"],
                 fee_sek=r["fee_sek"],
                 source=r["source"],
+                currency=(r["currency"] if "currency" in r.keys() and r["currency"] else "SEK"),
             )
             for r in rows
         ]
+
+    def undo_last_fill(self) -> Transaction | None:
+        """
+        Atomically reverse the most recent transaction and return it, or None if none exists.
+        Restores position shares/avg_cost and cash to their pre-fill state.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM transactions ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+
+            txn = Transaction(
+                id=row["id"],
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                ticker=row["ticker"],
+                side=row["side"],
+                shares=float(row["shares"]),
+                price_sek=float(row["price_sek"]),
+                fee_sek=float(row["fee_sek"]),
+                source=row["source"],
+            )
+
+            pos = conn.execute(
+                "SELECT shares, avg_cost_sek FROM positions WHERE ticker = ?", (txn.ticker,)
+            ).fetchone()
+            cur_shares = float(pos["shares"]) if pos else 0.0
+            cur_avg    = float(pos["avg_cost_sek"]) if pos else 0.0
+
+            if txn.side == "buy":
+                # Reverse weighted average: recover old_shares and old_cost
+                old_shares = cur_shares - txn.shares
+                if old_shares <= 0:
+                    # Position didn't exist before this fill — remove it entirely
+                    conn.execute("DELETE FROM positions WHERE ticker = ?", (txn.ticker,))
+                else:
+                    old_avg = (cur_avg * cur_shares - txn.shares * txn.price_sek) / old_shares
+                    conn.execute(
+                        "UPDATE positions SET shares = ?, avg_cost_sek = ? WHERE ticker = ?",
+                        (old_shares, old_avg, txn.ticker),
+                    )
+                # Return cash that was spent
+                conn.execute(
+                    "UPDATE cash SET balance_sek = balance_sek + ? WHERE id = 1",
+                    (txn.gross_sek + txn.fee_sek,),
+                )
+            else:  # sell
+                # Restore shares; avg_cost unchanged on sells
+                old_shares = cur_shares + txn.shares
+                conn.execute(
+                    "UPDATE positions SET shares = ? WHERE ticker = ?",
+                    (old_shares, txn.ticker),
+                )
+                # Deduct proceeds that were credited
+                conn.execute(
+                    "UPDATE cash SET balance_sek = balance_sek - ? WHERE id = 1",
+                    (txn.gross_sek - txn.fee_sek,),
+                )
+
+            conn.execute("DELETE FROM transactions WHERE id = ?", (txn.id,))
+
+        return txn
+
+    def has_sent_daily_drop_alert(self, ticker: str, date: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM daily_price_alerts WHERE ticker = ? AND alert_date = ?",
+                (ticker, date),
+            ).fetchone()
+            return row is not None
+
+    def record_daily_drop_alert(self, ticker: str, date: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO daily_price_alerts (ticker, alert_date) VALUES (?, ?)",
+                (ticker, date),
+            )
 
     def total_fees_paid(self) -> float:
         with self._conn() as conn:
@@ -287,8 +425,8 @@ class Store:
     def save_recommendation(self, rec: RecommendationLog) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO recommendations (run_id, timestamp, prompt_snapshot, llm_response, guardrail_log, actions_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO recommendations (run_id, timestamp, prompt_snapshot, llm_response, guardrail_log, actions_json, sampling_log) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     rec.run_id,
                     rec.timestamp.isoformat(),
@@ -296,6 +434,7 @@ class Store:
                     rec.llm_response,
                     rec.guardrail_log,
                     rec.actions_json,
+                    rec.sampling_log,
                 ),
             )
 
@@ -314,6 +453,7 @@ class Store:
             llm_response=row["llm_response"],
             guardrail_log=row["guardrail_log"],
             actions_json=row["actions_json"],
+            sampling_log=row["sampling_log"] or "",
         )
 
     def get_recommendation_by_run_id(self, run_id: str) -> RecommendationLog | None:
@@ -331,6 +471,7 @@ class Store:
             llm_response=row["llm_response"],
             guardrail_log=row["guardrail_log"],
             actions_json=row["actions_json"],
+            sampling_log=row["sampling_log"] or "",
         )
 
     # ── NAV history ───────────────────────────────────────────────────────────
@@ -361,18 +502,215 @@ class Store:
             for r in rows
         ]
 
+    # ── DSPy / MIPRO scoring and export ───────────────────────────────────────
+
+    def score_runs(self, min_days: int = 7) -> list[dict]:
+        """
+        Score completed weekly runs by excess return vs benchmark over the
+        following week.  Only scores runs that are at least min_days old and
+        have no score yet.
+
+        Returns a list of dicts: {run_id, timestamp, score, nav_start, nav_end}.
+        """
+        import json as _json
+        from datetime import datetime, timedelta
+
+        cutoff = (datetime.utcnow() - timedelta(days=min_days)).strftime("%Y-%m-%d")
+
+        with self._conn() as conn:
+            runs = conn.execute(
+                "SELECT run_id, timestamp FROM recommendations "
+                "WHERE score IS NULL AND substr(timestamp, 1, 10) <= ? "
+                "ORDER BY timestamp ASC",
+                (cutoff,),
+            ).fetchall()
+            nav_rows = conn.execute(
+                "SELECT date, portfolio_nav_sek, benchmark_value FROM nav_history ORDER BY date ASC"
+            ).fetchall()
+
+        if not nav_rows:
+            return []
+
+        nav_by_date = {r["date"]: r for r in nav_rows}
+        nav_dates = sorted(nav_by_date.keys())
+
+        def nearest_nav(target_date: str) -> dict | None:
+            """Return the NAV row closest to target_date (within ±3 days)."""
+            best, best_delta = None, 999
+            for d in nav_dates:
+                delta = abs((datetime.strptime(d, "%Y-%m-%d") - datetime.strptime(target_date, "%Y-%m-%d")).days)
+                if delta < best_delta:
+                    best, best_delta = nav_by_date[d], delta
+            return best if best_delta <= 3 else None
+
+        scored = []
+        for run in runs:
+            run_date = run["timestamp"][:10]
+            run_dt = datetime.strptime(run_date, "%Y-%m-%d")
+            end_date = (run_dt + timedelta(days=7)).strftime("%Y-%m-%d")
+
+            nav_start = nearest_nav(run_date)
+            nav_end   = nearest_nav(end_date)
+            if nav_start is None or nav_end is None:
+                continue
+
+            nav_ret   = nav_end["portfolio_nav_sek"] / nav_start["portfolio_nav_sek"] - 1
+            bench_ret = nav_end["benchmark_value"]   / nav_start["benchmark_value"]   - 1
+            score     = round(nav_ret - bench_ret, 6)
+
+            with self._conn() as conn:
+                conn.execute(
+                    "UPDATE recommendations SET score = ? WHERE run_id = ?",
+                    (score, run["run_id"]),
+                )
+            scored.append({
+                "run_id":    run["run_id"],
+                "timestamp": run["timestamp"],
+                "nav_start": nav_start["portfolio_nav_sek"],
+                "nav_end":   nav_end["portfolio_nav_sek"],
+                "score":     score,
+            })
+        return scored
+
+    def export_dspy(self, output_path: str) -> int:
+        """
+        Export all scored recommendations to a JSONL file for DSPy/MIPRO.
+
+        Each line: {run_id, timestamp, score, system_message, user_message, llm_response}
+
+        Returns the number of examples written.
+        """
+        import json as _json
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT run_id, timestamp, prompt_snapshot, llm_response, score "
+                "FROM recommendations WHERE score IS NOT NULL ORDER BY timestamp ASC"
+            ).fetchall()
+
+        count = 0
+        with open(output_path, "w") as f:
+            for r in rows:
+                try:
+                    snap = _json.loads(r["prompt_snapshot"])
+                except Exception:
+                    continue
+                example = {
+                    "run_id":           r["run_id"],
+                    "timestamp":        r["timestamp"],
+                    "score":            r["score"],
+                    "snapshot_version": snap.get("snapshot_version", 1),
+                    # Flat — exact replay / audit (always present)
+                    "system_message":   snap.get("system_message", ""),
+                    "user_message":     snap.get("user_message", ""),
+                    # Fielded + regime — present for v2+, null for legacy v1 rows
+                    "fields":           snap.get("fields"),
+                    "regime":           snap.get("regime"),
+                    "llm_response":     r["llm_response"],
+                }
+                f.write(_json.dumps(example) + "\n")
+                count += 1
+        return count
+
+    def get_rejection_stats(self) -> dict:
+        """Aggregate the two rates the Refine gate depends on, across all runs:
+
+          - malformed-sample rate (from sampling_log): how often individual
+            consensus samples fail to parse — the case Refine would retry.
+          - guardrail drop/clip rate (from guardrail_log): how often the model
+            proposes actions that violate hard limits — the case Refine could
+            pre-empt before guardrails clip/reject them.
+
+        High either rate ⇒ Refine may pay for its call-volume cost; low ⇒ not
+        worth it. Pure measurement, no decision baked in.
+        """
+        import json as _json
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT sampling_log, guardrail_log FROM recommendations"
+            ).fetchall()
+
+        runs = runs_with_failure = 0
+        samples_requested = samples_failed = 0
+        verdicts_total = verdicts_rejected = verdicts_clipped = 0
+
+        for r in rows:
+            runs += 1
+            if r["sampling_log"]:
+                try:
+                    s = _json.loads(r["sampling_log"])
+                    samples_requested += s.get("requested", 0)
+                    samples_failed += s.get("failed", 0)
+                    if s.get("failed", 0):
+                        runs_with_failure += 1
+                except Exception:
+                    pass
+            if r["guardrail_log"]:
+                try:
+                    for v in _json.loads(r["guardrail_log"]):
+                        verdicts_total += 1
+                        if v.get("status") == "REJECTED":
+                            verdicts_rejected += 1
+                        elif v.get("status") == "CLIPPED":
+                            verdicts_clipped += 1
+                except Exception:
+                    pass
+
+        def pct(num: int, den: int) -> float:
+            return round(100 * num / den, 2) if den else 0.0
+
+        return {
+            "runs": runs,
+            "samples_requested": samples_requested,
+            "samples_failed": samples_failed,
+            "sample_failure_pct": pct(samples_failed, samples_requested),
+            "runs_with_any_failure": runs_with_failure,
+            "guardrail_verdicts": verdicts_total,
+            "guardrail_rejected": verdicts_rejected,
+            "guardrail_clipped": verdicts_clipped,
+            "guardrail_reject_pct": pct(verdicts_rejected, verdicts_total),
+            "guardrail_clip_pct": pct(verdicts_clipped, verdicts_total),
+        }
+
+    def get_decisions_for_ticker(self, ticker: str, limit: int = 3) -> list[dict]:
+        """Most recent decisions on a ticker (newest first), for stop-loss review.
+
+        Returns dicts: {timestamp, action, confidence, thesis, price_at_decision}.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT r.timestamp AS timestamp, do.action AS action, do.confidence AS confidence, "
+                "do.thesis AS thesis, do.price_at_decision AS price_at_decision "
+                "FROM decision_outcomes do JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.ticker = ? ORDER BY r.timestamp DESC LIMIT ?",
+                (ticker.upper(), limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Decision outcomes ─────────────────────────────────────────────────────
 
-    def seed_outcomes_for_run(self, run_id: str, actions_json: str) -> None:
-        """Seed unevaluated outcome rows when a run is saved, for later evaluation."""
+    def seed_outcomes_for_run(
+        self,
+        run_id: str,
+        actions_json: str,
+        prices: dict[str, float] | None = None,
+    ) -> None:
+        """Seed unevaluated outcome rows when a run is saved, for later evaluation.
+
+        `prices` maps ticker -> share price (native currency) at decision time.
+        Tickers without a known price get NULL — the evaluator skips them —
+        rather than a wrong value like the trade's SEK estimate.
+        """
         import json as _json
         actions = _json.loads(actions_json)
+        prices = prices or {}
         with self._conn() as conn:
             for a in actions:
                 conn.execute(
                     "INSERT OR IGNORE INTO decision_outcomes "
                     "(run_id, ticker, action, confidence, price_at_decision, thesis) VALUES (?, ?, ?, ?, ?, ?)",
-                    (run_id, a["ticker"], a["side"], a.get("confidence"), a.get("sek_estimate"), a.get("thesis")),
+                    (run_id, a["ticker"], a["side"], a.get("confidence"), prices.get(a["ticker"]), a.get("thesis")),
                 )
 
     def update_outcome(self, outcome: "DecisionOutcome") -> None:
@@ -409,9 +747,82 @@ class Store:
                 id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
                 action=r["action"], confidence=r["confidence"],
                 price_at_decision=r["price_at_decision"], thesis=r["thesis"],
+                decision_date=r["run_ts"][:10],
             )
             for r in rows
         ]
+
+    def get_evaluated_outcomes(self) -> list["DecisionOutcome"]:
+        """Return all retrospectively evaluated outcomes with their run dates (optimizer training data)."""
+        from fundmgr.state.models import DecisionOutcome as DO
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
+                "JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.outperformed IS NOT NULL"
+            ).fetchall()
+        return [
+            DO(
+                id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
+                action=r["action"], confidence=r["confidence"],
+                price_at_decision=r["price_at_decision"],
+                price_at_evaluation=r["price_at_evaluation"],
+                benchmark_return_pct=r["benchmark_return_pct"],
+                position_return_pct=r["position_return_pct"],
+                outperformed=bool(r["outperformed"]),
+                evaluation_date=r["evaluation_date"],
+                thesis=r["thesis"],
+                decision_date=r["run_ts"][:10],
+            )
+            for r in rows
+        ]
+
+    def get_all_outcomes(self) -> list["DecisionOutcome"]:
+        """Every outcome row (evaluated or pending) with its run date — used by repair-outcomes."""
+        from fundmgr.state.models import DecisionOutcome as DO
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
+                "JOIN recommendations r ON do.run_id = r.run_id"
+            ).fetchall()
+        return [
+            DO(
+                id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
+                action=r["action"], confidence=r["confidence"],
+                price_at_decision=r["price_at_decision"],
+                price_at_evaluation=r["price_at_evaluation"],
+                benchmark_return_pct=r["benchmark_return_pct"],
+                position_return_pct=r["position_return_pct"],
+                outperformed=bool(r["outperformed"]) if r["outperformed"] is not None else None,
+                evaluation_date=r["evaluation_date"],
+                thesis=r["thesis"],
+                decision_date=r["run_ts"][:10],
+            )
+            for r in rows
+        ]
+
+    def set_outcome_price_at_decision(self, outcome_id: int, price: float | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE decision_outcomes SET price_at_decision = ? WHERE id = ?",
+                (price, outcome_id),
+            )
+
+    def clear_outcome_evaluation(self, outcome_id: int) -> None:
+        """Reset an evaluated outcome back to pending so it can be re-evaluated."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE decision_outcomes SET price_at_evaluation = NULL, "
+                "benchmark_return_pct = NULL, position_return_pct = NULL, "
+                "outperformed = NULL, evaluation_date = NULL WHERE id = ?",
+                (outcome_id,),
+            )
+
+    def deactivate_all_learnings(self) -> int:
+        """Deactivate every active learning (used after repairing corrupted outcome data)."""
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE learnings SET is_active = 0 WHERE is_active = 1")
+            return cur.rowcount
 
     def get_calibration_stats(self) -> dict:
         """Return accuracy stats by confidence bucket for use in learnings generation."""
@@ -511,6 +922,43 @@ class Store:
             ).fetchone()
         return row["d"] if row and row["d"] else None
 
+    def tickers_with_price_cache(self, symbols: list[str]) -> set[str]:
+        """Return subset of symbols that have at least one cached price bar."""
+        if not symbols:
+            return set()
+        found: set[str] = set()
+        chunk_size = 500
+        with self._conn() as conn:
+            for i in range(0, len(symbols), chunk_size):
+                chunk = symbols[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"SELECT DISTINCT ticker FROM price_cache WHERE ticker IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                found.update(r["ticker"] for r in rows)
+        return found
+
+    def close_near(
+        self, ticker: str, target_date: str, max_delta_days: int = 7
+    ) -> tuple[str, float] | None:
+        """Cached (date, close) whose date is closest to target_date, within a tolerance.
+
+        Used to evaluate a decision over a fixed horizon (decision_date + N days)
+        rather than at whatever moment the run happens, so outcomes are
+        comparable. Returns None if the cache has nothing near the target.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT date, close, ABS(JULIANDAY(date) - JULIANDAY(?)) AS delta "
+                "FROM price_cache WHERE ticker = ? AND close IS NOT NULL "
+                "ORDER BY delta ASC LIMIT 1",
+                (target_date, ticker),
+            ).fetchone()
+        if not row or row["delta"] is None or row["delta"] > max_delta_days:
+            return None
+        return row["date"], float(row["close"])
+
     def save_benchmark(self, rows: list[dict]) -> None:
         """rows: list of {date, close}."""
         now = datetime.utcnow().isoformat()
@@ -534,19 +982,33 @@ class Store:
         return [dict(r) for r in rows]
 
     def save_news_sentiment(self, ticker: str, items: list[dict]) -> None:
-        """items: list of {headline, source_url, published_at, sentiment_label, sentiment_score}."""
+        """items: news dicts. Tolerant of source shape — financedata rows use
+        different/absent keys (e.g. no source_url), so normalise with defaults."""
         now = datetime.utcnow().isoformat()
+        rows = [
+            {
+                "ticker": ticker,
+                "headline": item.get("headline") or item.get("title") or "",
+                "summary": item.get("summary") or item.get("description"),
+                "source_url": item.get("source_url") or item.get("url") or item.get("link"),
+                "published_at": item.get("published_at") or item.get("published"),
+                "sentiment_label": item.get("sentiment_label") or item.get("label"),
+                "sentiment_score": item.get("sentiment_score") if item.get("sentiment_score") is not None else item.get("score"),
+                "fetched_at": now,
+            }
+            for item in items
+        ]
         with self._conn() as conn:
             conn.executemany(
-                "INSERT INTO news_cache (ticker, headline, source_url, published_at, sentiment_label, sentiment_score, fetched_at) "
-                "VALUES (:ticker, :headline, :source_url, :published_at, :sentiment_label, :sentiment_score, :fetched_at)",
-                [{**item, "ticker": ticker, "fetched_at": now} for item in items],
+                "INSERT INTO news_cache (ticker, headline, summary, source_url, published_at, sentiment_label, sentiment_score, fetched_at) "
+                "VALUES (:ticker, :headline, :summary, :source_url, :published_at, :sentiment_label, :sentiment_score, :fetched_at)",
+                rows,
             )
 
     def get_recent_news(self, ticker: str, since_date: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT headline, published_at, sentiment_label, sentiment_score FROM news_cache "
+                "SELECT headline, summary, published_at, sentiment_label, sentiment_score FROM news_cache "
                 "WHERE ticker = ? AND fetched_at >= ? ORDER BY fetched_at DESC",
                 (ticker, since_date),
             ).fetchall()
@@ -627,6 +1089,77 @@ class Store:
             ).fetchall()
         return {r["ticker"]: json.loads(r["data_json"]) for r in rows}
 
+    # ── Position stops ────────────────────────────────────────────────────────
+
+    def set_position_stop(
+        self,
+        ticker: str,
+        stop_pct: float | None = None,
+        take_profit_pct: float | None = None,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO position_stops (ticker, stop_pct, take_profit_pct, set_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(ticker) DO UPDATE SET "
+                "stop_pct = excluded.stop_pct, take_profit_pct = excluded.take_profit_pct, set_at = excluded.set_at",
+                (ticker, stop_pct, take_profit_pct, datetime.utcnow().isoformat()),
+            )
+
+    def clear_position_stop(self, ticker: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM position_stops WHERE ticker = ?", (ticker,))
+
+    def get_position_stops(self) -> dict[str, dict]:
+        """Return {ticker: {stop_pct, take_profit_pct}} for all stored positions."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT ticker, stop_pct, take_profit_pct FROM position_stops").fetchall()
+        return {
+            r["ticker"]: {
+                "stop_pct": float(r["stop_pct"]) if r["stop_pct"] is not None else None,
+                "take_profit_pct": float(r["take_profit_pct"]) if r["take_profit_pct"] is not None else None,
+            }
+            for r in rows
+        }
+
+    def get_effective_stops(self) -> dict[str, dict]:
+        """Stops for held positions, falling back to the level the fund decided
+        at buy time when none was explicitly persisted.
+
+        Positions bought under older code never had their stop_loss_pct written
+        to position_stops. This recovers them from the most recent recommendation
+        action carrying a stop/take-profit, so stop checks aren't silently blind
+        to those holdings. Explicit position_stops always take precedence.
+        """
+        import json as _json
+
+        stops = self.get_position_stops()
+        held = {p.ticker for p in self.get_positions()}
+        missing = held - {t for t, lv in stops.items() if lv.get("stop_pct") is not None}
+        if not missing:
+            return stops
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT actions_json FROM recommendations ORDER BY timestamp DESC"
+            ).fetchall()
+        for r in rows:
+            if not missing:
+                break
+            try:
+                actions = _json.loads(r["actions_json"])
+            except Exception:
+                continue
+            for a in actions:
+                tk = (a.get("ticker") or "").upper()
+                if tk in missing and (a.get("stop_loss_pct") or a.get("take_profit_pct")):
+                    stops[tk] = {
+                        "stop_pct": a.get("stop_loss_pct"),
+                        "take_profit_pct": a.get("take_profit_pct"),
+                        "from_recommendation": True,
+                    }
+                    missing.discard(tk)
+        return stops
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def is_initialised(self) -> bool:
@@ -636,3 +1169,48 @@ class Store:
         if self.is_initialised():
             raise RuntimeError("Portfolio already initialised — use 'fund status' to inspect.")
         self.set_cash(capital_sek)
+
+    # Fund state + history — wiped on reset. Market-data caches are NOT in this
+    # list (they're regime-neutral and expensive to refetch).
+    _STATE_TABLES = (
+        "positions",
+        "transactions",
+        "recommendations",
+        "nav_history",
+        "decision_outcomes",
+        "learnings",
+        "position_stops",
+        "news_triggers",
+        "daily_price_alerts",
+        "app_meta",
+    )
+    _CACHE_TABLES = (
+        "price_cache",
+        "benchmark_cache",
+        "fundamentals_cache",
+        "news_cache",
+    )
+
+    def reset(self, capital_sek: float, purge_cache: bool = False) -> dict[str, int]:
+        """Wipe all portfolio state + decision history and re-initialise to a
+        fresh `capital_sek` balance, as if the fund just started.
+
+        Market-data caches (prices, benchmark, fundamentals, news) are preserved
+        by default since they're regime-neutral and costly to refetch; pass
+        purge_cache=True to clear those too.
+
+        Returns {table: rows_deleted} for reporting.
+        """
+        tables = list(self._STATE_TABLES)
+        if purge_cache:
+            tables += list(self._CACHE_TABLES)
+
+        deleted: dict[str, int] = {}
+        with self._conn() as conn:
+            for t in tables:
+                cur = conn.execute(f"DELETE FROM {t}")
+                deleted[t] = cur.rowcount
+            # Reset cash to the fresh baseline (single-row table).
+            conn.execute("DELETE FROM cash")
+            conn.execute("INSERT INTO cash (id, balance_sek) VALUES (1, ?)", (capital_sek,))
+        return deleted

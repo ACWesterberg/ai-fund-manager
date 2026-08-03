@@ -9,8 +9,8 @@ from typing import Literal
 class Position:
     ticker: str
     shares: float
-    avg_cost_sek: float
-    current_price_sek: float = 0.0
+    avg_cost_sek: float          # SEK (broker settles in SEK)
+    current_price_sek: float = 0.0  # SEK — callers convert native→SEK before setting
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
@@ -62,10 +62,11 @@ class Transaction:
     ticker: str
     side: Literal["buy", "sell"]
     shares: float
-    price_sek: float
-    fee_sek: float
+    price_sek: float          # price in the stock's native currency
+    fee_sek: float            # fee in the stock's native currency
     source: Literal["fill", "recommended"]
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    currency: str = "SEK"     # native currency; cash is converted to SEK on apply
     id: int | None = None
 
     @property
@@ -99,6 +100,7 @@ class RecommendationLog:
     llm_response: str      # raw LLM text response
     guardrail_log: str     # JSON log of guardrail decisions
     actions_json: str      # final actions after guardrails applied
+    sampling_log: str = "" # JSON: {requested, succeeded, failed, errors} per-run sample health
     id: int | None = None
 
 
@@ -116,6 +118,7 @@ class DecisionOutcome:
     outperformed: bool | None = None
     evaluation_date: str | None = None
     thesis: str | None = None
+    decision_date: str | None = None  # run date (YYYY-MM-DD), from the recommendation timestamp
     id: int | None = None
 
     @property

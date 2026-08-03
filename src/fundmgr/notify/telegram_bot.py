@@ -9,6 +9,9 @@ Commands:
   /report        — performance report
   /stops         — check stop-loss thresholds
   /universe      — list enabled tickers
+  /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
+  /review [TICKER] — stop-loss review (no ticker = scan all breaches)
+  /setcash AMOUNT — correct the cash balance (SEK)
   /help          — show this message
 
 Photo messages:
@@ -50,6 +53,10 @@ FUND_BIN = ROOT / ".venv" / "bin" / "fund"
 
 # Pending vision-extracted fills awaiting user confirmation: chat_id -> data dict
 _pending_fills: dict[int, dict] = {}
+
+# Active paper/mirror book per chat: when set, /pfill and Montrose screenshots
+# record into this paper slug instead of the main fund. Set via /ptarget.
+_active_book: dict[int, str] = {}
 
 # Lazy-loaded ISIN -> yahoo_ticker map
 _isin_map: dict[str, str] | None = None
@@ -229,6 +236,194 @@ async def cmd_universe(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     await _send(update, output)
 
 
+async def cmd_reject_rates(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    output = _run_cli("reject-rates", timeout=30)
+    await _send(update, output)
+
+
+async def cmd_setcash(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Usage: /setcash AMOUNT — correct the cash balance (SEK)."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /setcash AMOUNT\nExample: /setcash 10382")
+        return
+    output = _run_cli("set-cash", args[0], timeout=30)
+    await _send(update, output)
+
+
+# ── Paper / mirror portfolio commands ─────────────────────────────────────────
+
+def _all_books() -> dict[str, str]:
+    """{slug: name} for every paper/live book, or {} if unavailable."""
+    try:
+        from fundmgr import paper
+        return {m["slug"]: m["name"] for m in paper.list_portfolios()}
+    except Exception:
+        return {}
+
+
+def _book_name(slug: str) -> str | None:
+    """Display name for a book slug, or None if it can't be resolved."""
+    try:
+        from fundmgr import paper
+        meta, _ = paper.open_portfolio(slug)
+        return meta["name"]
+    except Exception:
+        return None
+
+
+def _active_book_line(chat_id: int) -> str:
+    slug = _active_book.get(chat_id)
+    if not slug:
+        return "⚠ No active book — fills go to the main fund. /ptarget <slug> to aim at a sleeve."
+    return f"📋 Active book: {_book_name(slug) or slug} ({slug})"
+
+
+async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/ptarget [SLUG] — route /pfill + Montrose screenshots into a paper book.
+
+    No argument shows the current target; 'off' clears it (fills go back to the
+    main fund)."""
+    args = context.args or []
+    chat_id = update.effective_chat.id
+    books = _all_books()
+
+    def _listing() -> str:
+        return "\n".join(f"  {s} — {n}" for s, n in books.items()) or "  (none yet — /plist)"
+
+    if not args:
+        cur = _active_book.get(chat_id)
+        if cur:
+            await update.message.reply_text(
+                f"📋 Active book: {books.get(cur, _book_name(cur) or cur)} ({cur})\n"
+                f"/pfill and screenshots record here. /ptarget off to switch back.")
+        else:
+            await update.message.reply_text(
+                "No active book set. Aim at a sleeve with /ptarget <slug>:\n" + _listing())
+        return
+
+    slug = args[0].strip().lower()
+    if slug in ("off", "none", "clear", "main"):
+        _active_book.pop(chat_id, None)
+        await update.message.reply_text("✅ Cleared — fills now record to the main fund.")
+        return
+    if books and slug not in books:
+        await update.message.reply_text(
+            f"No book '{slug}'. Available:\n{_listing()}")
+        return
+    _active_book[chat_id] = slug
+    name = books.get(slug) or _book_name(slug) or slug
+    await update.message.reply_text(
+        f"✅ Active book: <b>{name}</b> (<code>{slug}</code>)\n"
+        f"/pfill and Montrose screenshots now record here.\n"
+        f"/ptarget off to switch back to the main fund.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_pfill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/pfill TICKER SHARES PRICE FEE [buy|sell] — fill into the active paper book."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active paper book — set one with /ptarget <slug> first (/plist to see them)."
+        )
+        return
+    name = _book_name(slug) or slug
+    args = context.args or []
+    if len(args) < 4:
+        await update.message.reply_text(
+            "Usage: /pfill TICKER SHARES PRICE FEE [buy|sell]\n"
+            "Example: /pfill VRT 20 610.00 39.00\n\n"
+            f"(records into <b>{name}</b> — or send a Montrose screenshot)",
+            parse_mode="HTML",
+        )
+        return
+    ticker, shares, price, fee = args[0], args[1], args[2], args[3]
+    side = args[4] if len(args) > 4 else "buy"
+    output = _run_cli("paper-fill", slug, ticker, shares, price, fee, "--side", side, timeout=30)
+    # Lead with the book so a stale /ptarget can't slip a fill into the wrong sleeve.
+    await _send(update, f"📋 {name} ({slug})\n{output}")
+
+
+async def cmd_pretag(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/pretag OLD [NEW] — fix a mis-tagged holding in the active book.
+
+    Renames a position to its correct Yahoo symbol without touching cash. NEW
+    defaults to the plan's matching symbol (e.g. /pretag ENR → ENR.DE)."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active book — /ptarget <slug> first, then /pretag OLD [NEW].")
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Usage: /pretag OLD [NEW]\nExample: /pretag ENR   (→ ENR.DE)")
+        return
+    cli_args = ["paper-retag", slug, args[0]] + ([args[1]] if len(args) > 1 else [])
+    output = _run_cli(*cli_args, timeout=30)
+    await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
+
+
+async def cmd_psetcost(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/psetcost TICKER AVGCOST — correct a holding's SEK cost basis.
+
+    Use the broker's Inköpsvärde ÷ shares so dashboard P&L matches Montrose.
+    Cash adjusts by the difference; NAV stays consistent."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active book — /ptarget <slug> first, then /psetcost TICKER AVGCOST.")
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /psetcost TICKER AVGCOST\nExample: /psetcost GOOGL 3429\n"
+            "(AVGCOST = broker Inköpsvärde ÷ shares, SEK per share)")
+        return
+    output = _run_cli("paper-setcost", slug, args[0], args[1], timeout=30)
+    await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
+
+
+async def cmd_pstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/pstatus — snapshot of the active paper book."""
+    chat_id = update.effective_chat.id
+    slug = _active_book.get(chat_id)
+    if not slug:
+        await update.message.reply_text(
+            "No active paper book — set one with /ptarget <slug> first (/plist to see them)."
+        )
+        return
+    output = _run_cli("paper-status", slug, timeout=30)
+    await _send(update, output)
+
+
+async def cmd_plist(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/plist — list the paper/mirror portfolios and their NAV."""
+    output = _run_cli("paper-list", timeout=30)
+    await _send(update, output)
+
+
+async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/review [TICKER] — advisory stop-loss review.
+
+    With a ticker: review that position. With no ticker: scan all holdings and
+    review every position currently below its stop-loss.
+    """
+    args = context.args or []
+    if args:
+        await update.message.reply_text(f"⏳ Reviewing {args[0].upper()} (consensus)… ~1 min")
+        output = _run_cli("review-stop", args[0], "--no-notify", timeout=180)
+    else:
+        await update.message.reply_text("⏳ Scanning holdings for stop-loss breaches and reviewing… may take a few min")
+        output = _run_cli("review-stop", "--no-notify", timeout=600)
+    await _send(update, output)
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -240,31 +435,49 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/report — performance vs OMXSPI\n"
         "/stops — check stop-loss alerts\n"
         "/universe — list all enabled tickers\n"
+        "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
+        "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
+        "/setcash AMOUNT — correct the cash balance (SEK)\n"
+        "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
+        "/plist — list paper/mirror portfolios\n"
+        "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
+        "/pfill TICKER SHARES PRICE FEE [side] — fill into the active book\n"
+        "/pretag OLD [NEW] — fix a mis-tagged holding (e.g. ENR → ENR.DE)\n"
+        "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
+        "/pstatus — snapshot of the active book\n"
         "/help — this message\n\n"
-        "📸 Send a screenshot of a Montrose confirmation to auto-record a fill."
+        "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
+        "   (into the active mirror book if one is set with /ptarget)."
     )
 
 
 # ── Screenshot fill extraction ────────────────────────────────────────────────
 
 _OCR_SYSTEM_PROMPT = """\
-You are extracting trade fill details from OCR text taken from a Swedish/Nordic broker \
-confirmation screen (Montrose or similar). The text may have minor OCR artifacts.
+You are extracting trade fill details from OCR text of a Swedish broker order \
+confirmation (Avanza-style). The account is in SEK (ISK), so all monetary TOTALS \
+are SEK even when the stock trades in a foreign currency (e.g. DKK). OCR may have \
+minor artifacts.
 
-IMPORTANT — price field rules for Montrose screens:
-- Use "Avslutskurs" as price_sek — this is the actual execution price.
-- Ignore "Kurs" — that is the original limit/offer price, not what was paid.
-- If Avslutskurs is missing, derive price_sek = Köpesumma / Antal (total / shares).
+CRITICAL — currency rules:
+- "Kurs" / "Avslutskurs" is the execution price in the STOCK'S NATIVE currency
+  (e.g. DKK). DO NOT use it as the SEK amount.
+- "Köpesumma" (buy) — or "Försäljningssumma" / "Likvid" (sell) — is the SEK value
+  of the shares, EXCLUDING fees. This is the cost/proceeds basis.
+- Fees are in SEK and there may be SEVERAL: sum ALL of "Prel. courtage" /
+  "Courtage" and "Prel. växlingsavgift" / "Växlingsavgift" (FX fee).
 
 Return ONLY a valid JSON object — no other text, no markdown fences:
 {
-  "isin": "12-character ISIN (e.g. SE0000115446) — most reliable identifier, or null",
+  "isin": "12-char ISIN (e.g. DK0062498333) — most reliable identifier, or null",
   "company_name": "company name as shown",
   "side": "buy" or "sell",
   "shares": integer number of shares (Antal),
-  "price_sek": actual execution price per share in SEK (Avslutskurs, NOT Kurs),
-  "fee_sek": broker commission/courtage in SEK (Prel. courtage or Courtage),
-  "trade_date": "YYYY-MM-DD from Senaste avslut or Affärsdatum field, or null",
+  "amount_sek": SEK value of the shares excl. fees (Köpesumma / sale proceeds),
+  "fee_sek": TOTAL fees in SEK = courtage + växlingsavgift (sum every fee line),
+  "native_price": execution price per share in native currency (Avslutskurs), or null,
+  "native_currency": "DKK" / "SEK" / "EUR" / etc. for the Kurs, or null,
+  "trade_date": "YYYY-MM-DD from Senaste avslut / Affärsdatum, or null",
   "confidence": float 0.0-1.0
 }
 Set any field to null if it cannot be reliably determined.\
@@ -364,6 +577,17 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         )
         return
 
+    # Derive the SEK per-share price from the SEK amount (Köpesumma): the broker
+    # settles in SEK, so cost basis is amount_sek / shares — NOT the native Kurs.
+    try:
+        sh = float(data.get("shares") or 0)
+        amt = data.get("amount_sek")
+        if amt is not None and sh > 0:
+            data["price_sek"] = round(float(amt) / sh, 4)
+    except (TypeError, ValueError):
+        pass
+    data.setdefault("price_sek", None)
+
     # ISIN → name fallback → Yahoo ticker lookup
     isin = (data.get("isin") or "").strip().upper()
     company_name = (data.get("company_name") or "").strip()
@@ -395,8 +619,14 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     lines.append(f"Ticker: <b>{ticker or '?'}</b>")
     lines.append(f"Side: <b>{(data.get('side') or '?').upper()}</b>")
     lines.append(f"Shares: <b>{data.get('shares') or '?'}</b>")
-    lines.append(f"Price: <b>{data.get('price_sek') or '?'} SEK</b>")
-    lines.append(f"Fee: <b>{data.get('fee_sek') or '?'} SEK</b>")
+    price_line = f"Price: <b>{data.get('price_sek') or '?'} SEK/sh</b>"
+    nc = (data.get("native_currency") or "").upper()
+    if nc and nc != "SEK" and data.get("native_price"):
+        price_line += f"  (Kurs {data.get('native_price')} {nc})"
+    lines.append(price_line)
+    if data.get("amount_sek"):
+        lines.append(f"Amount: <b>{data.get('amount_sek')} SEK</b>")
+    lines.append(f"Fee: <b>{data.get('fee_sek') or '?'} SEK</b>  (courtage + FX)")
     if trade_date:
         lines.append(f"Date: <b>{trade_date}</b>")
     lines.append(f"\n{conf_bar} Confidence: {confidence:.0%}")
@@ -426,6 +656,9 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         "fee":        data.get("fee_sek", 0),
         "trade_date": trade_date,
     }
+
+    _book = _active_book.get(chat_id)
+    lines.append(f"\n📋 Records into: <b>{_book_name(_book) or _book if _book else 'main fund'}</b>")
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),
@@ -469,11 +702,16 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         )
         return
 
-    cli_args = ["fill", ticker, str(shares), str(price), str(fee), "--side", side]
+    slug = _active_book.get(chat_id)
+    if slug:
+        cli_args = ["paper-fill", slug, ticker, str(shares), str(price), str(fee), "--side", side]
+    else:
+        cli_args = ["fill", ticker, str(shares), str(price), str(fee), "--side", side]
     if trade_date:
         cli_args += ["--date", trade_date]
     output = _run_cli(*cli_args, timeout=30)
-    await query.edit_message_text(f"✅ Fill recorded!\n\n{output}")
+    dest = f" → {_book_name(slug) or slug}" if slug else " → main fund"
+    await query.edit_message_text(f"✅ Fill recorded{dest}!\n\n{output}")
 
 
 async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -501,6 +739,8 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     lines.append(f"Fee: <b>{data['fee']} SEK</b>")
     if data.get("trade_date"):
         lines.append(f"Date: <b>{data['trade_date']}</b>")
+    _book = _active_book.get(chat_id)
+    lines.append(f"\n📋 Records into: <b>{_book_name(_book) or _book if _book else 'main fund'}</b>")
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),
@@ -535,6 +775,15 @@ def main() -> None:
     app.add_handler(CommandHandler("report",   cmd_report))
     app.add_handler(CommandHandler("stops",    cmd_stops))
     app.add_handler(CommandHandler("universe", cmd_universe))
+    app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
+    app.add_handler(CommandHandler("review",   cmd_review))
+    app.add_handler(CommandHandler("setcash",  cmd_setcash))
+    app.add_handler(CommandHandler("plist",    cmd_plist))
+    app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
+    app.add_handler(CommandHandler("pfill",    cmd_pfill))
+    app.add_handler(CommandHandler("pretag",   cmd_pretag))
+    app.add_handler(CommandHandler("psetcost", cmd_psetcost))
+    app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

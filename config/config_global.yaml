@@ -1,4 +1,5 @@
-capital_sek: 50000
+name: "🌍 Global SIM — GPT-5.6-sol"
+capital_sek: 150000
 cadence: weekly
 benchmark: "URTH"           # iShares MSCI World ETF — proxy for MSCI World total return
 
@@ -8,13 +9,15 @@ universe_path: "config/universe_global.csv"
 
 llm:
   provider: openai
-  model_id: "gpt-5.5"
+  model_id: "gpt-5.6-sol"
   max_tokens: 16000
   reasoning_effort: "high"
+  n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled
 
 risk:
   max_position_pct: 18
   max_positions: 10
+  max_sector_pct: 35        # max NAV weight in any single GICS sector
   min_cash_pct: 5
   max_cash_pct: 10
   min_trade_sek: 2500
@@ -53,11 +56,30 @@ data:
 auto_fill: true            # paper-execute approved trades automatically after each run
 
 screener:
-  top_n: 75
+  top_n: 120
+  price_fetch_limit: 2500   # refresh ~2.5k/week; full 17k universe rotates over ~8 weeks
+  rotate_weeks: 8
+  pinned_tickers:
+    - URTH
+    - AAPL
+    - MSFT
+    - NVDA
+    - GOOGL
+    - META
+    - AMZN
+    - TSM
+    - ASML
+    - VOLV-B.ST
+    - ERIC-B.ST
+    - NDA-SE.ST
+    - EQNR.OL
+    - NOVO-B.CO
+    - SAP.DE
+    - SHEL.L
 
 web:
   host: "0.0.0.0"
-  port: 8001
+  port: 8011
 
 reporting:
   currency: SEK

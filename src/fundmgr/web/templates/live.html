@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Live Sleeves — AI Fund Manager{% endblock %}
+{% block page_title %}Live Sleeves{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Live Sleeves</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Real positions you hold at the broker, mirrored here at live prices and watched daily —
+      kill criteria, the portfolio capex trigger, earnings and weight drift all alert to Telegram.
+      Record your fills as you execute (<code class="text-slate-500">/pfill</code> or a Montrose screenshot).
+    </p>
+  </div>
+</div>
+
+<div class="mb-4 px-4 py-2.5 rounded-xl border border-sky-500/20 bg-sky-500/5 flex items-center gap-2 text-sky-400 text-xs font-semibold">
+  <span class="material-symbols-outlined" style="font-size:15px">radar</span>
+  Real money — not a simulation. Excluded holdings are never bought or sized.
+</div>
+
+{% if error %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border border-red-500/20 bg-red-500/5 flex items-center gap-2 text-red-400 text-xs font-semibold">
+  <span class="material-symbols-outlined" style="font-size:15px">error</span>
+  {{ error }}
+</div>
+{% endif %}
+
+<!-- ── Existing sleeves ── -->
+<section class="card mb-5">
+  <div class="card-header">
+    <h2 class="card-title">Sleeves</h2>
+    <span class="text-xs text-slate-600">{{ portfolios|length }}</span>
+  </div>
+
+  {% if portfolios %}
+  <div class="overflow-x-auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Source</th>
+          <th>Created</th>
+          <th class="num">Start (SEK)</th>
+          <th class="num">NAV (SEK)</th>
+          <th class="num">P/L</th>
+          <th class="num">Positions</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in portfolios %}
+        <tr>
+          <td>
+            <a href="/live/{{ p.slug }}" class="font-semibold text-sky-400 hover:text-sky-300">{{ p.name }}</a>
+          </td>
+          <td class="text-slate-500">{{ p.model_label or "—" }}</td>
+          <td class="text-slate-500">{{ p.created_at[:10] }}</td>
+          <td class="num">{{ "{:,.0f}".format(p.capital_sek) }}</td>
+          <td class="num">{{ "{:,.0f}".format(p.nav) }}</td>
+          <td class="num {% if p.pnl_pct > 0 %}ret-pos{% elif p.pnl_pct < 0 %}ret-neg{% else %}ret-neu{% endif %}">
+            {{ "%+.2f"|format(p.pnl_pct) }}%
+          </td>
+          <td class="num">{{ p.n_positions }}</td>
+          <td class="num">
+            <form method="post" action="/live/{{ p.slug }}/delete" class="inline"
+                  onsubmit="return confirm('Archive live sleeve “{{ p.name }}”? Its database file is kept on disk but it disappears from the site. (Your broker positions are untouched.)');">
+              <button type="submit" class="text-slate-600 hover:text-red-400" title="Archive sleeve">
+                <span class="material-symbols-outlined" style="font-size:16px">delete</span>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No live sleeves yet — import one below, or run <code class="text-slate-500">fund paper-import picks.json</code>.</p>
+  {% endif %}
+</section>
+
+<!-- ── Import form ── -->
+<section class="card">
+  <div class="card-header">
+    <h2 class="card-title">Import a sleeve from JSON</h2>
+    <span class="text-xs text-slate-600">buys mirror at live prices · excluded holdings dropped</span>
+  </div>
+
+  <form method="post" action="/live/import" id="live-form" class="space-y-4">
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div class="md:col-span-2">
+        <label class="kpi-label" for="lf-name">Name (optional — defaults to meta.name)</label>
+        <input id="lf-name" name="name" value="{{ form.name or '' }}"
+               placeholder="e.g. KF Chokepoint Satellite"
+               class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60" />
+      </div>
+      <div>
+        <label class="kpi-label" for="lf-capital">Capital SEK (optional)</label>
+        <input id="lf-capital" name="capital_sek" type="number" min="0" step="1000"
+               value="{{ form.capital_sek or '' }}" placeholder="meta.deployable_capital_sek"
+               class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60" />
+      </div>
+      <div>
+        <label class="kpi-label" for="lf-benchmark">Benchmark (Yahoo)</label>
+        <input id="lf-benchmark" name="benchmark" value="{{ form.benchmark or 'URTH' }}"
+               class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60" />
+      </div>
+    </div>
+
+    <div>
+      <label class="kpi-label" for="lf-json">Portfolio JSON</label>
+      <textarea id="lf-json" name="json_text" rows="14" required
+                placeholder='Paste the structured answer: a JSON object with a "positions" array (ticker, target_weight_pct, cluster, kill_criteria, next_earnings), an optional "portfolio_kill_criterion", "excluded_holdings", and "meta.deployable_capital_sek". Broker tickers (KOG, ENR, BESI, SKHY, ASML…) are mapped to Yahoo symbols; excluded holdings are never bought.'
+                class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-sky-500/60">{{ form.json_text or '' }}</textarea>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit" id="lf-create-btn"
+              class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white">
+        Import &amp; mirror at live prices
+      </button>
+      <span id="lf-busy" class="hidden text-xs text-slate-500">Fetching live prices &amp; building the book…</span>
+    </div>
+  </form>
+</section>
+
+<script>
+  document.getElementById('live-form').addEventListener('submit', () => {
+    document.getElementById('lf-create-btn').disabled = true;
+    document.getElementById('lf-busy').classList.remove('hidden');
+  });
+</script>
+
+{% endblock %}

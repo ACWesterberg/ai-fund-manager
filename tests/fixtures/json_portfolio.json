@@ -1,0 +1,16 @@
+{
+  "portfolio": {
+    "base_currency": "SEK",
+    "total_capital_sek": 1000000,
+    "benchmark": "70% MSCI World (SEK) / 30% OMXSGI",
+    "positions": [
+      { "ticker": "NVDA",         "name": "Nvidia",       "exchange": "NASDAQ", "currency": "USD", "weight_pct": 8,  "cluster": "ai_compute", "kill_criterion": "Custom silicon >20% accelerator unit share" },
+      { "ticker": "ASML",         "name": "ASML",         "exchange": "AMS",    "currency": "EUR", "weight_pct": 6,  "cluster": "ai_compute", "kill_criterion": "Bookings ex-China break trend for two quarters" },
+      { "ticker": "ABB",          "name": "ABB",          "exchange": "OMX",    "currency": "SEK", "weight_pct": 5,  "cluster": "power_grid", "kill_criterion": "Book-to-bill below 1.0 for two consecutive quarters" },
+      { "ticker": "MTRS",         "name": "Munters",      "exchange": "OMX",    "currency": "SEK", "weight_pct": 5,  "cluster": "power_grid", "kill_criterion": "Data center cooling order intake breaks trend" },
+      { "ticker": "ATCO A",       "name": "Atlas Copco A","exchange": "OMX",    "currency": "SEK", "weight_pct": 6,  "cluster": "swedish",    "kill_criterion": "Vacuum orders diverge negatively from WFE spend" },
+      { "ticker": "INDEX_GLOBAL", "name": "Global cap-weighted index fund (SEK class)", "exchange": "FUND", "currency": "SEK", "weight_pct": 25, "cluster": "index_base", "kill_criterion": null },
+      { "ticker": "CASH",         "name": "Cash (SEK)",   "exchange": null,     "currency": "SEK", "weight_pct": 3,  "cluster": "cash",       "kill_criterion": null }
+    ]
+  }
+}

@@ -33,7 +33,34 @@ git log --oneline "$BEFORE..$AFTER" | while read -r line; do log "  $line"; done
 # Install / update Python dependencies
 log "Updating dependencies…"
 UV=$(command -v uv || echo "$HOME/.local/bin/uv")
+# Shared financedata package: pull its latest source and (re)install it first.
+# `uv pip install -e .` does not resolve [tool.uv.sources] path deps, so without
+# this the project's `financedata` requirement would fail to resolve (or run
+# stale). Git-pull is non-fatal so a FinanceData hiccup can't block the deploy.
+FINANCEDATA_DIR="${FINANCEDATA_DIR:-$REPO_DIR/../FinanceData}"
+if [ -d "$FINANCEDATA_DIR" ]; then
+    if [ -d "$FINANCEDATA_DIR/.git" ]; then
+        log "Updating FinanceData ($FINANCEDATA_DIR)…"
+        if git -C "$FINANCEDATA_DIR" pull --ff-only --quiet; then
+            log "  FinanceData → $(git -C "$FINANCEDATA_DIR" rev-parse --short HEAD)"
+        else
+            log "  ⚠ FinanceData git pull failed — installing current checkout"
+        fi
+    fi
+    "$UV" pip install -e "$FINANCEDATA_DIR" --quiet
+else
+    log "  ⚠ $FINANCEDATA_DIR not found — financedata import will fail until it's present"
+fi
 "$UV" pip install -e . --quiet
+
+# Refresh universe CSVs from FinanceData when the sibling repo is present.
+if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ]; then
+    if FINANCEDATA_DIR="$FINANCEDATA_DIR" "$UV" run python "$REPO_DIR/scripts/sync_universe_from_financedata.py" 2>&1 | tee -a "$LOG_FILE"; then
+        log "Universe synced from FinanceData"
+    else
+        log "  ⚠ Universe sync skipped or failed — using committed CSVs"
+    fi
+fi
 
 # Restart services (requires sudoers entry — see SETUP.md)
 # Wait if a fund run is currently in progress (avoid killing mid-run)
@@ -51,11 +78,11 @@ done
 [ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
 
 log "Restarting services…"
-sudo systemctl restart fundmgr-bot fundmgr-web
+sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
 
 # Verify services came back up
 sleep 2
-for svc in fundmgr-bot fundmgr-web; do
+for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
     if systemctl is-active --quiet "$svc"; then
         log "  ✓ $svc is running"
     else

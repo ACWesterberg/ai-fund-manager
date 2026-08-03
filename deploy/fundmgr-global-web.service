@@ -8,7 +8,7 @@ User=alexander
 WorkingDirectory=/home/alexander/Documents/ai-fund-manager
 EnvironmentFile=/home/alexander/Documents/ai-fund-manager/.env
 Environment=FUND_CONFIG=/home/alexander/Documents/ai-fund-manager/config/config_global.yaml
-ExecStart=/home/alexander/Documents/ai-fund-manager/.venv/bin/uvicorn fundmgr.web.app:app --host 0.0.0.0 --port 8001
+ExecStart=/home/alexander/Documents/ai-fund-manager/.venv/bin/uvicorn fundmgr.web.app:app --host 0.0.0.0 --port 8011
 Restart=on-failure
 RestartSec=10
 

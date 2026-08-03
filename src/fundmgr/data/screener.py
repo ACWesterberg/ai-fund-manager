@@ -115,6 +115,24 @@ def _score(feat: TickerFeatures) -> float:
             elif feat.analyst_target_pct < -10:
                 score -= 1.5   # consensus sell
 
+    # ── Earnings proximity ────────────────────────────────────────────────────
+    # Binary-event risk: avoid new buys right before earnings
+    if feat.days_to_earnings is not None:
+        if 0 <= feat.days_to_earnings <= 2:
+            score -= 8.0   # imminent — high uncertainty, skip
+        elif 0 <= feat.days_to_earnings <= 5:
+            score -= 3.0   # this week — caution
+
+    # ── Volume confirmation ───────────────────────────────────────────────────
+    # Elevated relative volume signals institutional interest or news catalyst
+    if feat.rel_volume is not None:
+        if feat.rel_volume > 3.0:
+            score += 2.5
+        elif feat.rel_volume > 2.0:
+            score += 1.0
+        elif feat.rel_volume < 0.3:
+            score -= 1.5   # extremely thin — liquidity risk
+
     # ── Stale data is almost never actionable ────────────────────────────────
     if feat.is_stale:
         score -= 30.0
@@ -126,11 +144,15 @@ def screen(
     features: dict[str, TickerFeatures],
     held_tickers: set[str],
     top_n: int = 75,
+    pinned_tickers: set[str] | None = None,
 ) -> tuple[dict[str, TickerFeatures], int]:
-    """Return top_n candidates by score, always including held positions.
+    """Return top_n candidates by score, always including held + pinned positions.
 
     Returns (filtered_features, total_screened_out).
     """
+    pinned = pinned_tickers or set()
+    always = held_tickers | pinned
+
     scored = sorted(
         ((sym, _score(feat), feat) for sym, feat in features.items()),
         key=lambda x: x[1],
@@ -139,12 +161,10 @@ def screen(
 
     selected: dict[str, TickerFeatures] = {}
 
-    # Held positions always make the cut regardless of score
     for sym, _, feat in scored:
-        if sym in held_tickers:
+        if sym in always:
             selected[sym] = feat
 
-    # Fill remaining slots with top scorers
     remaining = max(0, top_n - len(selected))
     count = 0
     for sym, _, feat in scored:

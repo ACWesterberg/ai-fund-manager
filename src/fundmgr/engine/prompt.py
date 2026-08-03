@@ -40,21 +40,60 @@ def _portfolio_block(snap: PortfolioSnapshot, benchmark_return: float | None) ->
     return "\n".join(lines)
 
 
-def _risk_limits_block(cfg: AppConfig, snap: PortfolioSnapshot) -> str:
-    return (
-        "## Risk Limits (hard constraints)\n"
-        f"  Max single-name weight: {cfg.risk.max_position_pct}%\n"
-        f"  Max open positions: {cfg.risk.max_positions}\n"
-        f"  Cash range: {cfg.risk.min_cash_pct}% – {cfg.risk.max_cash_pct}%\n"
-        f"  Min trade size: {cfg.risk.min_trade_sek:,.0f} SEK\n"
+def _sector_weights_block(
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+    max_sector_pct: float,
+) -> str:
+    """Compute current sector weights from held positions and feature sector tags."""
+    if not snap.positions:
+        return ""
+    nav = snap.nav_sek
+    if nav <= 0:
+        return ""
+
+    sector_values: dict[str, float] = {}
+    for p in snap.positions:
+        feat = features.get(p.ticker)
+        sector = feat.sector if feat and feat.sector else "Unknown"
+        sector_values[sector] = sector_values.get(sector, 0.0) + p.market_value_sek
+
+    if not sector_values:
+        return ""
+
+    lines = [f"  Current sector exposure (cap {max_sector_pct:.0f}%):"]
+    for sector, val in sorted(sector_values.items(), key=lambda x: x[1], reverse=True):
+        pct = val / nav * 100
+        headroom = max_sector_pct - pct
+        flag = " ⚠ near cap" if headroom < 5 else ""
+        lines.append(f"    {sector:<30} {pct:>5.1f}%  (headroom {headroom:.1f}%){flag}")
+    return "\n".join(lines)
+
+
+def _risk_limits_block(
+    cfg: AppConfig,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+) -> str:
+    sector_block = _sector_weights_block(snap, features, cfg.risk.max_sector_pct)
+    lines = [
+        "## Risk Limits (hard constraints)",
+        f"  Max single-name weight: {cfg.risk.max_position_pct}%",
+        f"  Max sector weight: {cfg.risk.max_sector_pct}% of NAV per GICS sector",
+        f"  Max open positions: {cfg.risk.max_positions}",
+        f"  Cash range: {cfg.risk.min_cash_pct}% – {cfg.risk.max_cash_pct}%",
+        f"  Min trade size: {cfg.risk.min_trade_sek:,.0f} SEK",
         f"  Max turnover this run: {cfg.risk.max_turnover_pct}% of NAV "
-        f"(≈{snap.nav_sek * cfg.risk.max_turnover_pct / 100:,.0f} SEK)\n"
+        f"(≈{snap.nav_sek * cfg.risk.max_turnover_pct / 100:,.0f} SEK)",
         f"  Fee: {cfg.fees.rate*100:.2f}% per trade "
-        f"(min {cfg.fees.min_sek:.0f} SEK, max {cfg.fees.max_sek:.0f} SEK)\n"
-        "  FX cost: non-SEK stocks (DK/NO/FI) incur a 0.10% currency conversion spread (Montrose rate) on top of brokerage.\n"
-        "  Prefer SEK-denominated stocks when conviction is equal. Only buy foreign stocks for clear alpha.\n"
-        "Guardrails enforce these mechanically — size your recommendations within them."
-    )
+        f"(min {cfg.fees.min_sek:.0f} SEK, max {cfg.fees.max_sek:.0f} SEK)",
+        "  FX cost: non-SEK stocks incur a 0.10% currency conversion spread on top of brokerage.",
+        "  Prefer SEK-denominated stocks when conviction is equal. Only buy foreign stocks for clear alpha.",
+    ]
+    if sector_block:
+        lines.append(sector_block)
+    lines.append("Guardrails enforce these mechanically — size your recommendations within them.")
+    return "\n".join(lines)
 
 
 def _learnings_block(learnings: list[Learning]) -> str:
@@ -66,7 +105,7 @@ def _learnings_block(learnings: list[Learning]) -> str:
     return "\n".join(lines)
 
 
-_CANDIDATE_LIMIT = 50  # non-held tickers shown to LLM per run
+_CANDIDATE_LIMIT = 75  # non-held tickers shown to LLM per run
 
 
 def _signal_score(f: TickerFeatures) -> float:
@@ -94,6 +133,15 @@ def _signal_score(f: TickerFeatures) -> float:
     # Trend alignment
     if f.above_ma50 and f.above_ma200:
         score += 1.0
+    # Penalise earnings imminent (binary event risk)
+    if f.days_to_earnings is not None:
+        if 0 <= f.days_to_earnings <= 2:
+            score -= 4.0
+        elif 0 <= f.days_to_earnings <= 5:
+            score -= 1.5
+    # Volume confirmation
+    if f.rel_volume is not None and f.rel_volume > 2.5:
+        score += 1.5
     # Penalise stale data
     if f.is_stale:
         score -= 3.0
@@ -138,16 +186,33 @@ def build_prompt(
     store: Store,
     run_id: str,
     macro_block: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, str]]:
     """
-    Returns (system_message, user_message).
+    Returns (system_message, user_message, fields).
+
     The system message is the mandate; the user message is the full context.
+    `fields` is the same context broken out into the shared, retrieval-ready
+    keys {mandate, macro, portfolio_state, risk_limits, universe, learnings}
+    so the training corpus is KNN/optimizer-ready at write time rather than
+    reconstructed from the flattened string later.
+
+    Note: `risk_limits` is the block *as rendered* — it embeds live sector
+    exposure derived from current positions, not just static config caps.
     """
     mandate = _load_mandate(cfg.mandate_path)
+
+    # Optimized decision guidance (from `fund optimize`, once compiled)
+    from fundmgr.engine.optimizer import load_guidance
+    guidance = load_guidance(cfg)
+    guidance_section = (
+        "\n\n---\n## Decision Guidance (optimized from your realized outcomes)\n" + guidance
+        if guidance else ""
+    )
 
     # Add structured output instruction to mandate
     system = (
         mandate
+        + guidance_section
         + "\n\n---\n"
         + "Return ONLY a valid JSON object matching the DecisionRun schema. "
         + "No markdown, no explanation outside the JSON."
@@ -163,6 +228,22 @@ def build_prompt(
     current_tickers = {p.ticker for p in snap.positions}
     learnings = store.get_active_learnings()
 
+    # Discrete blocks — captured once, used both for the flat prompt and the
+    # fielded snapshot so the two can never drift.
+    portfolio_state = _portfolio_block(snap, bench_return)
+    risk_limits     = _risk_limits_block(cfg, snap, features)
+    learnings_block = _learnings_block(learnings)
+    universe        = _features_block(features, current_tickers)
+
+    fields = {
+        "mandate":         mandate,
+        "macro":           macro_block,
+        "portfolio_state": portfolio_state,
+        "risk_limits":     risk_limits,
+        "universe":        universe,
+        "learnings":       learnings_block,
+    }
+
     sections = [
         f"# Weekly Decision Run\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
     ]
@@ -172,17 +253,17 @@ def build_prompt(
         sections.append("")
 
     sections += [
-        _portfolio_block(snap, bench_return),
+        portfolio_state,
         "",
-        _risk_limits_block(cfg, snap),
+        risk_limits,
         "",
     ]
 
     if learnings:
-        sections.append(_learnings_block(learnings))
+        sections.append(learnings_block)
         sections.append("")
 
-    sections.append(_features_block(features, current_tickers))
+    sections.append(universe)
 
     sections.append(
         f"## Your Task\n"
@@ -191,12 +272,27 @@ def build_prompt(
     )
 
     user = "\n".join(sections)
-    return system, user
+    return system, user, fields
 
 
-def snapshot_to_dict(snap: PortfolioSnapshot, system: str, user: str) -> str:
-    """Serialise full prompt context for the recommendation log."""
-    return json.dumps({
+SNAPSHOT_VERSION = 2  # v1 = flat system/user only; v2 = + fields + regime
+
+
+def snapshot_to_dict(
+    snap: PortfolioSnapshot,
+    system: str,
+    user: str,
+    fields: dict[str, str] | None = None,
+    cfg: "AppConfig | None" = None,
+) -> str:
+    """Serialise full prompt context for the recommendation log.
+
+    v2 augments the flat system/user strings (kept for exact replay/audit) with
+    the fielded context and the run regime. The regime carries a nullable
+    `session` key so a single loader can serve both this repo and swing-trader.
+    """
+    out: dict = {
+        "snapshot_version": SNAPSHOT_VERSION,
         "nav_sek": snap.nav_sek,
         "cash_sek": snap.cash_sek,
         "positions": [
@@ -208,6 +304,21 @@ def snapshot_to_dict(snap: PortfolioSnapshot, system: str, user: str) -> str:
             }
             for p in snap.positions
         ],
+        # Flat — exact replay / audit
         "system_message": system,
         "user_message": user,
-    })
+        # Fielded — retrieval / optimizer ready
+        "fields": fields,
+    }
+    if cfg is not None:
+        from fundmgr.engine.optimizer import guidance_fingerprint
+        out["regime"] = {
+            "capital_sek":  cfg.capital_sek,
+            "provider":     cfg.llm.provider,
+            "model_id":     cfg.llm.model_id,
+            "n_samples":    cfg.llm.n_samples,
+            "session":      None,  # nullable shared key (swing-trader sets us/european)
+            "config_hash":  cfg.config_hash(),
+            "guidance_hash": guidance_fingerprint(cfg),  # None when no MIPRO guidance active
+        }
+    return json.dumps(out)

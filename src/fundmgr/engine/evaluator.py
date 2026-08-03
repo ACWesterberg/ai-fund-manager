@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import yfinance as yf
 
@@ -17,8 +17,14 @@ from fundmgr.state.store import Store
 
 def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[DecisionOutcome]:
     """
-    For each pending outcome older than lookback_days, fetch current price,
-    compute return vs benchmark, and persist. Returns the evaluated outcomes.
+    For each pending outcome older than lookback_days, compute return vs
+    benchmark over a *fixed* horizon and persist. Returns the evaluated outcomes.
+
+    The evaluation price is the cached close nearest to decision_date +
+    lookback_days, so every outcome is a true `lookback_days` outcome regardless
+    of when the run that evaluates it happens to fire. When the cache has no
+    close near that target (thin history), it falls back to the live price at
+    "now" — the previous behaviour — so an outcome is still recorded.
     """
     pending = store.get_pending_outcomes(older_than_days=lookback_days)
     if not pending:
@@ -26,34 +32,136 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
 
     evaluated: list[DecisionOutcome] = []
     for outcome in pending:
-        if not outcome.price_at_decision:
+        if not outcome.price_at_decision or not outcome.decision_date:
             continue
 
-        try:
-            current_price = yf.Ticker(outcome.ticker).fast_info.last_price
-            if not current_price:
-                continue
-        except Exception:
+        eval_price, eval_date = _evaluation_price(store, outcome, lookback_days)
+        if eval_price is None:
             continue
 
-        position_return = (current_price / outcome.price_at_decision - 1) * 100
+        position_return = (eval_price / outcome.price_at_decision - 1) * 100
 
-        bench_return = get_benchmark_return_pct(store, since_date=outcome.evaluation_date or "2000-01-01")
+        # Benchmark over the same window as the position: decision date -> eval date.
+        bench_return = get_benchmark_return_pct(
+            store, since_date=outcome.decision_date, until_date=eval_date
+        )
 
         outperformed = None
         if bench_return is not None:
             outperformed = position_return > bench_return
 
-        outcome.price_at_evaluation = current_price
+        outcome.price_at_evaluation = eval_price
         outcome.position_return_pct = round(position_return, 2)
         outcome.benchmark_return_pct = bench_return
         outcome.outperformed = outperformed
-        outcome.evaluation_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        outcome.evaluation_date = eval_date
 
         store.update_outcome(outcome)
         evaluated.append(outcome)
 
     return evaluated
+
+
+def _evaluation_price(
+    store: Store, outcome: DecisionOutcome, horizon_days: int
+) -> tuple[float | None, str]:
+    """(price, date) to evaluate an outcome at: pinned cached close, else live price."""
+    target = (
+        datetime.strptime(outcome.decision_date, "%Y-%m-%d") + timedelta(days=horizon_days)
+    ).strftime("%Y-%m-%d")
+
+    near = store.close_near(outcome.ticker, target, max_delta_days=7)
+    if near is not None:
+        return near[1], near[0]
+
+    # Fallback: live price at "now" (thin cache — better a rough outcome than none).
+    try:
+        current_price = yf.Ticker(outcome.ticker).fast_info.last_price
+    except Exception:
+        current_price = None
+    return (
+        (float(current_price), datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        if current_price
+        else (None, "")
+    )
+
+
+def repair_outcomes(store: Store, dry_run: bool = False) -> dict[str, int]:
+    """
+    Repair decision_outcomes rows poisoned by the old seeding bug, which stored
+    the trade's SEK estimate as price_at_decision (and, for evaluated rows,
+    measured the benchmark since the start of the cache instead of the run date).
+
+    For each row, the true decision-time share price is re-derived from the
+    run's stored prompt snapshot. Evaluated rows are then recomputed over the
+    correct window (decision date -> evaluation date); rows whose price can't be
+    recovered get price_at_decision cleared so they are skipped, not mis-scored.
+    """
+    from fundmgr.engine.optimizer import price_from_snapshot
+
+    stats = {"checked": 0, "price_fixed": 0, "recomputed": 0, "reset_pending": 0, "unrecoverable": 0}
+    snapshots: dict[str, dict] = {}
+
+    for outcome in store.get_all_outcomes():
+        stats["checked"] += 1
+
+        if outcome.run_id not in snapshots:
+            rec = store.get_recommendation_by_run_id(outcome.run_id)
+            try:
+                snapshots[outcome.run_id] = json.loads(rec.prompt_snapshot) if rec else {}
+            except json.JSONDecodeError:
+                snapshots[outcome.run_id] = {}
+
+        true_price = price_from_snapshot(snapshots[outcome.run_id], outcome.ticker)
+        evaluated = outcome.outperformed is not None
+
+        if true_price is None:
+            # Can't recover the entry price — neutralise the row instead of
+            # letting a wrong price keep producing wrong returns.
+            if outcome.price_at_decision is not None or evaluated:
+                stats["unrecoverable"] += 1
+                if not dry_run:
+                    store.set_outcome_price_at_decision(outcome.id, None)
+                    if evaluated:
+                        store.clear_outcome_evaluation(outcome.id)
+            continue
+
+        price_wrong = (
+            outcome.price_at_decision is None
+            or abs(outcome.price_at_decision - true_price) / true_price > 0.005
+        )
+        if price_wrong:
+            stats["price_fixed"] += 1
+            if not dry_run:
+                store.set_outcome_price_at_decision(outcome.id, true_price)
+
+        if not evaluated or not (price_wrong or outcome.benchmark_return_pct is None):
+            continue
+
+        # Recompute the evaluated row over the correct window.
+        bench = get_benchmark_return_pct(
+            store,
+            since_date=outcome.decision_date or "2000-01-01",
+            until_date=outcome.evaluation_date,
+        )
+        if outcome.price_at_evaluation and bench is not None:
+            stats["recomputed"] += 1
+            if dry_run:
+                continue
+            position_return = (outcome.price_at_evaluation / true_price - 1) * 100
+            outcome.price_at_decision = true_price
+            outcome.position_return_pct = round(position_return, 2)
+            outcome.benchmark_return_pct = bench
+            outcome.outperformed = position_return > bench
+            store.update_outcome(outcome)
+        else:
+            # No usable evaluation-side data — send it back to pending so the
+            # evaluator redoes it properly on the next run.
+            stats["reset_pending"] += 1
+            if not dry_run:
+                store.clear_outcome_evaluation(outcome.id)
+
+    return stats
 
 
 def generate_qualitative_learnings(store: Store, outcomes: list[DecisionOutcome]) -> list[Learning]:

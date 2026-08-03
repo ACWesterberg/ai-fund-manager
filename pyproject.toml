@@ -24,6 +24,7 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
+    "python-multipart>=0.0.9",  # FastAPI Form() parsing (paper portfolio create)
     "plotly>=5.22",
     "httpx>=0.27",
     # Telegram notifications
@@ -36,11 +37,16 @@ dependencies = [
     # Sentiment (FinBERT) — CPU-only; install torch separately on Pi
     "transformers>=4.40",
     "scipy>=1.13",
+    "exchange-calendars>=4.13.2",
+    "financedata",
 ]
 
 [project.optional-dependencies]
 torch = [
     "torch>=2.2",        # install separately: pip install torch --index-url https://download.pytorch.org/whl/cpu
+]
+optimize = [
+    "dspy>=2.6",         # MIPROv2 prompt optimization (fund optimize)
 ]
 dev = [
     "pytest>=8.0",
@@ -65,3 +71,6 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.uv.sources]
+financedata = { path = "../FinanceData", editable = true }

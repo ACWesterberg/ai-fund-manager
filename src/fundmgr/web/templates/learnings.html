@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Learnings — {{ fund_label }}{% endblock %}
+{% block page_title %}Learnings{% endblock %}
+
+{% block content %}
+
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Learnings</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      {{ fund_label }} · {{ total }} active lesson{{ '' if total == 1 else 's' }}
+      distilled from this fund's own outcomes and injected into every prompt
+    </p>
+  </div>
+</div>
+
+{% if total == 0 %}
+<section class="card">
+  <p class="text-sm text-slate-500">
+    No learnings yet. They accrue as decisions are evaluated (~4 weeks after each run):
+    calibration lessons from hit-rate stats and qualitative lessons written from
+    individual trade outcomes. They'll appear here — and in the prompt — automatically.
+  </p>
+</section>
+{% else %}
+{% for category in categories %}
+<section class="card mb-4">
+  <div class="card-header mb-3">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-blue-400" style="font-size:17px">lightbulb</span>
+      <h2 class="card-title">{{ category|capitalize }}</h2>
+    </div>
+    <span class="text-xs text-slate-600">{{ by_category[category]|length }}</span>
+  </div>
+  <div class="space-y-3">
+    {% for l in by_category[category] %}
+    <div class="border-l-2 border-slate-700 pl-3">
+      <p class="text-sm text-slate-300 leading-relaxed">{{ l.body }}</p>
+      <p class="text-[10px] text-slate-600 mt-1">
+        {{ l.created }}{% if l.run_count %} · from {{ l.run_count }} run{{ '' if l.run_count == 1 else 's' }}{% endif %}
+      </p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+{% endif %}
+
+{% endblock %}

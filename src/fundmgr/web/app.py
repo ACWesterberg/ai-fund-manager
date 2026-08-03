@@ -5,9 +5,25 @@ import hmac
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yfinance as yf
+
+_price_cache: dict[frozenset, tuple[float, dict[str, float]]] = {}
+_PRICE_TTL = 300  # seconds
+
+
+def _logo_domain(website: str | None) -> str | None:
+    """Extract bare domain from a company website URL, e.g. 'https://www.volvo.com/' → 'volvo.com'."""
+    if not website:
+        return None
+    try:
+        netloc = urlparse(website).netloc
+        return netloc.removeprefix("www.") or None
+    except Exception:
+        return None
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -21,9 +37,30 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app = FastAPI(title="AI Fund Manager", docs_url=None, redoc_url=None)
 
-# Global simulation sub-routes at /sim/*
-from fundmgr.web.sim import router as sim_router  # noqa: E402
-app.include_router(sim_router)
+# Simulation sub-routes — one per model provider
+from fundmgr.web.sim import make_sim_router  # noqa: E402
+app.include_router(make_sim_router(
+    "config/config_global.yaml", "/sim", "GPT-5.6-sol Global Fund", sim_accent="amber"
+))
+app.include_router(make_sim_router(
+    "config/config_claude.yaml", "/sim-claude", "Claude Opus Global Fund", sim_accent="violet"
+))
+app.include_router(make_sim_router(
+    "config/config_buffett_gpt.yaml", "/sim-buffett", "GPT-5.6-sol Buffett Screen Fund", sim_accent="amber"
+))
+app.include_router(make_sim_router(
+    "config/config_buffett_claude.yaml", "/sim-buffett-claude", "Claude Opus Buffett Screen Fund", sim_accent="violet"
+))
+
+# Paper portfolios — user-created from pasted LLM picks, tracked like the sims.
+# Live sleeves — real monitored books imported via `fund paper-import`.
+from fundmgr.web.paper import router as paper_router, live_router  # noqa: E402
+app.include_router(paper_router)
+app.include_router(live_router)
+
+# What-If Lab — generate a fresh hypothetical portfolio for any fund profile.
+from fundmgr.web.whatif import router as whatif_router  # noqa: E402
+app.include_router(whatif_router)
 
 # Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
@@ -49,9 +86,15 @@ def _get_deps():
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
-    """Fetch current prices for a list of tickers. Returns empty dict on failure."""
+    """Fetch current prices, cached for 5 minutes to avoid blocking on every page load."""
     if not tickers:
         return {}
+    key = frozenset(tickers)
+    now = time.time()
+    if key in _price_cache:
+        ts, data = _price_cache[key]
+        if now - ts < _PRICE_TTL:
+            return data
     try:
         if len(tickers) == 1:
             raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
@@ -59,17 +102,19 @@ def _fetch_live_prices(tickers: list[str]) -> dict[str, float]:
             if hasattr(close, "columns"):
                 close = close.iloc[:, 0]
             close = close.dropna()
-            return {tickers[0]: float(close.iloc[-1])} if not close.empty else {}
-        raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
-        close_df = raw.get("Close")
-        if close_df is None or close_df.empty:
-            return {}
-        result = {}
-        for t in tickers:
-            if t in close_df.columns:
-                series = close_df[t].dropna()
-                if not series.empty:
-                    result[t] = float(series.iloc[-1])
+            result = {tickers[0]: float(close.iloc[-1])} if not close.empty else {}
+        else:
+            raw = yf.download(tickers, period="2d", auto_adjust=True, progress=False)
+            close_df = raw.get("Close")
+            result = {}
+            if close_df is not None and not close_df.empty:
+                for t in tickers:
+                    if t in close_df.columns:
+                        series = close_df[t].dropna()
+                        if not series.empty:
+                            result[t] = float(series.iloc[-1])
+        if result:
+            _price_cache[key] = (now, result)
         return result
     except Exception:
         return {}
@@ -84,12 +129,28 @@ def index(request: Request):
     nav_history = store.get_nav_history()
     stats = compute_stats(nav_history, cfg.capital_sek)
 
-    # Fetch live prices for held positions
+    universe = load_universe(cfg.universe_path)
+    name_map = {t.yahoo_ticker: t.name for t in universe}
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in universe}
+
+    # Fetch live prices for held positions (native currency), then convert to SEK
+    # so they're comparable to the SEK cost basis. Foreign holdings (NOK/DKK/…)
+    # would otherwise be valued as if their native price were already SEK.
     live_prices = _fetch_live_prices([p.ticker for p in positions])
+    if cfg.fx_to_sek:
+        from fundmgr.data.fx import convert_prices_to_sek
+        live_prices = convert_prices_to_sek(live_prices, cur_by_ticker, store)
 
     # NAV: live if available, else cost-basis fallback
     live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
     nav = live_market_value + cash
+
+    # Pull website domains from fundamentals cache for logo resolution
+    fund_domains: dict[str, str | None] = {}
+    if positions:
+        cached_fund = store.get_all_fundamentals([p.ticker for p in positions])
+        for ticker, fdata in cached_fund.items():
+            fund_domains[ticker] = _logo_domain(fdata.get("website"))
 
     positions_data = []
     for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
@@ -101,6 +162,7 @@ def index(request: Request):
         weight_val = current_value if current_value is not None else cost_value
         positions_data.append({
             "ticker": p.ticker,
+            "name": name_map.get(p.ticker, p.ticker),
             "shares": p.shares,
             "avg_cost": p.avg_cost_sek,
             "cost_value": cost_value,
@@ -109,6 +171,7 @@ def index(request: Request):
             "pnl_sek": pnl_sek,
             "pnl_pct": pnl_pct,
             "weight_pct": round(weight_val / nav * 100, 1) if nav > 0 else 0,
+            "logo_domain": fund_domains.get(p.ticker),
         })
 
     cash_pct = round(cash / nav * 100, 1) if nav > 0 else 100.0
@@ -292,6 +355,71 @@ async def api_positions():
     }
 
 
+@app.get("/learnings", response_class=HTMLResponse)
+async def learnings(request: Request):
+    from fundmgr.web.views import learnings_context
+    cfg, store = _get_deps()
+    return _render("learnings.html", {"request": request, **learnings_context(cfg, store)})
+
+
+@app.get("/prompt", response_class=HTMLResponse)
+async def prompt(request: Request):
+    from fundmgr.web.views import prompt_context
+    cfg, _ = _get_deps()
+    return _render("prompt.html", {"request": request, **prompt_context(cfg)})
+
+
+@app.get("/api/kiosk")
+async def api_kiosk():
+    """Read-only feed for the Pi wall display (Portfolio Composition screen).
+
+    Same numbers as the dashboard home page — live NAV, per-holding weight/PnL and
+    the logo domain — but as JSON so the kiosk can poll and repaint.
+    """
+    cfg, store = _get_deps()
+    positions = store.get_positions()
+    cash = store.get_cash()
+
+    universe = load_universe(cfg.universe_path)
+    name_map = {t.yahoo_ticker: t.name for t in universe}
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in universe}
+
+    live_prices = _fetch_live_prices([p.ticker for p in positions])
+    if cfg.fx_to_sek:
+        from fundmgr.data.fx import convert_prices_to_sek
+        live_prices = convert_prices_to_sek(live_prices, cur_by_ticker, store)
+
+    live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
+    nav = live_market_value + cash
+
+    fund_domains: dict[str, str | None] = {}
+    if positions:
+        cached_fund = store.get_all_fundamentals([p.ticker for p in positions])
+        for ticker, fdata in cached_fund.items():
+            fund_domains[ticker] = _logo_domain(fdata.get("website"))
+
+    holdings = []
+    for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
+        live = live_prices.get(p.ticker)
+        current_value = p.shares * live if live else p.shares * p.avg_cost_sek
+        holdings.append({
+            "ticker": p.ticker,
+            "name": name_map.get(p.ticker, p.ticker),
+            "weight_pct": round(current_value / nav * 100, 1) if nav > 0 else 0,
+            "pnl_pct": round((live / p.avg_cost_sek - 1) * 100, 1) if live else None,
+            "logo_domain": fund_domains.get(p.ticker),
+        })
+
+    return {
+        "nav": round(nav, 0),
+        "currency": "SEK",
+        "cash_pct": round(cash / nav * 100, 1) if nav > 0 else 100.0,
+        "pnl_sek": round(nav - cfg.capital_sek, 0),
+        "pnl_pct": round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0,
+        "holdings": holdings,
+    }
+
+
 @app.get("/universe", response_class=HTMLResponse)
 async def universe(request: Request):
     cfg, store = _get_deps()
@@ -324,7 +452,7 @@ async def universe(request: Request):
 
 # ── GitHub webhook deploy endpoint ────────────────────────────────────────────
 # Alternative to Tailscale SSH: GitHub sends a POST here on push to `deploy`.
-# Requires DEPLOY_WEBHOOK_SECRET in .env and the Pi's port 8000 accessible
+# Requires DEPLOY_WEBHOOK_SECRET in .env and the fund-manager web port accessible
 # (e.g. via Cloudflare Tunnel or port forwarding).
 
 ROOT_DIR = Path(__file__).resolve().parents[3]

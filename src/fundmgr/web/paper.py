@@ -20,12 +20,17 @@ import json
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
+from starlette.concurrency import run_in_threadpool
 
-from fundmgr import paper
+from fundmgr import paper, watchplan
 from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
+
+# Largest single upload accepted for photo import. Phone photos of a holdings
+# screen land around 2–5 MB; anything past this is a mistake, not a portfolio.
+_MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
 
 def _logo_domain(website: str | None) -> str | None:
@@ -90,7 +95,8 @@ def _portfolio_summaries(kind: str) -> list[dict]:
 
 def _watch_status(store, positions_data: list[dict]) -> dict | None:
     """Monitoring state for the dashboard's Watch panel: the portfolio capex
-    kill criterion, per-position weight drift, upcoming earnings and kill lines.
+    kill criterion, per-position weight drift, upcoming earnings, kill lines
+    (text + numeric) and time horizons.
 
     Reads only stored metadata + the live weights already computed for the
     positions table (no extra network). Returns None when the book carries no
@@ -99,7 +105,11 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
     targets = json.loads(store.get_meta("paper_target_weights") or "{}")
     notes = json.loads(store.get_meta("paper_position_notes") or "{}")
     kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
-    if not (capex_cfg or targets or kills):
+    rules = watchplan.get_kill_rules(store)
+    horizons = watchplan.get_horizons(store)
+    # Anything held is worth a row even with no plan on it yet — that's how the
+    # first kill criterion gets set. Only a book with nothing at all opts out.
+    if not (capex_cfg or targets or kills or rules or horizons or positions_data):
         return None
 
     capex = None
@@ -118,7 +128,10 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
     # weights and kill lines are visible before they're bought; live weight and
     # drift fill in for held positions.
     weight_by = {p["ticker"]: p["weight_pct"] for p in positions_data}
-    tickers = list(dict.fromkeys(list(targets) + [p["ticker"] for p in positions_data]))
+    pnl_by = {p["ticker"]: p.get("pnl_pct") for p in positions_data}
+    tickers = list(dict.fromkeys(
+        list(targets) + [p["ticker"] for p in positions_data] + sorted(watchplan.plan_tickers(store))
+    ))
     rows = []
     for t in tickers:
         tgt = targets.get(t)
@@ -126,6 +139,13 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
         weight = weight_by.get(t, 0.0)
         ratio = (weight / tgt) if (tgt and held) else None
         note = notes.get(t) or {}
+        rule = rules.get(t) or {}
+        horizon = horizons.get(t) or {}
+        left = watchplan.days_left(horizon.get("review_date"))
+        # Live P&L against the drawdown line, so the panel shows how close a
+        # position is to its kill without waiting for the daily watch.
+        pnl = pnl_by.get(t)
+        max_dd = rule.get("max_drawdown_pct")
         rows.append({
             "ticker": t,
             "held": held,
@@ -136,9 +156,34 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "next_earnings": note.get("next_earnings", ""),
             "watch": note.get("watch", ""),
             "kill": kills.get(t, ""),
+            "max_drawdown_pct": max_dd,
+            "price_below": rule.get("price_below"),
+            "price_above": rule.get("price_above"),
+            "rule_currency": rule.get("currency") or "",
+            "pnl_pct": pnl,
+            "dd_breached": bool(max_dd and pnl is not None and pnl <= -abs(max_dd)),
+            "horizon_date": horizon.get("review_date", ""),
+            "horizon_label": horizon.get("label", ""),
+            "horizon_note": horizon.get("note", ""),
+            "days_left": left,
+            "horizon_due": left is not None and left <= 0,
+            "horizon_near": left is not None and 0 < left <= 30,
         })
-    rows.sort(key=lambda r: (0 if r["over"] else 1, -(r["target_pct"] or 0)))
-    return {"capex": capex, "rows": rows, "held_count": len(weight_by), "planned_count": len(tickers)}
+    # Most urgent first: kill lines breached, then horizons due/near, then drift.
+    rows.sort(key=lambda r: (
+        0 if r["dd_breached"] else 1,
+        0 if r["horizon_due"] else (1 if r["horizon_near"] else 2),
+        0 if r["over"] else 1,
+        -(r["target_pct"] or 0),
+        r["ticker"],
+    ))
+    return {
+        "capex": capex,
+        "rows": rows,
+        "held_count": len(weight_by),
+        "planned_count": len(tickers),
+        "alerts": sum(1 for r in rows if r["dd_breached"] or r["horizon_due"] or r["over"]),
+    }
 
 
 def _not_found() -> HTMLResponse:
@@ -182,6 +227,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "book_name": meta["name"],
             # live sleeves get a "Record fill" form on the dashboard
             "fill_action": f"{book_prefix}/fill" if real else None,
+            # kill criteria + time horizons are editable on every book
+            "watchplan_action": f"{book_prefix}/watchplan",
         }
 
     def _home_ctx(request: Request, error: str | None = None, form: dict | None = None) -> dict:
@@ -305,6 +352,110 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 
+    # ── Photo import ────────────────────────────────────────────────────────
+
+    @router.post("/extract-photos")
+    async def extract_photos(photos: list[UploadFile] = File(...)):
+        """Read holdings out of uploaded portfolio screenshots.
+
+        Returns rows for the review table — nothing is written until the user
+        submits them to /create-from-photo, so a misread is always caught by a
+        human before it becomes a position.
+        """
+        images: list[bytes] = []
+        for upload in photos:
+            raw = await upload.read()
+            if not raw:
+                continue
+            if len(raw) > _MAX_UPLOAD_BYTES:
+                return JSONResponse({
+                    "ok": False,
+                    "error": f"'{upload.filename}' is larger than "
+                             f"{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB — "
+                             "a screenshot rather than a full-resolution photo works best.",
+                }, status_code=400)
+            images.append(raw)
+
+        if not images:
+            return JSONResponse({"ok": False, "error": "No image received."}, status_code=400)
+
+        from fundmgr.vision.portfolio_photo import PhotoExtractionError, extract_holdings
+        try:
+            result = await run_in_threadpool(extract_holdings, images)
+        except PhotoExtractionError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"Photo import failed: {e}"},
+                                status_code=500)
+
+        holdings = result["holdings"]
+        unresolved = sum(1 for h in holdings if not h.get("ticker"))
+        return {
+            "ok": True,
+            "holdings": holdings,
+            "cash_sek": result["cash_sek"],
+            "total_value_sek": result["total_value_sek"],
+            "account_name": result["account_name"],
+            "notes": result["notes"],
+            "warnings": result["warnings"],
+            "unresolved": unresolved,
+            "ocr_used": result["ocr_used"],
+            "model": result["model"],
+        }
+
+    @router.post("/create-from-photo")
+    async def create_from_photo(
+        request: Request,
+        name: str = Form(...),
+        holdings_json: str = Form(...),
+        cash_sek: str = Form("0"),
+        benchmark: str = Form(paper.DEFAULT_BENCHMARK),
+        model_label: str = Form(""),
+    ):
+        """Create a sleeve from the reviewed photo rows, seeded at cost basis."""
+        def _fail(msg: str) -> HTMLResponse:
+            return _render(home_template, _home_ctx(request, error=msg, form={"name": name}))
+
+        try:
+            rows = json.loads(holdings_json)
+        except json.JSONDecodeError:
+            return _fail("Could not read the reviewed holdings — try the upload again.")
+        if not isinstance(rows, list) or not rows:
+            return _fail("No holdings to import — upload a photo and review the rows first.")
+
+        cash = paper._opt_float(cash_sek) or 0.0
+        cost_total = 0.0
+        for row in rows:
+            shares = paper._opt_float(row.get("shares"))
+            cost = paper._opt_float(row.get("avg_cost_sek"))
+            if shares and cost:
+                cost_total += shares * cost
+        if cost_total <= 0:
+            return _fail("Every row is missing its share count or cost basis — "
+                         "fill those in on the review table before importing.")
+
+        try:
+            slug, log = paper.create_portfolio(
+                name=name,
+                capital_sek=cost_total + cash,
+                holdings_text=json.dumps(rows, indent=2, ensure_ascii=False),
+                model_label=model_label.strip() or "portfolio photo",
+                benchmark=benchmark.strip() or paper.DEFAULT_BENCHMARK,
+                holdings_override=rows,
+                kind=kind,
+                seed_holdings=True,
+            )
+        except ValueError as e:
+            return _fail(str(e))
+
+        skipped = sum(1 for line in log if line.startswith("⚠"))
+        msg = f"Imported {name} from photo — {len(rows) - skipped} holdings seeded at cost."
+        if skipped:
+            msg += f" {skipped} row(s) skipped — see the log."
+        from urllib.parse import urlencode
+        return RedirectResponse(
+            url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}), status_code=303)
+
     @router.post("/{slug}/delete")
     def delete(slug: str):
         try:
@@ -382,6 +533,73 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         verb = "Bought" if side == "buy" else "Sold"
         tail = f" ({snap_note})" if snap_note else ""
         return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK in {meta['name']}.{tail}", 1)
+
+    @router.post("/{slug}/watchplan")
+    async def save_watchplan(
+        slug: str,
+        ticker: str = Form(...),
+        kill_criterion: str = Form(""),
+        max_drawdown_pct: str = Form(""),
+        price_below: str = Form(""),
+        price_above: str = Form(""),
+        horizon_date: str = Form(""),
+        horizon_months: str = Form(""),
+        horizon_note: str = Form(""),
+        remove: str = Form(""),
+    ):
+        """Set (or clear) one position's kill criteria and time horizon."""
+        from urllib.parse import urlencode
+
+        def _back(msg: str, ok: int) -> RedirectResponse:
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}) + "#watch",
+                status_code=303)
+
+        try:
+            meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            return _not_found()
+
+        tkr = (ticker or "").strip().upper()
+        if not tkr:
+            return _back("Pick a ticker to set a kill criterion for.", 0)
+
+        if remove:
+            watchplan.clear_position_plan(store, tkr)
+            return _back(f"Cleared the watch plan for {tkr}.", 1)
+
+        if horizon_date.strip() and not watchplan.parse_horizon(horizon_date.strip()):
+            return _back(f"Bad horizon date '{horizon_date}' — use YYYY-MM-DD.", 0)
+
+        currency = meta["currency_map"].get(tkr)
+        plan = watchplan.set_position_plan(
+            store, tkr,
+            kill_criterion=kill_criterion,
+            # "" clears a rule, so pass the raw form values straight through.
+            max_drawdown_pct=max_drawdown_pct,
+            price_below=price_below,
+            price_above=price_above,
+            currency=currency,
+            review_date=horizon_date,
+            horizon_months=horizon_months,
+            horizon_note=horizon_note,
+        )
+
+        bits = []
+        if plan["kill_criterion"]:
+            bits.append("kill criterion")
+        rules = plan["kill_rules"]
+        if rules.get("max_drawdown_pct"):
+            bits.append(f"-{rules['max_drawdown_pct']:g}% drawdown line")
+        if rules.get("price_below"):
+            bits.append(f"floor {rules['price_below']:g}")
+        if rules.get("price_above"):
+            bits.append(f"target {rules['price_above']:g}")
+        if plan["horizon"].get("review_date"):
+            bits.append(f"horizon {plan['horizon']['review_date']}")
+        if not bits:
+            return _back(f"Cleared the watch plan for {tkr}.", 1)
+        return _back(f"{tkr}: saved {', '.join(bits)}.", 1)
 
     # ── Per-book dashboard ──────────────────────────────────────────────────
 
@@ -482,6 +700,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "pnl_sek": pnl_sek,
             "pnl_pct": pnl_pct,
             "active_page": "portfolio",
+            # Live sleeves only — paper books keep the plain simulation framing.
             "watch": _watch_status(store, positions_data) if real else None,
             "flash": flash,
             **_base_ctx(meta),

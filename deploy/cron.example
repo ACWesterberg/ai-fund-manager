@@ -78,6 +78,8 @@
 # distil learnings — same pipeline as the funds. Also runs the four Telegram
 # watches (mirror/monitored sleeves like KF Chokepoint):
 #   • per-position kill criteria vs fresh news
+#   • numeric kill rules (max drop from cost, price floor/target) — no API key
+#   • time horizons: 30/14/7/1 days out and on the day, "run fresh analysis"
 #   • portfolio-level capex kill criterion (2-of-5 hyperscalers guide capex down)
 #   • earnings-calendar heads-up before / check-the-print after each report
 #   • weight drift past 1.5× target (rebalance rule)
@@ -85,6 +87,12 @@
 # season, so keep this running every weekday. 22:15 CET = after NYSE close.
 
 15 22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-track >> data/logs/paper.log 2>&1
+
+# Optional: intraday kill-line + horizon checks, if a daily sweep is too slow to
+# hear that a position has broken its max-drop line. Cheap (no LLM, cached
+# prices) and alerts are transition-based, so this cannot spam you. Uncomment to
+# check hourly during the NYSE session instead of only after the close.
+# 30 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-watch >> data/logs/paper_watch.log 2>&1
 
 
 # ═══ PROMPT OPTIMIZATION (DSPy MIPROv2) — Sunday, markets closed ═════════════

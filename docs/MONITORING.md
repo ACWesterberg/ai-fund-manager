@@ -5,6 +5,71 @@ as a paper "mirror" portfolio tracked at real Yahoo prices, with four Telegram
 watches running daily. The monitor never touches the broker — you execute in
 Montrose, then record fills so the mirror stays honest.
 
+## 1a. Create a sleeve from a photo of your portfolio
+
+The fastest path from "what I actually hold" to "a watched book" — no JSON, no
+typing. On the **Live** section (`/live`), the **Import from a photo of your
+portfolio** panel takes one or more screenshots of a broker holdings screen
+(Montrose, Avanza, Nordnet, IBKR, Degiro…) and turns them into positions:
+
+1. **Read.** Each image goes through local OCR (free, `tesseract`) *and* a
+   vision model, together in one prompt — the OCR transcript is the numeric
+   cross-check, the image preserves the table layout. Set `FUND_VISION_MODEL`
+   to change the model (default `gpt-4o-mini`, needs `OPENAI_API_KEY`).
+   Multiple screenshots of a scrolled list are merged and de-duplicated.
+2. **Resolve.** Each row is matched to a Yahoo symbol: ISIN from
+   `universe.csv` → broker→Yahoo map (`KOG`→`KOG.OL`) → company-name alias →
+   Yahoo symbol search. Rows that don't resolve come back with an amber ticker
+   box for you to fill in or untick.
+3. **Review.** Everything lands in an editable table — ticker, shares, cost
+   basis, plus a **kill criterion**, a **max drop** and a **time horizon** per
+   stock. *Nothing is written until you press Import.*
+4. **Seed.** Each holding is booked at the share count and SEK cost basis you
+   confirmed (fee 0 — those were paid at the real broker), so P&L runs from
+   your actual entry rather than today's price. No orders are placed anywhere.
+
+Cost basis is read as **Inköpsvärde ÷ antal** where the screen shows it, since
+that is the SEK you actually paid; a native GAV is used only when the row is
+already in SEK. A row where neither was visible falls back to market value and
+is flagged in amber — check those against the broker before importing.
+
+## 1b. Kill criteria and time horizons
+
+Every position carries up to three pre-registered exit conditions, set on the
+photo review table, in the dashboard's **Set a kill criterion & time horizon**
+editor (the pencil on any Watch-status row pre-fills it), or from the CLI:
+
+```bash
+fund paper-plan kf-chokepoint-satellite NVDA \
+    --kill "loses the Apple socket" --max-drop 25 --months 12
+fund paper-plan kf-chokepoint-satellite NVDA --clear
+```
+
+| Condition | Set with | Checked by |
+|-----------|----------|------------|
+| **Kill criterion** (text) | what would falsify the thesis | daily news judge (gpt-4o-mini) |
+| **Kill rules** (numeric) | max % drop from cost, price floor, price target | prices, every run — no API key needed |
+| **Time horizon** | a date, or N months out | days remaining, every run |
+
+Kill-rule alerts are transition-based: one Telegram push when a line is
+crossed, then silence until the position recovers past it by 2 points — a
+name sitting on its line doesn't nag daily. Editing a rule re-arms it.
+
+Horizons escalate through **30 / 14 / 7 / 1 days and the day itself**, one
+alert per stage, so a 12-month horizon produces five nudges over its life
+rather than a daily countdown. A horizon reached is a prompt to **re-run the
+thesis**, not a sell signal — the message says so.
+
+Check them on demand (both also run inside `fund paper-track`):
+
+```bash
+fund paper-watch                 # kill lines + horizons, all books
+fund paper-watch --slug my-sleeve
+```
+
+The dashboard's Watch-status panel shows live P&L against each drawdown line
+and the days left on each horizon, most urgent first.
+
 ## 1. Create the mirror from a structured LLM answer
 
 Save the picks JSON (the Fable answer, with its `positions[]`,
@@ -46,13 +111,16 @@ Telegram only when something fires:
 | Watch | Fires when |
 |-------|-----------|
 | Per-position kill criteria | Recent news plausibly meets a position's pre-registered kill line |
+| **Numeric kill rules** | A position drops past its max-drop line from cost, or through a price floor / up to a price target |
+| **Time horizons** | A position's review date is 30 / 14 / 7 / 1 days out, or has arrived — time for fresh analysis |
 | **Portfolio capex kill** | 1 of the 5 largest hyperscalers guides 2027 capex flat/down → **warning**; 2+ → **KILL: halve the compute cluster** |
 | **Earnings calendar** | Day before/of a holding's report → heads-up (quotes its `watch` + kill lines); day after → check-the-print reminder |
 | **Weight drift** | A position appreciates past **1.5× its target weight** (rebalance rule); re-arms after it falls back below 1.4× |
 
 The news/capex judges need `OPENAI_API_KEY` (gpt-4o-mini); they skip cleanly
-without it. All watches no-op on portfolios that don't carry the relevant
-config, so they're safe to run across every paper book.
+without it. The numeric kill rules and the horizon watch need no API key at
+all. All watches no-op on portfolios that don't carry the relevant config, so
+they're safe to run across every paper book.
 
 ## 3. Record fills as you execute the tranches
 

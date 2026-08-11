@@ -38,11 +38,14 @@
 
 {% if watch %}
 <!-- ── Watch status (live sleeves) ── -->
-<section class="card mb-5" style="border-color:rgba(14,165,233,.18)">
+<section class="card mb-5" id="watch" style="border-color:rgba(14,165,233,.18)">
   <div class="card-header">
     <div class="flex items-center gap-2">
       <span class="material-symbols-outlined text-sky-400" style="font-size:17px">radar</span>
       <h2 class="card-title">Watch status</h2>
+      {% if watch.alerts %}
+      <span class="badge" style="background:rgba(248,113,113,.12);color:#f87171">{{ watch.alerts }} need attention</span>
+      {% endif %}
     </div>
     <span class="text-xs text-slate-600">
       {% if watch.rows %}{{ watch.held_count }}/{{ watch.planned_count }} held · {% endif %}alerts push to Telegram
@@ -85,10 +88,13 @@
         <tr>
           <th>Ticker</th>
           <th class="num">Weight</th>
-          <th class="num">Target</th>
           <th class="num">Drift</th>
+          <th class="num">P&amp;L vs kill</th>
+          <th>Kill lines</th>
+          <th>Horizon</th>
           <th>Next earnings</th>
-          <th>Watch / kill</th>
+          <th>Watch / kill criterion</th>
+          {% if watchplan_action %}<th style="width:28px"></th>{% endif %}
         </tr>
       </thead>
       <tbody>
@@ -97,25 +103,158 @@
           <td class="font-semibold text-slate-200">{{ r.ticker }}</td>
           <td class="num">
             {% if r.held %}<span class="text-slate-300">{{ "{:.1f}".format(r.weight_pct) }}%</span>
+              {% if r.target_pct %}<span class="text-slate-600"> / {{ "{:.1f}".format(r.target_pct) }}%</span>{% endif %}
             {% else %}<span class="text-slate-600">— <span style="font-size:9px;letter-spacing:.04em">plan</span></span>{% endif %}
           </td>
-          <td class="num text-slate-500">{% if r.target_pct %}{{ "{:.1f}".format(r.target_pct) }}%{% else %}—{% endif %}</td>
           <td class="num">
             {% if r.ratio %}
               <span class="{{ 'text-red-400 font-semibold' if r.over else 'text-slate-400' }}">{{ "{:.2f}".format(r.ratio) }}×</span>
             {% else %}<span class="text-slate-600">—</span>{% endif %}
           </td>
+          <td class="num">
+            {% if r.pnl_pct is not none %}
+              <span class="{{ 'text-red-400 font-semibold' if r.dd_breached else ('ret-pos' if r.pnl_pct > 0 else 'ret-neg' if r.pnl_pct < 0 else 'ret-neu') }}">
+                {{ "{:+.1f}".format(r.pnl_pct) }}%</span>{% if r.max_drawdown_pct %}<span class="text-slate-600"> / -{{ "{:g}".format(r.max_drawdown_pct) }}%</span>{% endif %}
+            {% else %}<span class="text-slate-600">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.max_drawdown_pct or r.price_below or r.price_above %}
+              <div class="flex flex-wrap gap-1">
+                {% if r.max_drawdown_pct %}
+                <span class="badge" style="background:{{ 'rgba(248,113,113,.14)' if r.dd_breached else 'rgba(255,255,255,.04)' }};color:{{ '#f87171' if r.dd_breached else '#94a3b8' }}">
+                  −{{ "{:g}".format(r.max_drawdown_pct) }}% from cost</span>
+                {% endif %}
+                {% if r.price_below %}
+                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">floor {{ "{:g}".format(r.price_below) }} {{ r.rule_currency }}</span>
+                {% endif %}
+                {% if r.price_above %}
+                <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">target {{ "{:g}".format(r.price_above) }} {{ r.rule_currency }}</span>
+                {% endif %}
+              </div>
+            {% else %}<span class="text-slate-600">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.horizon_date %}
+              {% if r.horizon_due %}
+                <span class="badge" style="background:rgba(248,113,113,.14);color:#f87171">
+                  {% if r.days_left == 0 %}due today{% else %}{{ -r.days_left }}d overdue{% endif %}</span>
+              {% elif r.horizon_near %}
+                <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24">{{ r.days_left }}d left</span>
+              {% else %}
+                <span class="text-slate-400">{{ r.days_left }}d</span>
+              {% endif %}
+              <div class="text-slate-600" style="font-size:10px">{{ r.horizon_date }}</div>
+            {% else %}<span class="text-slate-600">—</span>{% endif %}
+          </td>
           <td class="text-slate-400">{{ r.next_earnings or '—' }}</td>
-          <td class="text-slate-500" style="max-width:340px">{{ r.watch or r.kill or '—' }}</td>
+          <td class="text-slate-500" style="max-width:300px">{{ r.watch or r.kill or '—' }}</td>
+          {% if watchplan_action %}
+          <td class="num">
+            <button type="button" class="wp-edit text-slate-600 hover:text-sky-400" title="Edit kill criteria & horizon"
+                    data-ticker="{{ r.ticker }}"
+                    data-kill="{{ r.kill }}"
+                    data-drop="{{ r.max_drawdown_pct or '' }}"
+                    data-below="{{ r.price_below or '' }}"
+                    data-above="{{ r.price_above or '' }}"
+                    data-date="{{ r.horizon_date }}"
+                    data-note="{{ r.horizon_note }}">
+              <span class="material-symbols-outlined" style="font-size:15px">edit</span>
+            </button>
+          </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   <p class="text-[11px] text-slate-600 mt-2">
-    Drift ≥ 1.50× target fires the rebalance alert. Earnings dates come from the imported plan;
-    the daily watch pings before each report and after. Verify every alert before acting.
+    Kill lines are checked against prices every run — a breach pushes to Telegram once, then re-arms
+    when the position recovers. Horizons nudge at 30 / 14 / 7 / 1 days and on the day, as a prompt to
+    re-run the thesis. Drift ≥ 1.50× target fires the rebalance alert. Verify every alert before acting.
   </p>
+  {% endif %}
+
+  {% if watchplan_action %}
+  <!-- ── Kill criterion + horizon editor ── -->
+  <details class="mt-4 pt-4 border-t border-slate-800/60" id="wp-details">
+    <summary class="flex items-center gap-2" style="cursor:pointer;list-style:none">
+      <span class="material-symbols-outlined text-sky-400" style="font-size:16px">gpp_maybe</span>
+      <span class="card-title">Set a kill criterion &amp; time horizon</span>
+      <span class="text-xs text-slate-500 ml-1">per stock — what would falsify the thesis, and when to re-check</span>
+    </summary>
+
+    {% set wcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
+    <form method="post" action="{{ watchplan_action }}" id="wp-form" class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+      <div>
+        <label class="kpi-label" for="wp-ticker">Ticker</label>
+        <input id="wp-ticker" name="ticker" list="wp-tickers" required placeholder="NVDA" class="{{ wcls }}" />
+        <datalist id="wp-tickers">
+          {% for r in watch.rows %}<option value="{{ r.ticker }}"></option>{% endfor %}
+        </datalist>
+      </div>
+      <div class="col-span-2 md:col-span-3">
+        <label class="kpi-label" for="wp-kill">Kill criterion (what would falsify the thesis)</label>
+        <input id="wp-kill" name="kill_criterion" class="{{ wcls }}"
+               placeholder="e.g. loses the Apple socket, or capex guide cut two quarters running" />
+      </div>
+      <div>
+        <label class="kpi-label" for="wp-drop">Max drop from cost</label>
+        <input id="wp-drop" name="max_drawdown_pct" type="number" step="1" min="0" max="99" placeholder="25" class="{{ wcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="wp-date">Horizon date</label>
+        <input id="wp-date" name="horizon_date" type="date" class="{{ wcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="wp-months">…or months out</label>
+        <input id="wp-months" name="horizon_months" type="number" step="1" min="1" max="120" placeholder="12" class="{{ wcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="wp-below">Price floor</label>
+        <input id="wp-below" name="price_below" type="number" step="any" min="0" placeholder="optional" class="{{ wcls }}" />
+      </div>
+      <div>
+        <label class="kpi-label" for="wp-above">Price target</label>
+        <input id="wp-above" name="price_above" type="number" step="any" min="0" placeholder="optional" class="{{ wcls }}" />
+      </div>
+      <div class="col-span-2">
+        <label class="kpi-label" for="wp-note">Horizon note</label>
+        <input id="wp-note" name="horizon_note" class="{{ wcls }}" placeholder="what should be true by then" />
+      </div>
+      <div class="col-span-2 md:col-span-6 flex flex-wrap items-center gap-3">
+        <button type="submit" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white">Save watch plan</button>
+        <button type="submit" name="remove" value="1"
+                onclick="return confirm('Clear the kill criteria and horizon for this ticker?')"
+                class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-red-400">Clear</button>
+        <span class="text-[11px] text-slate-600">
+          Empty fields clear that line. Price floor/target are in the stock's own trading currency;
+          the drop is measured in SEK from your cost basis.
+        </span>
+      </div>
+    </form>
+  </details>
+
+  <script>
+    (() => {
+      const form = document.getElementById('wp-form');
+      if (!form) return;
+      // Pencil icon → open the editor pre-filled with that row's current plan.
+      document.querySelectorAll('.wp-edit').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.getElementById('wp-details').open = true;
+          form.ticker.value           = btn.dataset.ticker;
+          form.kill_criterion.value   = btn.dataset.kill   || '';
+          form.max_drawdown_pct.value = btn.dataset.drop   || '';
+          form.price_below.value      = btn.dataset.below  || '';
+          form.price_above.value      = btn.dataset.above  || '';
+          form.horizon_date.value     = btn.dataset.date   || '';
+          form.horizon_note.value     = btn.dataset.note   || '';
+          form.horizon_months.value   = '';
+          form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        });
+      });
+    })();
+  </script>
   {% endif %}
 </section>
 {% endif %}

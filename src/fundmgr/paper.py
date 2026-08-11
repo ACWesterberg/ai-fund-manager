@@ -697,6 +697,7 @@ def create_portfolio(
     capex_kill: dict | None = None,
     kind: str = "paper",
     execute_buys: bool = True,
+    seed_holdings: bool = False,
 ) -> tuple[str, list[str]]:
     """Create a portfolio from a set of picks.
 
@@ -713,6 +714,13 @@ def create_portfolio(
     weights, kill criteria and notes are stored and monitored, but nothing is
     bought; positions appear as you record actual fills (`fund paper-fill` /
     Telegram screenshot). Cash stays whole.
+
+    seed_holdings=True books each holding's own `shares` at its own
+    `avg_cost_sek` instead of buying at today's price — the photo-import path,
+    where the screenshot already tells us what is held and what it cost. Rows
+    carrying kill rules or a horizon (`max_drawdown_pct`, `price_below`,
+    `price_above`, `horizon_date`/`horizon_months`) register them as the
+    watch plan; see fundmgr.watchplan.
 
     Returns (slug, log_lines). Raises ValueError on bad input (name taken,
     nothing parseable, or — when executing — no prices available).
@@ -740,6 +748,16 @@ def create_portfolio(
                 "kill_criterion": str(h.get("kill_criterion") or "").strip(),
                 "cluster": str(h.get("cluster") or "").strip(),
                 "confidence": _safe_confidence(h.get("confidence")),
+                # Seeding + watch-plan extras (photo import / edited review table).
+                # Carried through untouched; consumed after the store exists.
+                "shares": _opt_float(h.get("shares")),
+                "avg_cost_sek": _opt_float(h.get("avg_cost_sek")),
+                "max_drawdown_pct": h.get("max_drawdown_pct"),
+                "price_below": h.get("price_below"),
+                "price_above": h.get("price_above"),
+                "horizon_date": h.get("horizon_date"),
+                "horizon_months": h.get("horizon_months"),
+                "horizon_note": h.get("horizon_note"),
             }
             for h in holdings_override
         ])
@@ -761,7 +779,18 @@ def create_portfolio(
             "Use the preview to enter tickers manually."
         )
 
-    holdings = normalise_weights(holdings)
+    if seed_holdings:
+        # Target weight = what you actually hold, at cost, against NAV. Deriving
+        # it here rather than letting normalise_weights equal-weight the book is
+        # what makes the drift watch meaningful on an imported portfolio — and
+        # it sidesteps that function's fraction heuristic, which would misread a
+        # mostly-cash book's small weights as 0–1 values.
+        for h in holdings:
+            shares, cost = h.get("shares"), h.get("avg_cost_sek")
+            h["weight_pct"] = (round(shares * cost / capital_sek * 100, 2)
+                               if shares and cost and capital_sek else 0.0)
+    else:
+        holdings = normalise_weights(holdings)
     tickers = [h["ticker"] for h in holdings]
 
     # Per-ticker trading currency (resolves without a live price via yfinance
@@ -772,6 +801,9 @@ def create_portfolio(
     # cache. In plan-only mode a missing price just means no opening fill.
     from fundmgr.data.quotes import live_prices
     native = {t: p for t, p in live_prices(tickers).items() if p}
+
+    if seed_holdings:
+        execute_buys = False  # positions come from the screenshot, not today's tape
 
     priced = [h for h in holdings if h["ticker"] in native]
     if execute_buys:
@@ -813,6 +845,23 @@ def create_portfolio(
         if capex_kill:
             store.set_meta("paper_capex_kill", json.dumps(capex_kill))
 
+        # Numeric kill lines and time horizons carried on the holding rows.
+        from fundmgr import watchplan
+        for h in holdings:
+            if not any(h.get(k) for k in ("max_drawdown_pct", "price_below", "price_above",
+                                          "horizon_date", "horizon_months")):
+                continue
+            watchplan.set_position_plan(
+                store, h["ticker"],
+                max_drawdown_pct=h.get("max_drawdown_pct"),
+                price_below=h.get("price_below"),
+                price_above=h.get("price_above"),
+                currency=currency_map.get(h["ticker"]),
+                review_date=h.get("horizon_date"),
+                horizon_months=h.get("horizon_months"),
+                horizon_note=h.get("horizon_note"),
+            )
+
         def _plan_thesis(h: dict) -> tuple[str, str]:
             kill = (h.get("kill_criterion") or "").strip()
             thesis = h["thesis"]
@@ -851,6 +900,35 @@ def create_portfolio(
                 log.append(f"✓ Bought {shares:g} × {t} @ {price_sek:,.2f} SEK (fee {fee:.0f})")
             if not actions:
                 raise ValueError("No positions could be opened — see the skip reasons above.")
+        elif seed_holdings:
+            # Book what the screenshot says is already held: each holding's own
+            # share count at its own SEK cost basis, fee 0 (the fees were paid
+            # at the real broker long before this book existed). Same path as a
+            # manually recorded fill, so cash and NAV stay consistent.
+            for h in holdings:
+                t = h["ticker"]
+                shares, cost = h.get("shares"), h.get("avg_cost_sek")
+                if not shares or not cost:
+                    log.append(f"⚠ {t}: no share count / cost basis — not seeded "
+                               "(record a fill to open it)")
+                    continue
+                store.apply_fill(Transaction(
+                    ticker=t, side="buy", shares=round(shares, 4),
+                    price_sek=round(cost, 4), fee_sek=0.0, source="fill",
+                    currency=currency_map.get(t, "SEK"), timestamp=now,
+                ))
+                thesis, kill = _plan_thesis(h)
+                actions.append({
+                    "ticker": t, "side": "buy", "target_weight_pct": h["weight_pct"],
+                    "confidence": h["confidence"], "thesis": thesis, "kill_criterion": kill,
+                    "cluster": h.get("cluster") or "",
+                    "sek_estimate": round(shares * cost), "stop_loss_pct": None,
+                })
+                log.append(f"✓ Seeded {shares:g} × {t} @ {cost:,.2f} SEK cost basis")
+            if not actions:
+                raise ValueError(
+                    "No holdings could be seeded — every row was missing its share "
+                    "count or cost basis. Fill those in and try again.")
         else:
             # Plan only: record the intended trades without executing. Cash stays
             # whole; positions appear as fills are recorded later.
@@ -868,13 +946,17 @@ def create_portfolio(
         # dashboard and — for executed books — the learnings pipeline pick it up.
         run_id = f"paper-{slug}-{now.strftime('%Y%m%d%H%M%S')}"
         actions_json = json.dumps(actions)
-        summary = (
-            f"Paper portfolio '{name}' seeded from {model_label.strip() or 'pasted'} "
-            f"picks at live market prices."
-            if execute_buys else
-            f"Live sleeve '{name}' — plan imported from {model_label.strip() or 'pasted'} "
-            f"picks; positions fill as you record trades."
-        )
+        if execute_buys:
+            summary = (f"Paper portfolio '{name}' seeded from "
+                       f"{model_label.strip() or 'pasted'} picks at live market prices.")
+        elif seed_holdings:
+            summary = (f"Live sleeve '{name}' — {len(actions)} holdings imported from "
+                       f"{model_label.strip() or 'a portfolio photo'} at their recorded "
+                       f"cost basis.")
+        else:
+            summary = (f"Live sleeve '{name}' — plan imported from "
+                       f"{model_label.strip() or 'pasted'} picks; positions fill as you "
+                       f"record trades.")
         store.save_recommendation(RecommendationLog(
             run_id=run_id,
             timestamp=now,
@@ -920,6 +1002,9 @@ def create_portfolio(
     if execute_buys:
         log.append(f"✓ Portfolio '{name}' created — {len(actions)} positions, "
                    f"{store.get_cash():,.0f} SEK cash")
+    elif seed_holdings:
+        log.append(f"✓ Sleeve '{name}' created — {len(actions)} holdings seeded at cost, "
+                   f"{store.get_cash():,.0f} SEK cash. Watched daily by 'fund paper-track'.")
     else:
         log.append(f"✓ Plan '{name}' imported — {len(actions)} intended positions, "
                    f"no fills yet ({store.get_cash():,.0f} SEK cash). "
@@ -929,6 +1014,17 @@ def create_portfolio(
 
 def _cost_nav(store: Store) -> float:
     return sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
+
+
+def _opt_float(value) -> float | None:
+    """Positive float or None — for optional numeric fields off a web form."""
+    if value in (None, ""):
+        return None
+    try:
+        out = float(str(value).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return None
+    return out if out > 0 else None
 
 
 def _safe_confidence(value) -> float | None:
@@ -1085,6 +1181,22 @@ def track_portfolio(slug: str) -> list[str]:
         log += check_kill_criteria(slug, store=store)
     except Exception as e:
         log.append(f"⚠ kill-criterion watch failed: {e}")
+
+    # Numeric kill lines (max drawdown / price floor / price target) — the half
+    # of the kill criteria that needs no interpretation, so it runs with no API
+    # key and fires the moment a line is crossed.
+    from fundmgr import watchplan
+    try:
+        log += watchplan.check_kill_rules(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ kill-rule watch failed: {e}")
+
+    # Time horizons: nudge as each position's review date approaches so a fresh
+    # analysis happens before the thesis quietly expires.
+    try:
+        log += watchplan.check_horizons(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ horizon watch failed: {e}")
 
     # Portfolio-level capex kill criterion (e.g. "2 of 5 hyperscalers guide
     # 2027 capex flat/down"), the master trigger for the whole sleeve.

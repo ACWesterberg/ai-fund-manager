@@ -1,0 +1,515 @@
+"""Portfolio photo → holdings extraction, and the web import flow it feeds."""
+import json
+from io import BytesIO
+
+import pytest
+
+from fundmgr import paper
+from fundmgr.vision import portfolio_photo as pp
+
+
+# ── Number coercion (Nordic broker formatting) ────────────────────────────────
+
+@pytest.mark.parametrize("raw,expected", [
+    ("1 234,50", 1234.50),      # space thousands + decimal comma (Avanza/Montrose)
+    ("1.234,50", 1234.50),      # dot thousands + decimal comma (German/Nordic)
+    ("1,234.50", 1234.50),      # US
+    ("12 500", 12500.0),
+    ("291,50 SEK", 291.50),
+    ("-12,5", -12.5),
+    ("(3 000)", -3000.0),       # parenthesised negative
+    ("8,2 %", 8.2),
+    ("1,234", 1234.0),          # 3 trailing digits → thousands separator
+    ("1,23", 1.23),             # 2 trailing digits → decimal comma
+    (1234.5, 1234.5),
+    (12, 12.0),
+])
+def test_to_float_parses_broker_numbers(raw, expected):
+    assert pp.to_float(raw) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("raw", [None, "", "  ", "n/a", "—", "-", True, False])
+def test_to_float_rejects_non_numbers(raw):
+    assert pp.to_float(raw) is None
+
+
+# ── JSON recovery from a chatty model ─────────────────────────────────────────
+
+def test_parse_json_plain():
+    assert pp._parse_json('{"holdings": []}') == {"holdings": []}
+
+
+def test_parse_json_from_fenced_prose():
+    raw = 'Here you go:\n```json\n{"holdings": [{"name": "Volvo"}]}\n```\nHope that helps!'
+    assert pp._parse_json(raw)["holdings"][0]["name"] == "Volvo"
+
+
+def test_parse_json_handles_braces_inside_strings():
+    raw = '{"notes": "row 3 said {unreadable}", "holdings": []}'
+    assert pp._parse_json(raw)["notes"] == "row 3 said {unreadable}"
+
+
+def test_parse_json_accepts_a_bare_array():
+    assert pp._parse_json('[{"name": "Volvo"}]')["holdings"][0]["name"] == "Volvo"
+
+
+def test_parse_json_gives_up_cleanly():
+    assert pp._parse_json("no json at all") is None
+    assert pp._parse_json("") is None
+
+
+# ── Row normalisation ─────────────────────────────────────────────────────────
+
+def test_rows_derive_cost_basis_from_sek_purchase_value():
+    """Inköpsvärde ÷ antal is the honest cost basis — it beats a native GAV."""
+    rows, _warn = pp._normalise_rows([{
+        "name": "Alphabet", "ticker": "GOOGL", "shares": 10,
+        "avg_cost_native": 180.0, "cost_value_sek": 34_290, "currency": "USD",
+    }])
+    assert rows[0]["avg_cost_sek"] == pytest.approx(3429.0)
+    assert rows[0]["avg_cost_basis"] == "cost_value_sek"
+
+
+def test_rows_use_native_gav_when_the_row_is_already_sek():
+    rows, _ = pp._normalise_rows([{
+        "name": "Volvo B", "ticker": "VOLV-B", "shares": 100,
+        "avg_cost_native": 291.5, "currency": "SEK",
+    }])
+    assert rows[0]["avg_cost_sek"] == pytest.approx(291.5)
+    assert rows[0]["avg_cost_basis"] == "avg_cost_native"
+
+
+def test_rows_fall_back_to_market_value_and_flag_it():
+    rows, warnings = pp._normalise_rows([{
+        "name": "Sandvik", "ticker": "SAND", "shares": 50,
+        "market_value_sek": 10_000, "currency": "SEK",
+    }])
+    assert rows[0]["avg_cost_sek"] == pytest.approx(200.0)
+    assert rows[0]["avg_cost_basis"] == "market_value_sek"
+    assert not warnings  # a derivable basis isn't a warning; the UI flags it in amber
+
+
+def test_rows_warn_on_missing_numbers():
+    rows, warnings = pp._normalise_rows([{"name": "Mystery Corp", "ticker": "MYST"}])
+    assert rows[0]["shares"] is None and rows[0]["avg_cost_sek"] is None
+    assert any("no share count" in w for w in warnings)
+    assert any("no cost basis" in w for w in warnings)
+
+
+def test_rows_drop_summary_and_cash_lines():
+    rows, _ = pp._normalise_rows([
+        {"name": "Totalt", "shares": None},
+        {"name": "Likvida medel", "shares": None},
+        {"name": "Volvo B", "ticker": "VOLV-B", "shares": 10, "avg_cost_native": 300,
+         "currency": "SEK"},
+    ])
+    assert [r["name"] for r in rows] == ["Volvo B"]
+
+
+def test_rows_reject_a_malformed_isin():
+    rows, warnings = pp._normalise_rows([{
+        "name": "Volvo B", "isin": "SE00001154", "shares": 10,
+        "avg_cost_native": 300, "currency": "SEK",
+    }])
+    assert rows[0]["isin"] == ""
+    assert any("not a valid ISIN" in w for w in warnings)
+
+
+def test_rows_keep_a_well_formed_isin():
+    rows, _ = pp._normalise_rows([{"name": "Volvo B", "isin": "se0000115446"}])
+    assert rows[0]["isin"] == "SE0000115446"
+
+
+def test_rows_clamp_confidence():
+    rows, _ = pp._normalise_rows([
+        {"name": "A", "confidence": 5},
+        {"name": "B", "confidence": -1},
+        {"name": "C"},
+    ])
+    assert [r["confidence"] for r in rows] == [1.0, 0.0, 0.5]
+
+
+def test_rows_skip_entries_with_no_identity():
+    rows, _ = pp._normalise_rows([{"shares": 10}, "not a dict", {"name": "Volvo"}])
+    assert [r["name"] for r in rows] == ["Volvo"]
+
+
+# ── Ticker resolution ─────────────────────────────────────────────────────────
+
+def test_isin_resolves_to_universe_ticker():
+    holdings = [{"name": "Volvo B", "raw_ticker": "", "isin": "SE0000115446",
+                 "ticker": None, "currency": "SEK", "resolved_via": None}]
+    assert pp._resolve_tickers(holdings)[0]["ticker"] == "VOLV-B.ST"
+    assert holdings[0]["resolved_via"] == "isin"
+
+
+def test_broker_ticker_maps_to_the_yahoo_symbol():
+    holdings = [{"name": "Kongsberg", "raw_ticker": "KOG", "isin": "",
+                 "ticker": None, "currency": "NOK", "resolved_via": None}]
+    assert pp._resolve_tickers(holdings)[0]["ticker"] == "KOG.OL"
+
+
+def test_name_only_row_falls_back_to_the_alias_map(monkeypatch):
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)  # no network
+    holdings = [{"name": "Nvidia", "raw_ticker": "", "isin": "",
+                 "ticker": None, "currency": "USD", "resolved_via": None}]
+    assert pp._resolve_tickers(holdings)[0]["ticker"] == "NVDA"
+
+
+def test_unresolvable_row_comes_back_blank(monkeypatch):
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    holdings = [{"name": "Totally Made Up Ltd", "raw_ticker": "", "isin": "",
+                 "ticker": None, "currency": "USD", "resolved_via": None}]
+    assert pp._resolve_tickers(holdings)[0]["ticker"] is None
+
+
+# ── extract_holdings orchestration (LLM mocked) ───────────────────────────────
+
+SAMPLE_ANSWER = json.dumps({
+    "holdings": [
+        {"name": "Volvo B", "ticker": "VOLV-B", "isin": "SE0000115446", "shares": "100",
+         "avg_cost_native": "291,50", "currency": "SEK", "confidence": 0.9},
+        {"name": "Nvidia", "ticker": "NVDA", "shares": "12",
+         "cost_value_sek": "41 148", "currency": "USD", "confidence": 0.8},
+        {"name": "Totalt", "shares": None},
+    ],
+    "cash_sek": "12 500",
+    "total_value_sek": "83 798",
+    "account_name": "Montrose KF",
+    "notes": "",
+})
+
+
+@pytest.fixture
+def fake_vision(monkeypatch):
+    """Stub the vision call and the image/OCR layers — no network, no Pillow."""
+    calls = {}
+
+    def _fake_call(model, api_key, content):
+        calls["model"] = model
+        calls["content"] = content
+        return SAMPLE_ANSWER
+
+    monkeypatch.setattr(pp, "_call_vision", _fake_call)
+    monkeypatch.setattr(pp, "_prepare_image", lambda raw: ("Zm9v", "image/jpeg"))
+    monkeypatch.setattr(pp, "ocr_text", lambda raw: "ISIN: SE0000115446  Antal: 100")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    return calls
+
+
+def test_extract_holdings_end_to_end(fake_vision):
+    result = pp.extract_holdings([b"img"], resolve=False)
+
+    assert [h["name"] for h in result["holdings"]] == ["Volvo B", "Nvidia"]
+    assert result["holdings"][0]["avg_cost_sek"] == pytest.approx(291.5)
+    assert result["holdings"][1]["avg_cost_sek"] == pytest.approx(41148 / 12)
+    assert result["cash_sek"] == pytest.approx(12500)
+    assert result["total_value_sek"] == pytest.approx(83798)
+    assert result["account_name"] == "Montrose KF"
+    assert result["ocr_used"] is True
+
+
+def test_extract_holdings_sends_image_and_ocr_hint(fake_vision):
+    pp.extract_holdings([b"img1", b"img2"], resolve=False)
+    content = fake_vision["content"]
+    assert sum(1 for part in content if part["type"] == "image_url") == 2
+    assert "SE0000115446" in content[0]["text"]      # OCR transcript rides along
+    assert "2 screenshots" in content[0]["text"]
+
+
+def test_extract_holdings_without_ocr(monkeypatch, fake_vision):
+    monkeypatch.setattr(pp, "ocr_text", lambda raw: "")
+    result = pp.extract_holdings([b"img"], resolve=False)
+    assert result["ocr_used"] is False
+    assert "OCR" not in fake_vision["content"][0]["text"]
+
+
+def test_extract_holdings_resolves_tickers(fake_vision, monkeypatch):
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    result = pp.extract_holdings([b"img"], resolve=True)
+    assert result["holdings"][0]["ticker"] == "VOLV-B.ST"   # via ISIN
+    assert result["holdings"][1]["ticker"] == "NVDA"
+
+
+def test_extract_holdings_needs_an_api_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(pp.PhotoExtractionError, match="OPENAI_API_KEY"):
+        pp.extract_holdings([b"img"])
+
+
+def test_extract_holdings_rejects_no_images():
+    with pytest.raises(pp.PhotoExtractionError, match="No images"):
+        pp.extract_holdings([])
+
+
+def test_extract_holdings_caps_the_image_count(fake_vision):
+    with pytest.raises(pp.PhotoExtractionError, match="Too many images"):
+        pp.extract_holdings([b"img"] * (pp.MAX_IMAGES + 1))
+
+
+def test_extract_holdings_errors_on_unparseable_answer(monkeypatch, fake_vision):
+    monkeypatch.setattr(pp, "_call_vision", lambda *a: "I can't read that image, sorry.")
+    with pytest.raises(pp.PhotoExtractionError, match="readable JSON"):
+        pp.extract_holdings([b"img"], resolve=False)
+
+
+def test_extract_holdings_errors_when_no_rows_survive(monkeypatch, fake_vision):
+    monkeypatch.setattr(pp, "_call_vision", lambda *a: '{"holdings": []}')
+    with pytest.raises(pp.PhotoExtractionError, match="No holdings could be read"):
+        pp.extract_holdings([b"img"], resolve=False)
+
+
+def test_prepare_image_downscales_a_large_screenshot():
+    pytest.importorskip("PIL")
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (3000, 2000), (10, 10, 10)).save(buf, format="PNG")
+    b64, mime = pp._prepare_image(buf.getvalue())
+    assert mime == "image/jpeg"
+
+    import base64
+    out = Image.open(BytesIO(base64.b64decode(b64)))
+    assert max(out.size) == pp._MAX_EDGE
+
+
+def test_prepare_image_flattens_transparency():
+    """A dark-mode PNG with alpha must not come out black-on-black."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGBA", (40, 40), (0, 0, 0, 0)).save(buf, format="PNG")
+    b64, _ = pp._prepare_image(buf.getvalue())
+
+    import base64
+    out = Image.open(BytesIO(base64.b64decode(b64)))
+    assert out.mode == "RGB"
+    assert out.getpixel((5, 5)) == (255, 255, 255)
+
+
+def test_prepare_image_rejects_a_non_image():
+    pytest.importorskip("PIL")
+    with pytest.raises(pp.PhotoExtractionError, match="Could not read image"):
+        pp._prepare_image(b"this is not an image")
+
+
+# ── Web flow ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(paper, "PAPER_DIR", tmp_path / "paper")
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+    monkeypatch.setattr(paper, "_cache_price_history", lambda store, tickers, **kw: None)
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    import fundmgr.data.benchmark as benchmark
+    monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", lambda store, **kw: True)
+    import fundmgr.data.quotes as quotes
+    monkeypatch.setattr(quotes, "live_prices", lambda tickers: {t: 300.0 for t in tickers})
+
+    from fundmgr.web.app import app
+    return TestClient(app)
+
+
+def test_live_page_offers_photo_import(client):
+    r = client.get("/live/")
+    assert r.status_code == 200
+    assert "Import from a photo of your portfolio" in r.text
+    assert "/live/extract-photos" in r.text
+
+
+def test_extract_photos_returns_review_rows(client, monkeypatch):
+    monkeypatch.setattr(
+        "fundmgr.vision.portfolio_photo.extract_holdings",
+        lambda images, **kw: {
+            "holdings": [{"name": "Volvo B", "ticker": "VOLV-B.ST", "shares": 100,
+                          "avg_cost_sek": 291.5, "avg_cost_basis": "avg_cost_native",
+                          "raw_ticker": "VOLV-B", "isin": "SE0000115446",
+                          "confidence": 0.9, "resolved_via": "isin"}],
+            "cash_sek": 12500.0, "total_value_sek": 41650.0,
+            "account_name": "Montrose KF", "notes": "", "warnings": [],
+            "ocr_used": True, "model": "gpt-4o-mini",
+        })
+
+    r = client.post("/live/extract-photos", files={"photos": ("shot.png", b"fake", "image/png")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["holdings"][0]["ticker"] == "VOLV-B.ST"
+    assert body["cash_sek"] == 12500.0
+    assert body["unresolved"] == 0
+
+
+def test_extract_photos_reports_unresolved_rows(client, monkeypatch):
+    monkeypatch.setattr(
+        "fundmgr.vision.portfolio_photo.extract_holdings",
+        lambda images, **kw: {
+            "holdings": [{"name": "Mystery", "ticker": None, "shares": 1,
+                          "avg_cost_sek": 10.0, "avg_cost_basis": None, "raw_ticker": "",
+                          "isin": "", "confidence": 0.3, "resolved_via": None}],
+            "cash_sek": None, "total_value_sek": None, "account_name": None,
+            "notes": "one row was cut off", "warnings": ["Mystery: no share count read"],
+            "ocr_used": False, "model": "gpt-4o-mini",
+        })
+
+    body = client.post("/live/extract-photos",
+                       files={"photos": ("s.png", b"x", "image/png")}).json()
+    assert body["unresolved"] == 1
+    assert body["warnings"] == ["Mystery: no share count read"]
+    assert body["notes"] == "one row was cut off"
+
+
+def test_extract_photos_surfaces_extraction_errors(client, monkeypatch):
+    def boom(images, **kw):
+        raise pp.PhotoExtractionError("No holdings could be read from the photo.")
+    monkeypatch.setattr("fundmgr.vision.portfolio_photo.extract_holdings", boom)
+
+    r = client.post("/live/extract-photos", files={"photos": ("s.png", b"x", "image/png")})
+    assert r.status_code == 400
+    assert "No holdings could be read" in r.json()["error"]
+
+
+def test_extract_photos_rejects_an_empty_upload(client):
+    r = client.post("/live/extract-photos", files={"photos": ("s.png", b"", "image/png")})
+    assert r.status_code == 400
+    assert r.json()["ok"] is False
+
+
+def test_extract_photos_rejects_an_oversized_upload(client):
+    from fundmgr.web.paper import _MAX_UPLOAD_BYTES
+    big = b"x" * (_MAX_UPLOAD_BYTES + 1)
+    r = client.post("/live/extract-photos", files={"photos": ("huge.png", big, "image/png")})
+    assert r.status_code == 400
+    assert "larger than" in r.json()["error"]
+
+
+def test_create_from_photo_seeds_the_sleeve(client):
+    rows = [
+        {"ticker": "VOLV-B.ST", "name": "Volvo B", "shares": "100", "avg_cost_sek": "291.5",
+         "kill_criterion": "order book halves", "max_drawdown_pct": "25",
+         "horizon_months": "12"},
+        {"ticker": "SAND.ST", "name": "Sandvik", "shares": "50", "avg_cost_sek": "200",
+         "kill_criterion": "", "max_drawdown_pct": "", "horizon_months": ""},
+    ]
+    r = client.post("/live/create-from-photo", data={
+        "name": "Photo Sleeve", "holdings_json": json.dumps(rows),
+        "cash_sek": "12500", "benchmark": "URTH",
+    }, follow_redirects=False)
+    assert r.status_code == 303
+
+    _meta, store = paper.open_portfolio("photo-sleeve")
+    positions = {p.ticker: p for p in store.get_positions()}
+    assert positions["VOLV-B.ST"].shares == 100
+    assert positions["VOLV-B.ST"].avg_cost_sek == pytest.approx(291.5)
+    assert store.get_cash() == pytest.approx(12500)
+
+    from fundmgr import watchplan
+    plan = watchplan.plan_for(store, "VOLV-B.ST")
+    assert plan["kill_criterion"] == "order book halves"
+    assert plan["kill_rules"]["max_drawdown_pct"] == 25.0
+    assert plan["horizon"]["review_date"]
+
+
+def test_photo_sleeve_dashboard_shows_the_watch_plan(client):
+    rows = [{"ticker": "VOLV-B.ST", "name": "Volvo B", "shares": "100",
+             "avg_cost_sek": "291.5", "kill_criterion": "order book halves",
+             "max_drawdown_pct": "25", "horizon_months": "12"}]
+    client.post("/live/create-from-photo", data={
+        "name": "Dash Sleeve", "holdings_json": json.dumps(rows), "cash_sek": "0",
+    }, follow_redirects=False)
+
+    r = client.get("/live/dash-sleeve")
+    assert r.status_code == 200
+    assert "Watch status" in r.text
+    assert "order book halves" in r.text
+    assert "−25% from cost" in r.text
+    assert "Set a kill criterion" in r.text
+
+
+def test_create_from_photo_rejects_rows_without_cost(client):
+    rows = [{"ticker": "VOLV-B.ST", "name": "Volvo B", "shares": "100"}]
+    r = client.post("/live/create-from-photo", data={
+        "name": "No Cost", "holdings_json": json.dumps(rows), "cash_sek": "0",
+    })
+    assert r.status_code == 200
+    assert "missing its share count or cost basis" in r.text
+
+
+def test_create_from_photo_rejects_bad_json(client):
+    r = client.post("/live/create-from-photo", data={
+        "name": "Broken", "holdings_json": "{not json", "cash_sek": "0",
+    })
+    assert r.status_code == 200
+    assert "Could not read the reviewed holdings" in r.text
+
+
+def test_create_from_photo_rejects_an_empty_list(client):
+    r = client.post("/live/create-from-photo", data={
+        "name": "Empty", "holdings_json": "[]", "cash_sek": "0",
+    })
+    assert r.status_code == 200
+    assert "No holdings to import" in r.text
+
+
+# ── Editing the plan from the dashboard ───────────────────────────────────────
+
+def _sleeve(client, name="Edit Sleeve"):
+    rows = [{"ticker": "VOLV-B.ST", "name": "Volvo B", "shares": "100",
+             "avg_cost_sek": "300"}]
+    client.post("/live/create-from-photo", data={
+        "name": name, "holdings_json": json.dumps(rows), "cash_sek": "0",
+    }, follow_redirects=False)
+    return paper.slugify(name)
+
+
+def test_watchplan_form_saves_criteria(client):
+    slug = _sleeve(client)
+    r = client.post(f"/live/{slug}/watchplan", data={
+        "ticker": "volv-b.st", "kill_criterion": "order book halves",
+        "max_drawdown_pct": "20", "price_below": "150", "horizon_months": "6",
+        "horizon_note": "capital goods cycle should have turned",
+    }, follow_redirects=False)
+    assert r.status_code == 303
+
+    from fundmgr import watchplan
+    _meta, store = paper.open_portfolio(slug)
+    plan = watchplan.plan_for(store, "VOLV-B.ST")
+    assert plan["kill_criterion"] == "order book halves"
+    assert plan["kill_rules"]["max_drawdown_pct"] == 20.0
+    assert plan["kill_rules"]["price_below"] == 150.0
+    assert plan["horizon"]["note"] == "capital goods cycle should have turned"
+
+
+def test_watchplan_form_clears_a_position(client):
+    slug = _sleeve(client, "Clear Sleeve")
+    client.post(f"/live/{slug}/watchplan",
+                data={"ticker": "VOLV-B.ST", "kill_criterion": "x", "max_drawdown_pct": "20"},
+                follow_redirects=False)
+    client.post(f"/live/{slug}/watchplan",
+                data={"ticker": "VOLV-B.ST", "remove": "1"}, follow_redirects=False)
+
+    from fundmgr import watchplan
+    _meta, store = paper.open_portfolio(slug)
+    assert watchplan.plan_tickers(store) == set()
+
+
+def test_watchplan_form_rejects_a_bad_date(client):
+    slug = _sleeve(client, "Bad Date Sleeve")
+    r = client.post(f"/live/{slug}/watchplan", data={
+        "ticker": "VOLV-B.ST", "horizon_date": "11/08/2027",
+    }, follow_redirects=False)
+    assert r.status_code == 303
+    assert "Bad+horizon+date" in r.headers["location"] or "Bad horizon date" in r.headers["location"]
+    assert "ok=0" in r.headers["location"]
+
+
+def test_watchplan_form_requires_a_ticker(client):
+    slug = _sleeve(client, "No Ticker Sleeve")
+    r = client.post(f"/live/{slug}/watchplan", data={"ticker": "  "},
+                    follow_redirects=False)
+    assert "ok=0" in r.headers["location"]
+
+
+def test_watchplan_form_404s_on_unknown_sleeve(client):
+    r = client.post("/live/nope/watchplan", data={"ticker": "NVDA"})
+    assert r.status_code == 404

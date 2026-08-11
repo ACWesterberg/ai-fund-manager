@@ -1438,6 +1438,83 @@ def paper_kill_check(slug: str | None):
             click.echo(f"  {line}")
 
 
+@cli.command("paper-watch")
+@click.option("--slug", default=None, help="Check a single portfolio instead of all.")
+def paper_watch(slug: str | None):
+    """Check numeric kill lines and time horizons across the portfolios.
+
+    Kill lines (max drawdown from cost, price floor, price target) are compared
+    with current prices; horizons alert at 30/14/7/1 days out and on the day.
+    Neither needs an API key. Both also run as part of 'fund paper-track'."""
+    from fundmgr.paper import list_portfolios
+    from fundmgr.watchplan import check_horizons, check_kill_rules
+    slugs = [slug] if slug else [m["slug"] for m in list_portfolios()]
+    if not slugs:
+        click.echo("No paper portfolios yet.")
+        return
+    quiet = True
+    for s in slugs:
+        for line in check_kill_rules(s) + check_horizons(s):
+            click.echo(f"  {line}")
+            quiet = False
+    if quiet:
+        click.echo("  No kill lines crossed, no horizons due.")
+
+
+@cli.command("paper-plan")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--kill", default=None, help="Kill criterion text (empty string clears it).")
+@click.option("--max-drop", default=None, help="Max % drawdown from cost before alerting.")
+@click.option("--price-below", default=None, help="Alert when price falls to/below this (native currency).")
+@click.option("--price-above", default=None, help="Alert when price rises to/above this (native currency).")
+@click.option("--horizon", default=None, help="Review date, YYYY-MM-DD.")
+@click.option("--months", default=None, help="…or a horizon this many months out.")
+@click.option("--note", default=None, help="Note on what should be true by the horizon.")
+@click.option("--clear", is_flag=True, help="Remove the whole watch plan for this ticker.")
+def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
+               price_below: str | None, price_above: str | None, horizon: str | None,
+               months: str | None, note: str | None, clear: bool):
+    """Set a position's kill criteria and time horizon.
+
+    The CLI twin of the dashboard's watch-plan editor:
+
+        fund paper-plan my-sleeve NVDA --kill "loses the Apple socket" \\
+            --max-drop 25 --months 12
+    """
+    from fundmgr import watchplan
+    from fundmgr.paper import open_portfolio
+    try:
+        meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    tkr = ticker.upper()
+    if clear:
+        watchplan.clear_position_plan(store, tkr)
+        click.echo(f"✓ Cleared the watch plan for {tkr} in {meta['name']}.")
+        return
+
+    plan = watchplan.set_position_plan(
+        store, tkr, kill_criterion=kill, max_drawdown_pct=max_drop,
+        price_below=price_below, price_above=price_above,
+        currency=meta["currency_map"].get(tkr), review_date=horizon,
+        horizon_months=months, horizon_note=note,
+    )
+    click.echo(f"✓ {tkr} in {meta['name']}:")
+    click.echo(f"  Kill criterion: {plan['kill_criterion'] or '—'}")
+    rules = plan["kill_rules"]
+    click.echo(f"  Max drop: {rules.get('max_drawdown_pct') or '—'}   "
+               f"Floor: {rules.get('price_below') or '—'}   "
+               f"Target: {rules.get('price_above') or '—'}")
+    hz = plan["horizon"]
+    if hz.get("review_date"):
+        click.echo(f"  Horizon: {hz['review_date']} ({hz.get('label', '')}, "
+                   f"{plan['days_left']}d away)")
+    else:
+        click.echo("  Horizon: —")
+
+
 @cli.command("paper-list")
 def paper_list():
     """List the paper portfolios and their current state."""

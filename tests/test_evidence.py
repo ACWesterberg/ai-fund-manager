@@ -551,7 +551,9 @@ def test_verdict_with_unchecked_array_parses():
 # evaluate, so a new entry in _FUND_FIELDS must be one of these.
 FINANCEDATA_KEYS = {
     "pe_ratio", "forward_pe", "pb_ratio", "ev_to_ebitda", "price_to_sales",
-    "market_cap", "profit_margin", "gross_margin", "roe", "debt_to_equity",
+    "market_cap", "profit_margin", "gross_margin", "operating_margin",
+    "ebitda_margin", "roe", "roa", "free_cash_flow", "operating_cash_flow",
+    "total_cash", "total_debt", "debt_to_equity",
     "revenue_growth", "earnings_growth", "beta", "fifty_two_week_high",
     "fifty_two_week_low", "dividend_yield", "analyst_target_price",
     "analyst_count", "currency", "earnings_timestamp", "ex_div_timestamp",
@@ -566,18 +568,27 @@ def test_every_offered_metric_is_actually_fetched():
         "fetches them — a rule naming one could never evaluate.")
 
 
-def test_ebitda_and_cash_flow_are_known_to_be_absent():
-    """Pins the gap that shaped the metric list, so a future add is deliberate."""
-    for absent in ("ebitda_margin", "operating_margin", "free_cash_flow",
-                   "operating_cash_flow", "roa", "total_debt"):
-        assert absent not in evidence.FUND_FIELD_META
-        assert absent not in FINANCEDATA_KEYS
+def test_profitability_and_cash_flow_metrics_are_offered():
+    """These were absent until financedata mapped them; verified live on the Pi
+    (`fund fundamentals-check VOLV-B.ST`) before being offered here."""
+    for key in ("ebitda_margin", "operating_margin", "roa",
+                "free_cash_flow", "operating_cash_flow", "total_cash", "total_debt"):
+        assert key in evidence.FUND_FIELD_META
+        assert key in FINANCEDATA_KEYS
+
+
+def test_price_to_sales_is_mapped_but_not_offered():
+    """Yahoo returns null for it (VOLV-B.ST and AAPL), so a rule on it could
+    never evaluate — it stays in the data layer but off the metric menu."""
+    assert "price_to_sales" in FINANCEDATA_KEYS
+    assert "price_to_sales" not in evidence.FUND_FIELD_META
 
 
 def test_fraction_flags_match_the_providers_units():
     """financedata stores yfinance values raw; these are the 0-1 ones."""
     fractions = {k for k, m in evidence.FUND_FIELD_META.items() if m["is_fraction"]}
-    assert fractions == {"profit_margin", "gross_margin", "roe", "revenue_growth",
+    assert fractions == {"profit_margin", "gross_margin", "operating_margin",
+                         "ebitda_margin", "roe", "roa", "revenue_growth",
                          "earnings_growth", "dividend_yield"}
 
 
@@ -623,9 +634,9 @@ def test_fundamentals_check_errors_on_no_data(monkeypatch):
 def test_fundamentals_check_surfaces_newly_available_fields(monkeypatch):
     """A field the data layer returns but no criterion can use yet."""
     payload = {k: 0.1 for k in evidence.FUND_FIELD_META}
-    payload.update({"ebitda_margin": 0.221, "free_cash_flow": 3.88e8,
-                    "sector": "Technology"})
+    payload.update({"market_cap": 6.99e11, "beta": 0.983, "sector": "Industrials"})
     result = _run_check(monkeypatch, payload)
     assert "Available but not offered as a metric" in result.output
-    assert "ebitda_margin" in result.output and "free_cash_flow" in result.output
-    assert "sector" not in result.output.split("Available but not offered")[1]
+    tail = result.output.split("Available but not offered")[1]
+    assert "market_cap" in tail and "beta" in tail
+    assert "sector" not in tail          # non-numeric fields aren't rule candidates

@@ -74,15 +74,33 @@ Each condition is tagged **figure** (a threshold on a metric we cache),
 full report). The ⚠ lines are the analyser stating how the available metric
 differs from what you wrote — a proxy is used, but never silently.
 
-**The metric menu is exactly what financedata fetches** (its `_FIELD_MAP`):
-revenue and earnings growth, gross and profit margin, ROE, debt/equity,
-EV/EBITDA, P/E, forward P/E, price/book, price/sales, dividend yield. Notably
-**absent**: EBITDA and operating margin, free and operating cash flow, ROA and
-total debt — yfinance exposes them, but `financedata` does not map them, so a
-criterion written around EBITA or FCF can only be approximated (net margin) or
-left to the earnings print. Adding them is a few lines in
-`financedata/fundamentals.py::_FIELD_MAP`; `tests/test_evidence.py` pins the
-two lists together so they cannot drift apart silently.
+**The metric menu is what financedata fetches and Yahoo actually populates:**
+
+| Group | Metrics |
+|-------|---------|
+| Growth | revenue growth, earnings growth |
+| Margins | gross, operating, EBITDA, net |
+| Returns | ROE, ROA |
+| Cash & debt | free cash flow, operating cash flow, total cash, total debt, debt/equity |
+| Valuation | EV/EBITDA, P/E, forward P/E, price/book, dividend yield |
+
+Cash and debt figures are in the company's own reporting currency, so prefer a
+sign test ("free cash flow below 0") over an absolute amount.
+
+Two rules keep this list honest, both enforced in `tests/test_evidence.py`:
+every metric offered must exist in financedata's `_FIELD_MAP`, and a mapped key
+that Yahoo returns null for does **not** belong here — `price_to_sales` is
+mapped but omitted for exactly that reason. Verify with:
+
+```bash
+fund fundamentals-check VOLV-B.ST
+```
+
+It forces a refresh and reports drift in both directions: metrics offered but
+missing from the payload (broken — a rule on one could never evaluate), and
+fields the data layer returns that no criterion can use yet. Run it after any
+change to `_FIELD_MAP`: yfinance `.info` is a passthrough of Yahoo's payload,
+so a mis-mapped key name fails silently rather than raising.
 
 Where it finds a real threshold, the panel offers **"Also check N of these as
 a hard rule"**. One click lifts them into deterministic fundamentals rules

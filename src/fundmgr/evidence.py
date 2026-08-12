@@ -50,30 +50,40 @@ MAX_NEWS_ITEMS = 8
 
 # Fundamentals put in front of the judge, in reading order.
 #
-# This list mirrors financedata's `_FIELD_MAP` exactly — it is the whole set the
-# data layer fetches from yfinance `.info`. Adding a plausible-sounding key here
-# would be worse than useless: the analyser offers these to the model as the
-# menu of checkable metrics, so an entry with no data behind it invites a rule
-# that can never evaluate. Notably absent, because financedata does not fetch
-# them: EBITDA/operating margin, free and operating cash flow, ROA, total debt.
+# Every key here must be one financedata's `_FIELD_MAP` actually returns with a
+# value. The analyser offers this list to the model as the menu of checkable
+# metrics, so an entry with no data behind it invites a rule that can never
+# evaluate — it would show as a watched line on the dashboard and report
+# "unread" forever. `fund fundamentals-check TICKER` verifies both directions.
+#
+# `price_to_sales` is deliberately absent: financedata still maps it, but Yahoo
+# returns null for it (checked against VOLV-B.ST and AAPL), so it is a mapped
+# key with no data — exactly the case this list must not carry.
 #
 # `is_fraction` marks the values yfinance returns as 0–1 (financedata stores
-# them raw; its own `_FRACTION_FIELDS` set is unused). Those render and compare
-# as percentages, so a rule written "below 8" means 8%.
+# them raw). Those render and compare as percentages, so a rule written
+# "below 8" means 8%. The rest compare in their own units; the cash and debt
+# figures are in the company's own reporting currency.
 _FUND_FIELDS: list[tuple[str, str, bool]] = [
     # (key, label, is_fraction)
-    ("revenue_growth",   "Revenue growth (yoy)",   True),
-    ("earnings_growth",  "Earnings growth (yoy)",  True),
-    ("gross_margin",     "Gross margin",           True),
-    ("profit_margin",    "Profit margin",          True),
-    ("roe",              "Return on equity",       True),
-    ("debt_to_equity",   "Debt/equity",            False),
-    ("ev_to_ebitda",     "EV/EBITDA",              False),
-    ("pe_ratio",         "P/E",                    False),
-    ("forward_pe",       "Forward P/E",            False),
-    ("pb_ratio",         "Price/book",             False),
-    ("price_to_sales",   "Price/sales",            False),
-    ("dividend_yield",   "Dividend yield",         True),
+    ("revenue_growth",      "Revenue growth (yoy)",  True),
+    ("earnings_growth",     "Earnings growth (yoy)", True),
+    ("gross_margin",        "Gross margin",          True),
+    ("operating_margin",    "Operating margin",      True),
+    ("ebitda_margin",       "EBITDA margin",         True),
+    ("profit_margin",       "Profit margin",         True),
+    ("roe",                 "Return on equity",      True),
+    ("roa",                 "Return on assets",      True),
+    ("free_cash_flow",      "Free cash flow",        False),
+    ("operating_cash_flow", "Operating cash flow",   False),
+    ("total_cash",          "Total cash",            False),
+    ("total_debt",          "Total debt",            False),
+    ("debt_to_equity",      "Debt/equity",           False),
+    ("ev_to_ebitda",        "EV/EBITDA",             False),
+    ("pe_ratio",            "P/E",                   False),
+    ("forward_pe",          "Forward P/E",           False),
+    ("pb_ratio",            "Price/book",            False),
+    ("dividend_yield",      "Dividend yield",        True),
 ]
 
 # A move smaller than this is noise, not a trend, and is rendered as "flat".

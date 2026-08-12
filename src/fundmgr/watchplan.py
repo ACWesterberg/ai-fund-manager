@@ -307,6 +307,9 @@ Rules:
   use it, and say exactly how it differs in `note`. Example: a criterion about
   *recurring* revenue growth can use total revenue growth as a proxy — note it.
 - Values are plain numbers in the unit shown: percentages as 8 (not 0.08).
+  Cash-flow and debt figures are in the company's own reporting currency, so
+  prefer a sign test ("free cash flow below 0") over an absolute amount unless
+  the criterion names one.
 - `op` is "below" or "above".
 - Do not soften a "manual" condition into "news" to look useful. An honest
   "manual" is the point of this exercise.

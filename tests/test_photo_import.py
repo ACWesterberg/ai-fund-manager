@@ -703,3 +703,58 @@ def test_derivation_rescues_the_column_confusion_case():
     # (to rounding). This screen shows no purchase price, so cost basis is the
     # market price and P&L necessarily starts at zero.
     assert rows[0]["avg_cost_sek"] == pytest.approx(736.8, rel=1e-4)
+
+
+# ── Benchmark labelling ───────────────────────────────────────────────────────
+#
+# The chart and KPI strip said "OMXSPI" for every book regardless of its actual
+# benchmark, so a sleeve tracking URTH (MSCI World) claimed to be measured
+# against the Swedish all-share.
+
+def test_benchmark_label_strips_the_index_caret():
+    from fundmgr.reporting.dashboard import benchmark_label
+    assert benchmark_label("^OMXSPI") == "OMXSPI"
+    assert benchmark_label("URTH") == "URTH"
+    assert benchmark_label("  ^omxsgi ") == "OMXSGI"
+    assert benchmark_label(None) == "Benchmark"
+    assert benchmark_label("") == "Benchmark"
+
+
+def test_chart_series_uses_the_given_label():
+    from datetime import datetime
+    from fundmgr.reporting.dashboard import nav_chart_json
+    from fundmgr.state.models import NavPoint
+
+    history = [NavPoint(date="2026-08-01", portfolio_nav_sek=100.0,
+                        benchmark_value=10.0, cash_sek=0.0),
+               NavPoint(date="2026-08-02", portfolio_nav_sek=110.0,
+                        benchmark_value=11.0, cash_sek=0.0)]
+    chart = json.loads(nav_chart_json(history, "URTH"))
+    names = {s["name"] for s in chart["data"]}
+    assert "URTH" in names and "OMXSPI" not in names
+    assert datetime  # keep the import meaningful for the NavPoint construction
+
+
+def test_sleeve_dashboard_shows_its_own_benchmark(client):
+    rows = [{"ticker": "VOLV-B.ST", "name": "Volvo B", "shares": "100",
+             "avg_cost_sek": "300"}]
+    client.post("/live/create-from-photo", data={
+        "name": "Bench Sleeve", "holdings_json": json.dumps(rows),
+        "cash_sek": "0", "benchmark": "^OMXSPI",
+    }, follow_redirects=False)
+
+    body = client.get("/live/bench-sleeve").text
+    assert "Portfolio vs OMXSPI" in body
+
+
+def test_a_urth_sleeve_does_not_claim_omxspi(client):
+    rows = [{"ticker": "VOLV-B.ST", "name": "Volvo B", "shares": "100",
+             "avg_cost_sek": "300"}]
+    client.post("/live/create-from-photo", data={
+        "name": "World Sleeve", "holdings_json": json.dumps(rows),
+        "cash_sek": "0", "benchmark": "URTH",
+    }, follow_redirects=False)
+
+    body = client.get("/live/world-sleeve").text
+    assert "Portfolio vs URTH" in body
+    assert "OMXSPI" not in body

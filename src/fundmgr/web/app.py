@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader
 
 from fundmgr.config import load_config, load_universe
-from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 from fundmgr.state.store import Store
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -224,6 +224,7 @@ def index(request: Request):
         "pnl_sek": pnl_sek,
         "pnl_pct": pnl_pct,
         "active_page": "portfolio",
+        "benchmark_label": benchmark_label(cfg.benchmark),
     })
 
 
@@ -322,7 +323,7 @@ async def transactions(request: Request):
 async def api_nav():
     cfg, store = _get_deps()
     nav_history = store.get_nav_history()
-    return json.loads(nav_chart_json(nav_history))
+    return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark)))
 
 
 @app.get("/api/stats")

@@ -410,7 +410,7 @@
       <div class="kpi-value {{ 'ret-pos' if stats.twr_pct > 0 else 'ret-neg' if stats.twr_pct < 0 else 'ret-neu' }}">
         {{ "{:+.2f}".format(stats.twr_pct) }}%
       </div>
-      <div class="kpi-sub">OMXSPI {{ "{:+.2f}".format(stats.benchmark_return_pct) }}%</div>
+      <div class="kpi-sub">{{ benchmark_label|default("Benchmark") }} {{ "{:+.2f}".format(stats.benchmark_return_pct) }}%</div>
     {% else %}
       <div class="kpi-value ret-neu">—</div>
       <div class="kpi-sub">No history yet</div>
@@ -458,7 +458,7 @@
     <div class="card-header">
       <div class="flex items-center gap-2">
         <span class="material-symbols-outlined text-blue-400" style="font-size:17px">show_chart</span>
-        <h2 class="card-title">Portfolio vs OMXSPI</h2>
+        <h2 class="card-title">Portfolio vs {{ benchmark_label|default("Benchmark") }}</h2>
       </div>
       <div class="flex items-center gap-0.5" id="chart-period-tabs">
         <button class="ptab" data-period="1m">1M</button>

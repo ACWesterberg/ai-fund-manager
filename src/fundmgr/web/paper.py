@@ -26,7 +26,7 @@ from jinja2 import Environment, FileSystemLoader
 from starlette.concurrency import run_in_threadpool
 
 from fundmgr import paper, watchplan
-from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
 # Largest single upload accepted for photo import. Phone photos of a holdings
 # screen land around 2–5 MB; anything past this is a mistake, not a portfolio.
@@ -266,6 +266,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "book_section": kind,
             "book_prefix": book_prefix,
             "book_name": meta["name"],
+            "benchmark_label": benchmark_label(meta.get("benchmark")),
             # live sleeves get a "Record fill" form on the dashboard
             "fill_action": f"{book_prefix}/fill" if real else None,
             # kill criteria + time horizons are editable on every book
@@ -896,10 +897,11 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
     @router.get("/{slug}/api/nav")
     def api_nav(slug: str):
         try:
-            _meta, store = paper.open_portfolio(slug)
+            meta, store = paper.open_portfolio(slug)
         except KeyError:
             return {"data": [], "layout": {}}
-        return json.loads(nav_chart_json(store.get_nav_history()))
+        return json.loads(nav_chart_json(
+            store.get_nav_history(), benchmark_label(meta.get("benchmark"))))
 
     @router.get("/{slug}/api/stats")
     def api_stats(slug: str):

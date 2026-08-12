@@ -308,8 +308,7 @@
                 `type the Yahoo symbol, or untick to skip</span>`);
     }
     if (payload.notes) bits.push(payload.notes);
-    (payload.warnings || []).forEach(w => bits.push(`<span class="text-amber-400">${w}</span>`));
-    notesBox.innerHTML = bits.join(' · ');
+    notesBox.innerHTML = bits.join(' · ') + renderWarnings(payload.warnings || []);
 
     if (payload.account_name && !nameInput.value) nameInput.value = payload.account_name;
     if (payload.cash_sek) cashInput.value = Math.round(payload.cash_sek);
@@ -317,6 +316,29 @@
     updateTotal();
     review.classList.remove('hidden');
     review.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+
+
+  // The same issue on thirteen rows is one finding, not thirteen. Group by the
+  // message and name the rows, so the panel stays readable at any book size.
+  function renderWarnings(warnings) {
+    if (!warnings.length) return '';
+    const groups = new Map();
+    warnings.forEach(w => {
+      const at = w.indexOf(': ');
+      const who = at > 0 ? w.slice(0, at) : '';
+      const what = at > 0 ? w.slice(at + 2) : w;
+      if (!groups.has(what)) groups.set(what, []);
+      if (who) groups.get(what).push(who);
+    });
+    const items = [...groups.entries()].map(([what, who]) => {
+      const label = who.length > 3
+        ? `${who.length} rows (${who.slice(0, 3).join(', ')}…)`
+        : who.join(', ');
+      return `<li>${label ? `<b>${label}</b> — ` : ''}${what}</li>`;
+    });
+    return '<ul class="mt-2 space-y-1 text-amber-400 list-disc pl-4">' +
+           items.join('') + '</ul>';
   }
 
   function cell(row, child) {
@@ -366,6 +388,10 @@
 
     const shares = input(h.shares, {type: 'number', step: 'any', min: '0'});
     shares.classList.add('pi-shares');
+    if (h.shares_basis === 'derived') {
+      shares.style.borderColor = 'rgba(251,191,36,.5)';
+      shares.title = 'Derived from market value ÷ price — no share count on the screenshot.';
+    }
     shares.addEventListener('input', updateValue);
     cell(tr, shares).className = 'num';
 

@@ -626,3 +626,80 @@ def test_resolution_uses_the_market_aware_search(monkeypatch):
     holdings = [{"name": "Vestum", "raw_ticker": "", "isin": "", "ticker": None,
                  "currency": "SEK", "resolved_via": None}]
     assert pp._resolve_tickers(holdings)[0]["ticker"] == "VSSAB-B.ST"
+
+
+# ── Deriving the share count when the screen has no "Antal" column ────────────
+#
+# A Montrose ISK holdings view shows name, price and market value but no share
+# count. The count is value ÷ price, and it lands on whole numbers.
+
+def test_share_count_is_derived_from_value_and_price():
+    rows, warnings = pp._normalise_rows([{
+        "name": "Evolution", "ticker": "EVO", "shares": None,
+        "last_price_native": 736.8, "market_value_sek": 109783, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == 149          # 109783 / 736.8 = 149.0
+    assert rows[0]["shares_basis"] == "derived"
+    assert any("derived 149" in w for w in warnings)
+
+
+@pytest.mark.parametrize("price,value,expected", [
+    (736.8, 109783, 149), (244.0, 98332, 403), (29.6, 80778, 2729),
+    (1523.5, 76175, 50), (53.6, 71073, 1326),
+])
+def test_derivation_matches_the_real_portfolio(price, value, expected):
+    rows, _ = pp._normalise_rows([{
+        "name": "X", "ticker": "X", "shares": None,
+        "last_price_native": price, "market_value_sek": value, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == expected
+
+
+def test_derivation_uses_avg_cost_when_no_last_price():
+    rows, _ = pp._normalise_rows([{
+        "name": "Vitec", "ticker": "VIT-B", "shares": None,
+        "avg_cost_native": 244.0, "market_value_sek": 98332, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == 403
+
+
+def test_derivation_keeps_precision_when_not_a_whole_number():
+    rows, _ = pp._normalise_rows([{
+        "name": "Frac", "ticker": "F", "shares": None,
+        "last_price_native": 100.0, "market_value_sek": 1050, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == pytest.approx(10.5)
+
+
+def test_derivation_is_skipped_for_a_foreign_currency_row():
+    """value is SEK and price is native — dividing them would be nonsense."""
+    rows, _ = pp._normalise_rows([{
+        "name": "Nvidia", "ticker": "NVDA", "shares": None,
+        "last_price_native": 180.0, "market_value_sek": 41148, "currency": "USD",
+    }])
+    assert rows[0]["shares"] is None
+
+
+def test_a_read_share_count_is_not_overwritten_by_derivation():
+    rows, _ = pp._normalise_rows([{
+        "name": "Volvo B", "ticker": "VOLV-B", "shares": 100,
+        "last_price_native": 291.5, "market_value_sek": 29150, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == 100
+    assert rows[0]["shares_basis"] == "read"
+
+
+def test_derivation_rescues_the_column_confusion_case():
+    """Both fixes together: the bogus count is cleared, then rebuilt correctly."""
+    rows, warnings = pp._normalise_rows([{
+        "name": "Evolution", "ticker": "EVO",
+        "shares": 109783,                      # the value, misread as a count
+        "market_value_sek": 109783, "last_price_native": 736.8, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == 149
+    assert rows[0]["shares_basis"] == "derived"
+    assert any("read as a value, not a count" in w for w in warnings)
+    # Cost comes back as value ÷ derived shares, i.e. the price it started from
+    # (to rounding). This screen shows no purchase price, so cost basis is the
+    # market price and P&L necessarily starts at zero.
+    assert rows[0]["avg_cost_sek"] == pytest.approx(736.8, rel=1e-4)

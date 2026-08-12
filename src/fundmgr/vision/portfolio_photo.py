@@ -84,7 +84,8 @@ Rules:
 - One object per holding row. Do not invent rows, and do not merge rows.
 - `shares` and `market_value_sek` must never be the same number. If you are
   tempted to put a position's value in `shares`, the share count is not visible
-  — return null for it.
+  — return null for it, and make sure `market_value_sek` and
+  `last_price_native` are both filled in so the count can be derived.
 - Copy numbers exactly as displayed. Nordic screens use space or dot as the
   thousands separator and comma as the decimal separator: "1 234,50" is 1234.50,
   "12.500" is 12500. Strip currency symbols and % signs.
@@ -432,6 +433,24 @@ def _normalise_rows(rows: list) -> tuple[list[dict], list[str]]:
                 shares = None
                 break
 
+        # Plenty of holdings screens show value and price but no "Antal" column
+        # at all. The count is simply value ÷ price, and deriving it beats
+        # making someone type thirteen numbers off a phone screenshot.
+        shares_basis = "read" if shares else None
+        price_sek = (last_native or avg_native) if currency in (None, "SEK") else None
+        if not shares and value_sek and price_sek and price_sek > 0:
+            derived = value_sek / price_sek
+            whole = round(derived)
+            # Share counts are whole numbers outside fractional-share brokers,
+            # so snap when we land essentially on one and keep the precision
+            # otherwise rather than inventing certainty.
+            shares = (float(whole) if whole and abs(derived - whole) <= max(derived * 0.005, 1e-9)
+                      else round(derived, 4))
+            shares_basis = "derived"
+            warnings.append(
+                f"{name or raw_ticker}: no share count on screen — derived "
+                f"{shares:g} from value ÷ price.")
+
         # Cost basis in SEK, most trustworthy source first: the broker's own
         # SEK purchase value ÷ shares beats the native GAV, which would need an
         # FX rate we don't have for the trade date. Same reasoning as the
@@ -465,6 +484,7 @@ def _normalise_rows(rows: list) -> tuple[list[dict], list[str]]:
             "shares": shares,
             "avg_cost_sek": round(avg_cost_sek, 4) if avg_cost_sek else None,
             "avg_cost_basis": basis,
+            "shares_basis": shares_basis,
             "avg_cost_native": avg_native,
             "last_price_native": last_native,
             "market_value_sek": value_sek,

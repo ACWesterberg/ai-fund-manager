@@ -7,14 +7,6 @@ from fundmgr import aliases
 from fundmgr.vision import portfolio_photo as pp
 
 
-@pytest.fixture(autouse=True)
-def alias_file(tmp_path, monkeypatch):
-    """Isolate the alias store from the real DATA_DIR."""
-    path = tmp_path / "ticker_aliases.json"
-    monkeypatch.setenv("FUND_ALIAS_PATH", str(path))
-    return path
-
-
 # ── Keys ──────────────────────────────────────────────────────────────────────
 
 def test_isin_key_is_normalised():

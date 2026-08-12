@@ -1438,6 +1438,52 @@ def paper_kill_check(slug: str | None):
             click.echo(f"  {line}")
 
 
+@cli.command("aliases")
+@click.option("--set", "set_pair", nargs=2, default=None,
+              metavar="KEY TICKER", help="Teach a mapping, e.g. --set SE0000115446 VOLV-B.ST")
+@click.option("--forget", default=None, metavar="KEY", help="Remove a learned mapping.")
+def aliases_cmd(set_pair, forget):
+    """List, add or remove learned ticker aliases.
+
+    Photo import records how every reviewed row resolved, so a ticker you fix
+    once is applied automatically the next time that ISIN, broker ticker or
+    company name appears — in any sleeve. KEY may be an ISIN, a broker ticker
+    or a company name.
+    """
+    from fundmgr import aliases as alias_store
+
+    if set_pair:
+        key, ticker = set_pair
+        kinds = alias_store.learn(
+            ticker,
+            isin=key if len(key.strip()) == 12 else None,
+            raw_ticker=key, name=key, source="manual",
+        )
+        if not kinds:
+            raise click.ClickException(f"Could not use '{key}' as an alias key.")
+        click.echo(f"✓ {key} → {ticker.upper()}  (as {', '.join(kinds)})")
+        return
+
+    if forget:
+        removed = alias_store.forget(forget)
+        if removed:
+            click.echo(f"✓ Forgot '{forget}' ({', '.join(removed)}).")
+        else:
+            click.echo(f"No learned alias matching '{forget}'.")
+        return
+
+    rows = alias_store.entries()
+    if not rows:
+        click.echo("No learned aliases yet — they're recorded as you import photos.")
+        return
+    click.echo(f"\n─── {len(rows)} learned alias(es) — {alias_store.alias_path()} ───")
+    click.echo(f"  {'KIND':<8} {'KEY':<28} {'TICKER':<14} {'LEARNED'}")
+    for r in rows:
+        click.echo(f"  {r['kind']:<8} {r['key'][:27]:<28} {r['ticker']:<14} "
+                   f"{r['learned_at'][:10]}")
+    click.echo("\n  Remove one with:  fund aliases --forget KEY\n")
+
+
 @cli.command("fundamentals-check")
 @click.argument("ticker")
 def fundamentals_check(ticker: str):

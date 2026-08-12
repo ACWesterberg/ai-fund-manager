@@ -489,10 +489,26 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         except ValueError as e:
             return _fail(str(e))
 
+        # Remember how each row resolved, so the next screenshot carrying the
+        # same ISIN, broker ticker or name needs no correction. Reviewed rows
+        # are human-confirmed, which is exactly what makes them worth learning.
+        from fundmgr import aliases
+        corrected = 0
+        for row in rows:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            if aliases.learn(ticker, isin=row.get("isin"),
+                             raw_ticker=row.get("raw_ticker"), name=row.get("name")):
+                if str(row.get("suggested_ticker") or "").strip().upper() != ticker:
+                    corrected += 1
+
         skipped = sum(1 for line in log if line.startswith("⚠"))
         msg = f"Imported {name} from photo — {len(rows) - skipped} holdings seeded at cost."
         if skipped:
             msg += f" {skipped} row(s) skipped — see the log."
+        if corrected:
+            msg += (f" Remembered {corrected} ticker correction(s) for next time.")
         from urllib.parse import urlencode
         return RedirectResponse(
             url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}), status_code=303)

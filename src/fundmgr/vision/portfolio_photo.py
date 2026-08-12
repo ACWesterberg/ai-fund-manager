@@ -560,17 +560,26 @@ def _search_symbol_preferring(name: str, currency: str | None) -> str | None:
 
 
 def _resolve_tickers(holdings: list[dict]) -> list[dict]:
-    """Resolve each row to a Yahoo symbol: ISIN → broker map → alias → search."""
-    from fundmgr import paper
+    """Resolve each row: learned alias → ISIN → broker map → name alias → search."""
+    from fundmgr import aliases, paper
 
     try:
         from fundmgr.config import get_isin_map
         isin_map = get_isin_map()
     except Exception:
         isin_map = {}
+    alias_table = aliases.load()
 
     unresolved: list[dict] = []
     for h in holdings:
+        # A correction you made previously beats every automatic guess — it was
+        # entered by someone looking at the actual position.
+        learned = aliases.lookup(isin=h["isin"], raw_ticker=h["raw_ticker"],
+                                 name=h["name"], table=alias_table)
+        if learned:
+            h["ticker"], matched = learned[0], learned[1]
+            h["resolved_via"] = f"learned ({matched})"
+            continue
         if h["isin"] and isin_map.get(h["isin"]):
             h["ticker"] = isin_map[h["isin"]]
             h["resolved_via"] = "isin"

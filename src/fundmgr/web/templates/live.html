@@ -337,6 +337,10 @@
   function buildRow(h, i) {
     const tr = document.createElement('tr');
     tr.dataset.index = i;
+    // Kept so a corrected ticker can be learned against what identified the row.
+    tr.dataset.isin = h.isin || '';
+    tr.dataset.rawTicker = h.raw_ticker || '';
+    tr.dataset.suggested = h.ticker || '';
 
     const include = document.createElement('input');
     include.type = 'checkbox';
@@ -458,6 +462,9 @@
       if (!ticker) return;
       rows.push({
         ticker: ticker,
+        isin: tr.dataset.isin,
+        raw_ticker: tr.dataset.rawTicker,
+        suggested_ticker: tr.dataset.suggested,
         name: tr.children[2].textContent.trim() || ticker,
         shares: tr.querySelector('.pi-shares').value,
         avg_cost_sek: tr.querySelector('.pi-cost').value,

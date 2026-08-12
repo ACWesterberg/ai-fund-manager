@@ -259,3 +259,25 @@ purchase price converted at *today's* FX instead of the SEK you actually paid.
 Set it to the broker's **Inköpsvärde ÷ shares** (SEK/share):
 `fund paper-setcost <slug> GOOGL 3429` or Telegram `/psetcost GOOGL 3429`. Cash
 is adjusted by the difference so NAV stays consistent.
+
+## Learned ticker aliases
+
+Photo import resolves each row through ISIN → broker→Yahoo map → name alias →
+symbol search, and any of those can miss. When you fix a ticker in the review
+table, the correction is recorded against every identifier that row carried —
+its ISIN, the broker's own ticker, and the company name — and consulted **first**
+on every future import, in any sleeve. Fix `4HY` → `VSSAB-B.ST` once and the
+next screenshot resolves it silently.
+
+Aliases live in `data/ticker_aliases.json` (outside the repo, alongside the
+databases) and always beat automatic resolution, since a human entered them
+while looking at the actual position.
+
+```bash
+fund aliases                                   # what has been learned
+fund aliases --set SE0000115446 VOLV-B.ST      # teach one by hand
+fund aliases --forget 4HY                      # remove a bad one
+```
+
+KEY may be an ISIN, a broker ticker or a company name. An ISIN is the strongest
+key — it survives renames and re-listings — and is tried before the others.

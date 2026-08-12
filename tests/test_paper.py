@@ -358,6 +358,19 @@ def test_create_stores_kill_criteria(paper_dir, mock_market):
     assert actions["MSFT"]["kill_criterion"] == "Azure decelerates two quarters"
 
 
+def _fake_pack(ticker: str, headline: str) -> dict:
+    """Minimal evidence pack — enough for check_kill_criteria to proceed."""
+    return {
+        "ticker": ticker,
+        "news": [{"headline": headline, "publisher": "Reuters", "published": "",
+                  "summary": "", "url": "", "body": ""}],
+        "fundamentals": [],
+        "position": None,
+        "coverage": {"headlines": True, "article_text": False, "article_bodies": 0,
+                     "fundamentals": False, "fundamentals_trend": False},
+    }
+
+
 def test_check_kill_criteria_flags_matching_news(paper_dir, mock_market, monkeypatch):
     text = json.dumps({"positions": [
         {"ticker": "AAPL", "weight_pct": 100,
@@ -366,10 +379,13 @@ def test_check_kill_criteria_flags_matching_news(paper_dir, mock_market, monkeyp
     slug, _ = paper.create_portfolio("Watch", 100_000, text)
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(paper, "_recent_headlines",
-                        lambda t, max_items=8: ["Hyperscaler custom chip hits 25% of accelerator shipments (Reuters)"])
-    monkeypatch.setattr(paper, "_judge_kill_hit",
-                        lambda ticker, criterion, headlines: "custom silicon crossed 25% per Reuters")
+    monkeypatch.setattr(
+        "fundmgr.evidence.build_pack",
+        lambda store, ticker, **kw: _fake_pack(
+            ticker, "Hyperscaler custom chip hits 25% of accelerator shipments"))
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "yes", "reason": "custom silicon crossed 25% per Reuters",
+        "unchecked": []})
     sent = {}
     import fundmgr.notify.send as send_mod
     monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: sent.update(text=text) or True)
@@ -388,8 +404,10 @@ def test_check_kill_criteria_no_hit_stays_quiet(paper_dir, mock_market, monkeypa
                                       "kill_criterion": "Services growth stalls"}]})
     slug, _ = paper.create_portfolio("Quiet", 100_000, text)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(paper, "_recent_headlines", lambda t, max_items=8: ["Apple unveils new colorway"])
-    monkeypatch.setattr(paper, "_judge_kill_hit", lambda *a: None)
+    monkeypatch.setattr("fundmgr.evidence.build_pack",
+                        lambda store, ticker, **kw: _fake_pack(ticker, "Apple unveils new colorway"))
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "no", "reason": "", "unchecked": []})
     assert paper.check_kill_criteria(slug) == []
 
 

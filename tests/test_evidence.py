@@ -1,0 +1,509 @@
+"""Evidence packs for the kill judge: news text, fundamentals trend, coverage."""
+import json
+from datetime import datetime, timezone
+
+import pytest
+
+from fundmgr import evidence, paper
+from fundmgr.state.models import Transaction
+from fundmgr.state.store import Store
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = Store(tmp_path / "book.db")
+    s.initialise(100_000)
+    s.set_meta("paper_name", "Evidence Sleeve")
+    return s
+
+
+# ── News extraction ───────────────────────────────────────────────────────────
+
+NESTED_ITEM = {
+    "content": {
+        "title": "Vitec Q3: recurring revenue up 7%, EBITA margin down 200bp",
+        "summary": "Recurring revenue growth slowed to 7% from 12%, while the EBITA "
+                   "margin fell to 22% and cash conversion weakened.",
+        "pubDate": "2026-08-10T06:00:00Z",
+        "provider": {"displayName": "Placera"},
+        "canonicalUrl": {"url": "https://example.test/vitec-q3"},
+    }
+}
+FLAT_ITEM = {
+    "title": "Board proposes dividend",
+    "summary": "The board proposes an unchanged dividend.",
+    "publisher": "Reuters",
+    "link": "https://example.test/dividend",
+}
+
+
+def _mock_yf(monkeypatch, items):
+    class _T:
+        def __init__(self, ticker): self.news = items
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Ticker", _T)
+
+
+def test_news_items_keeps_summaries_and_urls(monkeypatch):
+    """The summary was in the payload all along — the old path dropped it."""
+    _mock_yf(monkeypatch, [NESTED_ITEM, FLAT_ITEM])
+    items = evidence.news_items("VIT-B.ST")
+
+    assert items[0]["headline"].startswith("Vitec Q3")
+    assert "EBITA margin fell to 22%" in items[0]["summary"]
+    assert items[0]["publisher"] == "Placera"
+    assert items[0]["url"] == "https://example.test/vitec-q3"
+    assert items[1]["publisher"] == "Reuters"
+    assert items[1]["url"] == "https://example.test/dividend"
+
+
+def test_news_items_skips_untitled_and_malformed(monkeypatch):
+    _mock_yf(monkeypatch, [{"content": {"title": "  "}}, "not a dict", FLAT_ITEM])
+    assert [i["headline"] for i in evidence.news_items("X")] == ["Board proposes dividend"]
+
+
+def test_news_items_respects_the_cap(monkeypatch):
+    _mock_yf(monkeypatch, [FLAT_ITEM] * 30)
+    assert len(evidence.news_items("X", max_items=3)) == 3
+
+
+def test_news_items_survives_a_dead_feed(monkeypatch):
+    import yfinance as yf
+
+    def boom(ticker):
+        raise RuntimeError("feed down")
+    monkeypatch.setattr(yf, "Ticker", boom)
+    assert evidence.news_items("X") == []
+
+
+# ── Article fetching ──────────────────────────────────────────────────────────
+
+def test_html_to_text_strips_markup_and_boilerplate():
+    html = """
+    <html><head><style>.a{color:red}</style><script>var x=1;</script></head>
+    <body><nav>Home</nav>
+    <p>Recurring revenue growth slowed to 7 percent from 12 percent in the quarter,
+    the company said, while the EBITA margin contracted by 200 basis points.</p>
+    <p>Short.</p></body></html>
+    """
+    text = evidence._html_to_text(html)
+    assert "Recurring revenue growth slowed to 7 percent" in text
+    assert "var x=1" not in text and "color:red" not in text
+    assert "Home" not in text        # nav fragment is below the length floor
+    assert "Short." not in text
+
+
+def test_html_to_text_decodes_entities():
+    html = "<p>" + "Margins fell &amp; cash conversion weakened materially " * 2 + "</p>"
+    assert "&" in evidence._html_to_text(html)
+    assert "&amp;" not in evidence._html_to_text(html)
+
+
+class _Resp:
+    def __init__(self, text="", status=200, ctype="text/html"):
+        self.text, self.status_code = text, status
+        self.headers = {"Content-Type": ctype}
+
+
+def _mock_requests(monkeypatch, resp):
+    import requests
+    monkeypatch.setattr(requests, "get", lambda url, **kw: resp
+                        if not isinstance(resp, Exception) else (_ for _ in ()).throw(resp))
+
+
+def test_fetch_article_returns_body(monkeypatch):
+    body = "<p>" + ("Recurring revenue growth slowed to seven percent this quarter. " * 3) + "</p>"
+    _mock_requests(monkeypatch, _Resp(body))
+    assert "Recurring revenue growth slowed" in evidence.fetch_article("https://example.test/a")
+
+
+def test_fetch_article_ignores_non_html_and_errors(monkeypatch):
+    _mock_requests(monkeypatch, _Resp("{}", ctype="application/json"))
+    assert evidence.fetch_article("https://example.test/a") == ""
+
+    _mock_requests(monkeypatch, _Resp("<p>x</p>", status=403))
+    assert evidence.fetch_article("https://example.test/a") == ""
+
+    _mock_requests(monkeypatch, RuntimeError("timeout"))
+    assert evidence.fetch_article("https://example.test/a") == ""
+
+
+def test_fetch_article_rejects_non_http_urls():
+    assert evidence.fetch_article("") == ""
+    assert evidence.fetch_article("file:///etc/passwd") == ""
+    assert evidence.fetch_article("javascript:alert(1)") == ""
+
+
+def test_fetch_article_truncates(monkeypatch):
+    long_para = "<p>" + ("Margins deteriorated materially across every segment. " * 400) + "</p>"
+    _mock_requests(monkeypatch, _Resp(long_para))
+    assert len(evidence.fetch_article("https://example.test/a")) <= evidence.ARTICLE_CHARS
+
+
+def test_enrich_prioritises_thin_summaries(monkeypatch):
+    fetched = []
+
+    def fake_fetch(url, timeout=6):
+        fetched.append(url)
+        return "body text"
+    monkeypatch.setattr(evidence, "fetch_article", fake_fetch)
+
+    items = [
+        {"summary": "a very long summary " * 20, "url": "https://example.test/long"},
+        {"summary": "", "url": "https://example.test/empty"},
+    ]
+    filled = evidence.enrich_with_bodies(items, max_articles=1)
+    assert filled == 1
+    assert fetched == ["https://example.test/empty"]   # thin summary gets the budget
+
+
+def test_article_fetching_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("FUND_KILL_FETCH_ARTICLES", "0")
+    monkeypatch.setattr(evidence, "fetch_article",
+                        lambda *a, **kw: pytest.fail("should not fetch"))
+    assert evidence.enrich_with_bodies([{"summary": "", "url": "https://x.test"}]) == 0
+
+
+# ── Fundamentals snapshots and trend ──────────────────────────────────────────
+
+def test_snapshot_records_and_dedupes(store):
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.12, "profit_margin": 0.18})
+    assert evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-01") == 1
+    # Unchanged values on a later day add no new snapshot.
+    assert evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-02") == 0
+
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.07, "profit_margin": 0.15})
+    assert evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-08-01") == 1
+
+    series = json.loads(store.get_meta("paper_fundsnap:VIT-B.ST"))
+    assert [s["date"] for s in series] == ["2026-01-01", "2026-08-01"]
+
+
+def test_snapshot_skips_tickers_without_data(store):
+    assert evidence.snapshot_fundamentals(store, ["NOPE"]) == 0
+
+
+def test_snapshot_series_is_capped(store):
+    for i in range(evidence.MAX_SNAPSHOTS + 5):
+        store.save_fundamentals("X", {"revenue_growth": 0.10 + i / 100})
+        evidence.snapshot_fundamentals(store, ["X"], today=f"2026-01-{i + 1:02d}")
+    series = json.loads(store.get_meta("paper_fundsnap:X"))
+    assert len(series) == evidence.MAX_SNAPSHOTS
+
+
+def test_trend_reports_direction_against_oldest_snapshot(store):
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.12, "profit_margin": 0.20})
+    evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-01")
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.07, "profit_margin": 0.15})
+    evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-08-01")
+
+    rows = {r["key"]: r for r in evidence.fundamentals_trend(store, "VIT-B.ST")}
+    assert rows["revenue_growth"]["current"] == pytest.approx(0.07)
+    assert rows["revenue_growth"]["direction"] == "down"
+    assert "was +12.0%" in rows["revenue_growth"]["text"]
+    assert rows["profit_margin"]["direction"] == "down"
+
+
+def test_trend_calls_a_tiny_move_flat(store):
+    store.save_fundamentals("X", {"revenue_growth": 0.1000})
+    evidence.snapshot_fundamentals(store, ["X"], today="2026-01-01")
+    store.save_fundamentals("X", {"revenue_growth": 0.1001})
+    rows = {r["key"]: r for r in evidence.fundamentals_trend(store, "X")}
+    assert rows["revenue_growth"]["direction"] == "flat"
+
+
+def test_trend_without_history_has_no_direction(store):
+    store.save_fundamentals("X", {"revenue_growth": 0.09})
+    rows = evidence.fundamentals_trend(store, "X")
+    assert rows[0]["direction"] == ""
+    assert rows[0]["earlier"] is None
+
+
+def test_trend_ignores_junk_values(store):
+    store.save_fundamentals("X", {"revenue_growth": None, "profit_margin": "n/a",
+                                  "roe": float("nan"), "pe_ratio": 21.4})
+    rows = {r["key"] for r in evidence.fundamentals_trend(store, "X")}
+    assert rows == {"pe_ratio"}
+
+
+def test_trend_is_empty_without_a_cache(store):
+    assert evidence.fundamentals_trend(store, "UNKNOWN") == []
+
+
+# ── Pack assembly + rendering ─────────────────────────────────────────────────
+
+def test_pack_combines_news_fundamentals_and_position(store, monkeypatch):
+    _mock_yf(monkeypatch, [NESTED_ITEM])
+    monkeypatch.setattr(evidence, "enrich_with_bodies", lambda items, **kw: 0)
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.07})
+    evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-01")
+    store.apply_fill(Transaction(ticker="VIT-B.ST", side="buy", shares=100,
+                                 price_sek=300.0, fee_sek=0.0, source="fill"))
+
+    pack = evidence.build_pack(store, "VIT-B.ST")
+    assert pack["news"][0]["summary"]
+    assert pack["fundamentals"][0]["key"] == "revenue_growth"
+    assert pack["position"]["shares"] == 100
+    assert pack["coverage"] == {
+        "headlines": True, "article_text": True, "article_bodies": 0,
+        "fundamentals": True, "fundamentals_trend": True,
+    }
+
+
+def test_a_snapshot_taken_today_is_not_a_trend(store):
+    """Day one must not read as 'flat' — there is no history to be flat against."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    store.save_fundamentals("X", {"revenue_growth": 0.09})
+    evidence.snapshot_fundamentals(store, ["X"], today=today)
+
+    rows = evidence.fundamentals_trend(store, "X", today=today)
+    assert rows[0]["earlier"] is None
+    assert rows[0]["direction"] == ""
+    assert "was" not in rows[0]["text"]
+
+
+def test_pack_folds_in_cached_store_news(store, monkeypatch):
+    _mock_yf(monkeypatch, [NESTED_ITEM])
+    monkeypatch.setattr(evidence, "enrich_with_bodies", lambda items, **kw: 0)
+    store.save_news_sentiment("VIT-B.ST", [{
+        "headline": "Acquisition multiples creeping up", "summary": "Deal prices rose.",
+        "published_at": "2026-08-09", "sentiment_label": "negative", "sentiment_score": 0.7,
+    }])
+
+    pack = evidence.build_pack(store, "VIT-B.ST")
+    headlines = [i["headline"] for i in pack["news"]]
+    assert "Acquisition multiples creeping up" in headlines
+    assert len(headlines) == len(set(headlines))     # no duplicates across sources
+
+
+def test_pack_reports_empty_coverage_honestly(store, monkeypatch):
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Ticker", lambda t: type("T", (), {"news": []})())
+    pack = evidence.build_pack(store, "NOTHING")
+    assert pack["coverage"] == {
+        "headlines": False, "article_text": False, "article_bodies": 0,
+        "fundamentals": False, "fundamentals_trend": False,
+    }
+
+
+def test_render_pack_includes_every_section(store, monkeypatch):
+    _mock_yf(monkeypatch, [NESTED_ITEM])
+    monkeypatch.setattr(evidence, "enrich_with_bodies", lambda items, **kw: 0)
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.07})
+    text = evidence.render_pack(evidence.build_pack(store, "VIT-B.ST"))
+
+    assert "## Recent news" in text
+    assert "Summary: Recurring revenue growth slowed" in text
+    assert "Revenue growth (yoy): +7.0%" in text
+    assert "no earlier snapshot yet" in text
+    assert "What this evidence covers" in text
+
+
+def test_render_pack_says_when_there_is_nothing(store, monkeypatch):
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Ticker", lambda t: type("T", (), {"news": []})())
+    text = evidence.render_pack(evidence.build_pack(store, "X"))
+    assert "(no recent news found)" in text
+    assert "none cached for this ticker" in text
+
+
+# ── Verdict parsing ───────────────────────────────────────────────────────────
+
+def test_parse_verdict_json():
+    out = paper._parse_verdict(json.dumps({
+        "verdict": "INSUFFICIENT",
+        "reason": "Acquisition returns are not disclosed in any source here.",
+        "unchecked": ["acquisitions generating weaker returns"],
+    }))
+    assert out["verdict"] == "insufficient"
+    assert out["unchecked"] == ["acquisitions generating weaker returns"]
+
+
+def test_parse_verdict_json_in_prose():
+    raw = 'Here is my assessment:\n{"verdict": "YES", "reason": "growth fell to 6%"}\nDone.'
+    assert paper._parse_verdict(raw)["verdict"] == "yes"
+
+
+def test_parse_verdict_plain_text_fallback():
+    assert paper._parse_verdict("NO")["verdict"] == "no"
+    assert paper._parse_verdict("YES: growth fell below 8%")["verdict"] == "yes"
+    assert paper._parse_verdict("YES: growth fell below 8%")["reason"] == "growth fell below 8%"
+    assert paper._parse_verdict("INSUFFICIENT: no report data")["verdict"] == "insufficient"
+
+
+def test_parse_verdict_rejects_noise():
+    assert paper._parse_verdict("") is None
+    assert paper._parse_verdict("I'm not sure what you mean") is None
+
+
+def test_parse_verdict_defaults_unknown_verdict_to_no():
+    assert paper._parse_verdict('{"verdict": "maybe", "reason": "x"}')["verdict"] == "no"
+
+
+# ── check_kill_criteria with the tri-state verdict ────────────────────────────
+
+@pytest.fixture
+def watched_book(tmp_path, monkeypatch):
+    """A live book with one text kill criterion, isolated from the network."""
+    monkeypatch.setattr(paper, "PAPER_DIR", tmp_path / "paper")
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+    monkeypatch.setattr(paper, "_cache_price_history", lambda store, tickers, **kw: None)
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    import fundmgr.data.benchmark as benchmark
+    monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", lambda store, **kw: True)
+    import fundmgr.data.quotes as quotes
+    monkeypatch.setattr(quotes, "live_prices", lambda tickers: {t: 300.0 for t in tickers})
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    slug, _ = paper.create_portfolio(
+        "Serial Acquirer", 30_000, "",
+        holdings_override=[{
+            "ticker": "VIT-B.ST", "name": "Vitec", "weight_pct": 100,
+            "shares": 100, "avg_cost_sek": 300.0,
+            "kill_criterion": ("Recurring growth falls below 8% while EBITA/FCF "
+                               "deteriorates, or acquisitions begin generating "
+                               "clearly weaker returns"),
+        }],
+        kind="live", seed_holdings=True)
+    return slug
+
+
+@pytest.fixture
+def telegram(monkeypatch):
+    sent = []
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda text, **kw: sent.append(text) or True)
+    return sent
+
+
+def _pack_stub(monkeypatch, **coverage):
+    base = {"headlines": True, "article_text": True, "article_bodies": 1,
+            "fundamentals": True, "fundamentals_trend": True}
+    base.update(coverage)
+    monkeypatch.setattr("fundmgr.evidence.build_pack", lambda store, ticker, **kw: {
+        "ticker": ticker,
+        "news": [{"headline": "Q3 out", "publisher": "", "published": "",
+                  "summary": "Recurring growth 7%.", "url": "", "body": ""}],
+        "fundamentals": [{"key": "revenue_growth", "label": "Revenue growth (yoy)",
+                          "current": 0.07, "earlier": 0.12, "earlier_date": "2026-01-01",
+                          "direction": "down", "text": "+7.0% (was +12.0% — down)"}],
+        "position": None,
+        "coverage": base,
+    })
+
+
+def test_insufficient_verdict_is_reported_not_silently_passed(
+        watched_book, monkeypatch, telegram):
+    """The core fix: a criterion we cannot check must not look like 'intact'."""
+    _pack_stub(monkeypatch)
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "insufficient",
+        "reason": "Acquisition returns are not disclosed in the available evidence.",
+        "unchecked": ["acquisitions begin generating clearly weaker returns"],
+    })
+
+    log = paper.check_kill_criteria(watched_book)
+    assert any("not verifiable" in line for line in log)
+    assert len(telegram) == 1
+    assert "cannot be checked automatically" in telegram[0]
+    assert "acquisitions begin generating clearly weaker returns" in telegram[0]
+
+    _meta, store = paper.open_portfolio(watched_book)
+    saved = json.loads(store.get_meta("paper_killverdict:VIT-B.ST"))
+    assert saved["verdict"] == "insufficient"
+    # No kill hit was recorded — unverifiable is not a trigger.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert store.get_meta(f"paper_killhit:VIT-B.ST:{today}") is None
+
+
+def test_insufficient_notifies_once_per_wording(watched_book, monkeypatch, telegram):
+    _pack_stub(monkeypatch)
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "insufficient", "reason": "no data", "unchecked": ["x"]})
+
+    _meta, store = paper.open_portfolio(watched_book)
+    paper.check_kill_criteria(watched_book)
+    assert len(telegram) == 1
+
+    # A new day, same criterion → logged again but no repeat push.
+    store.set_meta("paper_killwatch:VIT-B.ST", "1999-01-01")
+    paper.check_kill_criteria(watched_book)
+    assert len(telegram) == 1
+
+    # Rewording it re-notifies, since the new phrasing may be checkable.
+    from fundmgr import watchplan
+    watchplan.set_position_plan(store, "VIT-B.ST",
+                                kill_criterion="Recurring growth below 8% for two quarters")
+    store.set_meta("paper_killwatch:VIT-B.ST", "1999-01-01")
+    paper.check_kill_criteria(watched_book)
+    assert len(telegram) == 2
+
+
+def test_becoming_checkable_clears_the_gap_flag(watched_book, monkeypatch, telegram):
+    _pack_stub(monkeypatch)
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "insufficient", "reason": "no data", "unchecked": []})
+    paper.check_kill_criteria(watched_book)
+
+    _meta, store = paper.open_portfolio(watched_book)
+    assert store.get_meta("paper_killgap:VIT-B.ST")
+
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "no", "reason": "", "unchecked": []})
+    store.set_meta("paper_killwatch:VIT-B.ST", "1999-01-01")
+    paper.check_kill_criteria(watched_book)
+    assert store.get_meta("paper_killgap:VIT-B.ST") == ""
+
+
+def test_hit_still_alerts_and_records(watched_book, monkeypatch, telegram):
+    _pack_stub(monkeypatch)
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "yes",
+        "reason": "Recurring growth 7% with EBITA margin down 200bp — both legs met.",
+        "unchecked": []})
+
+    log = paper.check_kill_criteria(watched_book)
+    assert any("may be triggering" in line for line in log)
+    assert "may falsify a thesis" in telegram[0]
+
+    _meta, store = paper.open_portfolio(watched_book)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert "both legs met" in store.get_meta(f"paper_killhit:VIT-B.ST:{today}")
+
+
+def test_no_evidence_at_all_skips_the_judge(watched_book, monkeypatch, telegram):
+    monkeypatch.setattr("fundmgr.evidence.build_pack", lambda store, ticker, **kw: {
+        "ticker": ticker, "news": [], "fundamentals": [], "position": None,
+        "coverage": {"headlines": False, "article_text": False, "article_bodies": 0,
+                     "fundamentals": False, "fundamentals_trend": False},
+    })
+    monkeypatch.setattr(paper, "_judge_kill_hit",
+                        lambda *a: pytest.fail("judge should not run without evidence"))
+    assert paper.check_kill_criteria(watched_book) == []
+    assert telegram == []
+
+
+def test_judge_failure_is_not_a_verdict(watched_book, monkeypatch, telegram):
+    """An API failure must not be recorded as 'intact'."""
+    _pack_stub(monkeypatch)
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: None)
+    assert paper.check_kill_criteria(watched_book) == []
+    _meta, store = paper.open_portfolio(watched_book)
+    assert store.get_meta("paper_killverdict:VIT-B.ST") is None
+
+
+def test_dashboard_flags_an_unverifiable_criterion(watched_book, monkeypatch):
+    from fastapi.testclient import TestClient
+    _pack_stub(monkeypatch)
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "insufficient", "reason": "Acquisition returns not disclosed.",
+        "unchecked": ["acquisitions begin generating clearly weaker returns"]})
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda *a, **kw: True)
+    paper.check_kill_criteria(watched_book)
+
+    from fundmgr.web.app import app
+    r = TestClient(app).get(f"/live/{watched_book}")
+    assert r.status_code == 200
+    assert "not auto-checkable" in r.text
+    assert "acquisitions begin generating clearly weaker returns" in r.text

@@ -107,6 +107,7 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
     kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
     rules = watchplan.get_kill_rules(store)
     horizons = watchplan.get_horizons(store)
+    verdicts = _kill_verdicts(store, list(kills))
     # Anything held is worth a row even with no plan on it yet — that's how the
     # first kill criterion gets set. Only a book with nothing at all opts out.
     if not (capex_cfg or targets or kills or rules or horizons or positions_data):
@@ -141,6 +142,7 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
         note = notes.get(t) or {}
         rule = rules.get(t) or {}
         horizon = horizons.get(t) or {}
+        verdict = verdicts.get(t) or {}
         left = watchplan.days_left(horizon.get("review_date"))
         # Live P&L against the drawdown line, so the panel shows how close a
         # position is to its kill without waiting for the daily watch.
@@ -156,6 +158,11 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "next_earnings": note.get("next_earnings", ""),
             "watch": note.get("watch", ""),
             "kill": kills.get(t, ""),
+            "kill_verdict": verdict.get("verdict", ""),
+            "kill_unverifiable": verdict.get("verdict") == "insufficient",
+            "kill_reason": verdict.get("reason", ""),
+            "kill_unchecked": verdict.get("unchecked", []),
+            "kill_checked_on": verdict.get("date", ""),
             "max_drawdown_pct": max_dd,
             "price_below": rule.get("price_below"),
             "price_above": rule.get("price_above"),
@@ -184,6 +191,32 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
         "planned_count": len(tickers),
         "alerts": sum(1 for r in rows if r["dd_breached"] or r["horizon_due"] or r["over"]),
     }
+
+
+def _kill_verdicts(store, tickers: list[str]) -> dict[str, dict]:
+    """Last judge verdict per ticker, for the Watch panel's criterion column.
+
+    Surfaces the case that matters most: a criterion the judge could not check
+    from the available evidence. Without this, an unverifiable kill line looks
+    identical to one that is being watched and is holding.
+    """
+    out: dict[str, dict] = {}
+    for ticker in tickers:
+        raw = store.get_meta(f"paper_killverdict:{ticker}")
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        out[ticker] = {
+            "verdict": data.get("verdict", ""),
+            "reason": data.get("reason", ""),
+            "unchecked": data.get("unchecked") or [],
+            "date": data.get("date", ""),
+            "coverage": data.get("coverage") or {},
+        }
+    return out
 
 
 def _not_found() -> HTMLResponse:

@@ -15,6 +15,7 @@ map) is kept in that DB's app_meta table; the registry is just the directory.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1175,7 +1176,29 @@ def track_portfolio(slug: str) -> list[str]:
     ))
     log.append(f"NAV {nav:,.0f} SEK ({len(positions)} positions)")
 
-    # Kill-criterion watch: check fresh headlines against each position's
+    # Fundamentals for the kill judge: refresh the cache and snapshot it, so a
+    # criterion phrased around growth or margins has both a current number and a
+    # direction of travel to be judged against. Optional dependency — a book on
+    # a machine without financedata just keeps whatever is already cached.
+    watched = sorted(set(tickers) | set(json.loads(
+        store.get_meta("paper_target_weights") or "{}")))
+    if watched:
+        try:
+            from fundmgr.data.fundamentals import fetch_and_cache_fundamentals
+            stale = store.get_stale_fundamentals_tickers(watched, ttl_days=7)
+            if stale:
+                fetch_and_cache_fundamentals(stale, store, ttl_days=7)
+        except Exception as e:
+            log.append(f"⚠ fundamentals refresh skipped: {e}")
+        try:
+            from fundmgr.evidence import snapshot_fundamentals
+            snapped = snapshot_fundamentals(store, watched)
+            if snapped:
+                log.append(f"Fundamentals snapshot updated for {snapped} ticker(s)")
+        except Exception as e:
+            log.append(f"⚠ fundamentals snapshot failed: {e}")
+
+    # Kill-criterion watch: check fresh evidence against each position's
     # pre-registered falsification condition
     try:
         log += check_kill_criteria(slug, store=store)
@@ -1260,30 +1283,66 @@ def check_kill_criteria(slug: str, store: Store | None = None) -> list[str]:
     if not os.getenv("OPENAI_API_KEY"):
         return ["kill-criterion watch skipped (no OPENAI_API_KEY)"]
 
+    from fundmgr.evidence import build_pack
+
     log: list[str] = []
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     hits: list[tuple[str, str]] = []
+    gaps: list[tuple[str, dict]] = []
     for ticker, criterion in kills.items():
         if store.get_meta(f"paper_killwatch:{ticker}") == today:
             continue  # already checked today
-        headlines = _recent_headlines(ticker)
+        pack = build_pack(store, ticker)
         store.set_meta(f"paper_killwatch:{ticker}", today)
-        if not headlines:
-            continue
-        verdict = _judge_kill_hit(ticker, criterion, headlines)
-        if verdict:
-            hits.append((ticker, verdict))
-            store.set_meta(f"paper_killhit:{ticker}:{today}", verdict)
-            log.append(f"🚨 {ticker}: kill criterion may be triggering — {verdict}")
+        if not (pack["news"] or pack["fundamentals"]):
+            continue  # nothing to judge against at all
 
+        result = _judge_kill_hit(ticker, criterion, pack)
+        if result is None:
+            continue
+        store.set_meta(f"paper_killverdict:{ticker}", json.dumps({
+            "date": today, **result, "coverage": pack["coverage"],
+        }))
+
+        if result["verdict"] == "yes":
+            hits.append((ticker, result["reason"]))
+            store.set_meta(f"paper_killhit:{ticker}:{today}", result["reason"])
+            log.append(f"🚨 {ticker}: kill criterion may be triggering — {result['reason']}")
+        elif result["verdict"] == "insufficient":
+            # The criterion couldn't actually be checked. Say so once per wording
+            # (rewording re-notifies) rather than daily — the point is to tell
+            # you the line isn't being watched, not to nag about it.
+            fingerprint = hashlib.sha1(criterion.encode()).hexdigest()[:12]
+            if store.get_meta(f"paper_killgap:{ticker}") != fingerprint:
+                store.set_meta(f"paper_killgap:{ticker}", fingerprint)
+                gaps.append((ticker, result))
+            log.append(f"❓ {ticker}: kill criterion not verifiable from available "
+                       f"evidence — {result['reason']}")
+        else:
+            store.set_meta(f"paper_killgap:{ticker}", "")  # checkable after all
+
+    from fundmgr.notify.send import send_telegram
     if hits:
-        from fundmgr.notify.send import send_telegram
-        lines = [f"<b>📋 Paper portfolio — {name}</b>",
-                 "🚨 Kill-criterion watch: recent news may falsify a thesis"]
-        for ticker, verdict in hits:
-            lines.append(f"\n<b>{ticker}</b>: {verdict}")
+        lines = [f"<b>📋 {name}</b>",
+                 "🚨 Kill-criterion watch: the evidence may falsify a thesis"]
+        for ticker, reason in hits:
+            lines.append(f"\n<b>{ticker}</b>: {reason}")
             lines.append(f"  Pre-registered kill: {kills[ticker]}")
-        lines.append("\nVerify before acting — headline-level signal only.")
+        lines.append("\nVerify against the source before acting.")
+        send_telegram("\n".join(lines))
+
+    if gaps:
+        lines = [f"<b>📋 {name}</b>",
+                 "❓ Kill criteria that cannot be checked automatically"]
+        for ticker, result in gaps:
+            lines.append(f"\n<b>{ticker}</b>: {kills[ticker]}")
+            if result["unchecked"]:
+                for item in result["unchecked"][:4]:
+                    lines.append(f"  • can't verify: {item}")
+            elif result["reason"]:
+                lines.append(f"  {result['reason']}")
+        lines.append("\nThese are quoted back to you at each earnings print instead. "
+                     "Reword them around an observable figure if you want them watched.")
         send_telegram("\n".join(lines))
     return log
 
@@ -1312,41 +1371,122 @@ def _recent_headlines(ticker: str, max_items: int = 8) -> list[str]:
     return titles
 
 
-def _judge_kill_hit(ticker: str, criterion: str, headlines: list[str]) -> str | None:
-    """Ask gpt-4o-mini whether the headlines plausibly trigger the kill criterion.
+_JUDGE_SYSTEM = """\
+You monitor pre-registered kill criteria (thesis-falsification conditions) for \
+stock positions. You are given one criterion and an evidence pack: recent news \
+(headlines, summaries and, where available, article text), cached fundamentals \
+with their direction of travel, and the position itself.
 
-    Returns a one-line reason on a hit, None otherwise (including on any API
-    failure — the watch must never break tracking)."""
+First decompose the criterion. It often contains several conditions:
+  - joined by "and" / "while" / "combined with" → ALL must hold for a hit;
+  - joined by "or" → ANY one holds for a hit.
+Evaluate each condition separately against the evidence, then combine them.
+
+Then return one of three verdicts:
+  "YES"          - the evidence positively shows the criterion met. Cite the
+                   specific headline, article passage or figure that shows it.
+  "NO"           - the evidence does cover what the criterion asks about, and
+                   the criterion is not met.
+  "INSUFFICIENT" - the criterion depends on facts this evidence cannot settle
+                   (a metric that is not in the fundamentals block and is not
+                   discussed in any article, a private figure, a judgement that
+                   needs the full report). Say plainly which conditions you
+                   could not check.
+
+Be strict about YES: general negativity, share-price moves and unrelated bad
+news are never a hit. Be equally strict about NO — if you could not actually
+check a condition, the answer is INSUFFICIENT, not NO. A criterion that quietly
+returns NO because the data was missing is the failure this exists to prevent.
+
+Reply with a JSON object only:
+{"verdict": "YES"|"NO"|"INSUFFICIENT",
+ "reason": "<one or two sentences, citing the evidence>",
+ "unchecked": ["<condition you could not verify>", ...]}\
+"""
+
+
+def _judge_kill_hit(ticker: str, criterion: str, pack: dict) -> dict | None:
+    """Judge one kill criterion against an evidence pack.
+
+    Returns {"verdict": "yes"|"no"|"insufficient", "reason": str,
+    "unchecked": [str]}, or None if the call failed outright (the watch must
+    never break tracking).
+    """
+    from fundmgr.evidence import render_pack
+
     try:
         from openai import OpenAI
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": (
-                    "You monitor pre-registered kill criteria (thesis-falsification "
-                    "conditions) for stock positions. Given a criterion and recent "
-                    "headlines, decide if any headline plausibly indicates the "
-                    "criterion is being met. Be strict: general negativity, price "
-                    "moves, or unrelated bad news are NOT a hit — only concrete "
-                    "events matching the stated criterion. Reply with exactly "
-                    "'NO' or 'YES: <one-sentence reason citing the headline>'."
-                )},
-                {"role": "user", "content": (
-                    f"Position: {ticker}\n"
-                    f"Kill criterion: {criterion}\n\n"
-                    "Recent headlines:\n" + "\n".join(f"- {h}" for h in headlines)
-                )},
-            ],
-            max_tokens=120,
-            temperature=0.0,
+        user = (
+            f"# Position: {ticker}\n"
+            f"# Kill criterion\n{criterion}\n\n"
+            f"# Evidence\n{render_pack(pack)}"
         )
-        answer = (resp.choices[0].message.content or "").strip()
-        if answer.upper().startswith("YES"):
-            return answer.split(":", 1)[1].strip() if ":" in answer else answer
-        return None
+        kwargs = {
+            "model": os.getenv("FUND_KILL_MODEL", "gpt-4o-mini"),
+            "messages": [
+                {"role": "system", "content": _JUDGE_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": 400,
+            "temperature": 0.0,
+        }
+        try:
+            resp = client.chat.completions.create(
+                response_format={"type": "json_object"}, **kwargs)
+        except Exception:
+            resp = client.chat.completions.create(**kwargs)
+        return _parse_verdict((resp.choices[0].message.content or "").strip())
     except Exception:
         return None
+
+
+def _parse_verdict(answer: str) -> dict | None:
+    """Parse the judge's reply, tolerating a plain-text fallback."""
+    if not answer:
+        return None
+
+    data = None
+    try:
+        data = json.loads(answer)
+    except json.JSONDecodeError:
+        block = _extract_json_block(answer)
+        if block:
+            try:
+                data = json.loads(block)
+            except json.JSONDecodeError:
+                data = None
+
+    if isinstance(data, dict) and data.get("verdict"):
+        verdict = str(data["verdict"]).strip().lower()
+        unchecked = data.get("unchecked")
+        if not isinstance(unchecked, list):
+            unchecked = []
+        if verdict.startswith("yes"):
+            verdict = "yes"
+        elif verdict.startswith("insuff"):
+            verdict = "insufficient"
+        else:
+            verdict = "no"
+        return {
+            "verdict": verdict,
+            "reason": str(data.get("reason") or "").strip(),
+            "unchecked": [str(u).strip() for u in unchecked if str(u).strip()],
+        }
+
+    # Plain-text fallback: the old 'YES: reason' / 'NO' shape.
+    upper = answer.upper()
+    if upper.startswith("YES"):
+        return {"verdict": "yes",
+                "reason": answer.split(":", 1)[1].strip() if ":" in answer else answer,
+                "unchecked": []}
+    if upper.startswith("INSUFFICIENT"):
+        return {"verdict": "insufficient",
+                "reason": answer.split(":", 1)[1].strip() if ":" in answer else answer,
+                "unchecked": []}
+    if upper.startswith("NO"):
+        return {"verdict": "no", "reason": "", "unchecked": []}
+    return None
 
 
 # ── Portfolio-level capex kill criterion ──────────────────────────────────────

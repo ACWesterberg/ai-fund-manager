@@ -47,9 +47,42 @@ fund paper-plan kf-chokepoint-satellite NVDA --clear
 
 | Condition | Set with | Checked by |
 |-----------|----------|------------|
-| **Kill criterion** (text) | what would falsify the thesis | daily news judge (gpt-4o-mini) |
+| **Kill criterion** (text) | what would falsify the thesis | daily judge (gpt-4o-mini) over an evidence pack |
 | **Kill rules** (numeric) | max % drop from cost, price floor, price target | prices, every run — no API key needed |
 | **Time horizon** | a date, or N months out | days remaining, every run |
+
+### What the text judge reads
+
+A criterion is only as good as the evidence it's judged against, so the judge
+gets an **evidence pack** (`fundmgr/evidence.py`), not just headlines:
+
+- **News with substance** — headline, publisher, date and the article
+  *summary*, plus a best-effort fetch of the article body for the items whose
+  summary is thin. Set `FUND_KILL_FETCH_ARTICLES=0` to skip body fetching.
+- **Fundamentals with a trend** — the cached growth/margin/cash figures and how
+  they've moved since the oldest snapshot on file, so "deteriorates" is
+  measurable. `fund paper-track` refreshes and snapshots these; a snapshot
+  taken *today* is never used as the earlier reference, so day one reports "no
+  history" rather than a false "flat".
+- **The position** — shares and cost basis.
+
+The judge decomposes a compound criterion first (`A while B, or C` → all of
+A and B, *or* C) and returns one of three verdicts:
+
+| Verdict | Meaning |
+|---------|---------|
+| **YES** | evidence positively shows it met — Telegram alert, recorded as a kill hit |
+| **NO** | the evidence covers the question and the thesis is intact |
+| **INSUFFICIENT** | the criterion needs facts this evidence can't settle |
+
+That third verdict is the point. A criterion like *"recurring growth falls
+below 8% while EBITA/FCF deteriorates, or acquisitions begin generating clearly
+weaker returns"* has legs that only the quarterly report settles. Previously
+that returned NO — indistinguishable from a healthy thesis. Now it's reported
+as unverifiable: flagged **not auto-checkable** on the dashboard with the
+specific conditions it couldn't check, and pushed to Telegram **once per
+wording** (rewording re-notifies, since a new phrasing may be checkable).
+Those criteria still get quoted back at you around each earnings print.
 
 Kill-rule alerts are transition-based: one Telegram push when a line is
 crossed, then silence until the position recovers past it by 2 points — a

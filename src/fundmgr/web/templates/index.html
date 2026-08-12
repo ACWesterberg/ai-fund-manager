@@ -147,7 +147,29 @@
             {% else %}<span class="text-slate-600">—</span>{% endif %}
           </td>
           <td class="text-slate-400">{{ r.next_earnings or '—' }}</td>
-          <td class="text-slate-500" style="max-width:300px">{{ r.watch or r.kill or '—' }}</td>
+          <td class="text-slate-500" style="max-width:300px">
+            {{ r.watch or r.kill or '—' }}
+            {% if r.kill_unverifiable %}
+              <div class="mt-1">
+                <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24"
+                      title="{{ r.kill_reason }}">not auto-checkable</span>
+                {% if r.kill_unchecked %}
+                <div class="text-slate-600 mt-0.5" style="font-size:10px">
+                  needs the report: {{ r.kill_unchecked|join('; ') }}
+                </div>
+                {% endif %}
+              </div>
+            {% elif r.kill_verdict == 'no' %}
+              <div class="text-slate-600 mt-0.5" style="font-size:10px">
+                checked {{ r.kill_checked_on }} — intact
+              </div>
+            {% elif r.kill_verdict == 'yes' %}
+              <div class="mt-1">
+                <span class="badge" style="background:rgba(248,113,113,.14);color:#f87171">may be triggering</span>
+                <div class="text-slate-500 mt-0.5" style="font-size:10px">{{ r.kill_reason }}</div>
+              </div>
+            {% endif %}
+          </td>
           {% if watchplan_action %}
           <td class="num">
             <button type="button" class="wp-edit text-slate-600 hover:text-sky-400" title="Edit kill criteria & horizon"
@@ -169,8 +191,11 @@
   </div>
   <p class="text-[11px] text-slate-600 mt-2">
     Kill lines are checked against prices every run — a breach pushes to Telegram once, then re-arms
-    when the position recovers. Horizons nudge at 30 / 14 / 7 / 1 days and on the day, as a prompt to
-    re-run the thesis. Drift ≥ 1.50× target fires the rebalance alert. Verify every alert before acting.
+    when the position recovers. Text criteria are judged daily against news summaries, article text
+    and cached fundamentals; one marked <span class="text-amber-400">not auto-checkable</span> needs
+    figures only the report carries, so it's quoted back to you at each print instead. Horizons nudge
+    at 30 / 14 / 7 / 1 days and on the day, as a prompt to re-run the thesis. Drift ≥ 1.50× target
+    fires the rebalance alert. Verify every alert before acting.
   </p>
   {% endif %}
 

@@ -48,25 +48,32 @@ ARTICLE_TIMEOUT = 6           # seconds per article
 ARTICLE_CHARS = 2200          # per-article excerpt cap, keeps the prompt bounded
 MAX_NEWS_ITEMS = 8
 
-# Fundamentals worth putting in front of the judge, in reading order. Fractions
-# from the provider are rendered as percentages.
+# Fundamentals put in front of the judge, in reading order.
+#
+# This list mirrors financedata's `_FIELD_MAP` exactly — it is the whole set the
+# data layer fetches from yfinance `.info`. Adding a plausible-sounding key here
+# would be worse than useless: the analyser offers these to the model as the
+# menu of checkable metrics, so an entry with no data behind it invites a rule
+# that can never evaluate. Notably absent, because financedata does not fetch
+# them: EBITDA/operating margin, free and operating cash flow, ROA, total debt.
+#
+# `is_fraction` marks the values yfinance returns as 0–1 (financedata stores
+# them raw; its own `_FRACTION_FIELDS` set is unused). Those render and compare
+# as percentages, so a rule written "below 8" means 8%.
 _FUND_FIELDS: list[tuple[str, str, bool]] = [
     # (key, label, is_fraction)
     ("revenue_growth",   "Revenue growth (yoy)",   True),
     ("earnings_growth",  "Earnings growth (yoy)",  True),
     ("gross_margin",     "Gross margin",           True),
-    ("operating_margin", "Operating margin",       True),
-    ("ebitda_margin",    "EBITDA margin",          True),
     ("profit_margin",    "Profit margin",          True),
     ("roe",              "Return on equity",       True),
-    ("roa",              "Return on assets",       True),
-    ("free_cash_flow",   "Free cash flow",         False),
-    ("operating_cash_flow", "Operating cash flow", False),
-    ("total_debt",       "Total debt",             False),
+    ("debt_to_equity",   "Debt/equity",            False),
     ("ev_to_ebitda",     "EV/EBITDA",              False),
     ("pe_ratio",         "P/E",                    False),
     ("forward_pe",       "Forward P/E",            False),
+    ("pb_ratio",         "Price/book",             False),
     ("price_to_sales",   "Price/sales",            False),
+    ("dividend_yield",   "Dividend yield",         True),
 ]
 
 # A move smaller than this is noise, not a trend, and is rendered as "flat".

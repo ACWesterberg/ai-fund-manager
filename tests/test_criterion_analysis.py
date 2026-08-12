@@ -19,8 +19,8 @@ ANALYSIS_ANSWER = json.dumps({
          "checkable": "fundamentals", "metric": "revenue_growth", "op": "below",
          "value": 8, "note": "total revenue growth, not recurring specifically"},
         {"id": "B", "text": "EBITA/FCF deteriorates",
-         "checkable": "fundamentals", "metric": "ebitda_margin", "op": "below",
-         "value": 22, "note": "EBITDA margin stands in for EBITA"},
+         "checkable": "fundamentals", "metric": "profit_margin", "op": "below",
+         "value": 9, "note": "net margin — EBITA and FCF are not in the data set"},
         {"id": "C", "text": "acquisitions begin generating clearly weaker returns",
          "checkable": "manual", "metric": None, "op": None, "value": None,
          "note": "deal-level returns are not disclosed in any feed"},
@@ -84,7 +84,7 @@ def test_analyse_offers_only_real_metrics(fake_llm):
     """The model is shown the metric catalogue so it can't invent a key."""
     watchplan.analyse_criterion(SERIAL_ACQUIRER)
     prompt = fake_llm["kwargs"]["messages"][1]["content"]
-    for key in ("revenue_growth", "ebitda_margin", "free_cash_flow"):
+    for key in ("revenue_growth", "profit_margin", "ev_to_ebitda"):
         assert key in prompt
     assert SERIAL_ACQUIRER in prompt
 
@@ -104,7 +104,7 @@ def test_analyse_rejects_an_unknown_metric(fake_llm):
 def test_analyse_rejects_an_incomplete_comparison(fake_llm):
     fake_llm["answer"] = json.dumps({"logic": "A", "conditions": [
         {"id": "A", "text": "margins fall", "checkable": "fundamentals",
-         "metric": "ebitda_margin", "op": None, "value": None},
+         "metric": "gross_margin", "op": None, "value": None},
     ]})
     out = watchplan.analyse_criterion("margins fall")
     assert out["conditions"][0]["checkable"] == "news"
@@ -113,10 +113,10 @@ def test_analyse_rejects_an_incomplete_comparison(fake_llm):
 def test_analyse_keeps_a_zero_threshold(fake_llm):
     """'FCF below 0' is a real line — the positive-only coercion must not eat it."""
     fake_llm["answer"] = json.dumps({"logic": "A", "conditions": [
-        {"id": "A", "text": "free cash flow turns negative", "checkable": "fundamentals",
-         "metric": "free_cash_flow", "op": "below", "value": 0},
+        {"id": "A", "text": "revenue growth turns negative", "checkable": "fundamentals",
+         "metric": "revenue_growth", "op": "below", "value": 0},
     ]})
-    out = watchplan.analyse_criterion("free cash flow turns negative")
+    out = watchplan.analyse_criterion("revenue growth turns negative")
     assert out["conditions"][0]["value"] == 0
     assert watchplan.suggested_rules(out)[0]["value"] == 0
 
@@ -173,7 +173,7 @@ def test_clearing_a_plan_drops_the_analysis(store, fake_llm):
 
 def test_suggested_rules_only_offers_the_checkable_legs(fake_llm):
     rules = watchplan.suggested_rules(watchplan.analyse_criterion(SERIAL_ACQUIRER))
-    assert [r["metric"] for r in rules] == ["revenue_growth", "ebitda_margin"]
+    assert [r["metric"] for r in rules] == ["revenue_growth", "profit_margin"]
     assert rules[0]["label"] == "Revenue growth (yoy)"
     assert watchplan.suggested_rules(None) == []
 
@@ -338,7 +338,7 @@ def test_applying_suggested_rules_creates_real_checks(client):
 
     _meta, store = paper.open_portfolio("acquirer-sleeve")
     rules = watchplan.get_kill_rules(store)["VIT-B.ST"]["fundamentals"]
-    assert {r["metric"] for r in rules} == {"revenue_growth", "ebitda_margin"}
+    assert {r["metric"] for r in rules} == {"revenue_growth", "profit_margin"}
     # The text criterion is untouched — both halves now watch the same line.
     assert watchplan.get_kill_text(store)["VIT-B.ST"] == SERIAL_ACQUIRER
 

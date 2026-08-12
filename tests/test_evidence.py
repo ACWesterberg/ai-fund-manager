@@ -541,3 +541,41 @@ def test_verdict_with_unchecked_array_parses():
     out = paper._parse_verdict(raw)
     assert out["verdict"] == "insufficient"
     assert out["unchecked"] == ["acquisition returns"]
+
+
+# ── The metric catalogue must match what the data layer actually fetches ──────
+
+# financedata's `_FIELD_MAP` (src/financedata/fundamentals.py) — the complete
+# set of keys `get_fundamentals` can return. Copied here as a guard: offering
+# the analyser a metric with no data behind it invites a rule that can never
+# evaluate, so a new entry in _FUND_FIELDS must be one of these.
+FINANCEDATA_KEYS = {
+    "pe_ratio", "forward_pe", "pb_ratio", "ev_to_ebitda", "price_to_sales",
+    "market_cap", "profit_margin", "gross_margin", "roe", "debt_to_equity",
+    "revenue_growth", "earnings_growth", "beta", "fifty_two_week_high",
+    "fifty_two_week_low", "dividend_yield", "analyst_target_price",
+    "analyst_count", "currency", "earnings_timestamp", "ex_div_timestamp",
+    "website", "sector",
+}
+
+
+def test_every_offered_metric_is_actually_fetched():
+    unknown = set(evidence.FUND_FIELD_META) - FINANCEDATA_KEYS
+    assert not unknown, (
+        f"{unknown} are offered to the criterion analyser but financedata never "
+        "fetches them — a rule naming one could never evaluate.")
+
+
+def test_ebitda_and_cash_flow_are_known_to_be_absent():
+    """Pins the gap that shaped the metric list, so a future add is deliberate."""
+    for absent in ("ebitda_margin", "operating_margin", "free_cash_flow",
+                   "operating_cash_flow", "roa", "total_debt"):
+        assert absent not in evidence.FUND_FIELD_META
+        assert absent not in FINANCEDATA_KEYS
+
+
+def test_fraction_flags_match_the_providers_units():
+    """financedata stores yfinance values raw; these are the 0-1 ones."""
+    fractions = {k for k, m in evidence.FUND_FIELD_META.items() if m["is_fraction"]}
+    assert fractions == {"profit_margin", "gross_margin", "roe", "revenue_growth",
+                         "earnings_growth", "dividend_yield"}

@@ -63,8 +63,8 @@ acquisitions begin generating clearly weaker returns
 ▸ read as (A and B) or C
    [figure] recurring growth falls below 8%   → revenue growth below 8
             ⚠ total revenue growth, not recurring specifically
-   [figure] EBITA/FCF deteriorates            → ebitda margin below 22
-            ⚠ EBITDA margin stands in for EBITA
+   [figure] EBITA/FCF deteriorates            → profit margin below 9
+            ⚠ net margin — EBITA and FCF are not in the data set
    [manual] acquisitions begin generating clearly weaker returns
             ⚠ deal-level returns are not disclosed in any feed
 ```
@@ -73,6 +73,16 @@ Each condition is tagged **figure** (a threshold on a metric we cache),
 **news** (an event that could show up in coverage) or **manual** (needs the
 full report). The ⚠ lines are the analyser stating how the available metric
 differs from what you wrote — a proxy is used, but never silently.
+
+**The metric menu is exactly what financedata fetches** (its `_FIELD_MAP`):
+revenue and earnings growth, gross and profit margin, ROE, debt/equity,
+EV/EBITDA, P/E, forward P/E, price/book, price/sales, dividend yield. Notably
+**absent**: EBITDA and operating margin, free and operating cash flow, ROA and
+total debt — yfinance exposes them, but `financedata` does not map them, so a
+criterion written around EBITA or FCF can only be approximated (net margin) or
+left to the earnings print. Adding them is a few lines in
+`financedata/fundamentals.py::_FIELD_MAP`; `tests/test_evidence.py` pins the
+two lists together so they cannot drift apart silently.
 
 Where it finds a real threshold, the panel offers **"Also check N of these as
 a hard rule"**. One click lifts them into deterministic fundamentals rules

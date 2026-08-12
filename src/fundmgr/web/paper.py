@@ -143,6 +143,10 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
         rule = rules.get(t) or {}
         horizon = horizons.get(t) or {}
         verdict = verdicts.get(t) or {}
+        analysis = watchplan.get_analysis(store, t)
+        applied = {(f["metric"], f["op"]) for f in (rule.get("fundamentals") or [])}
+        pending = [s for s in watchplan.suggested_rules(analysis)
+                   if (s["metric"], s["op"]) not in applied]
         left = watchplan.days_left(horizon.get("review_date"))
         # Live P&L against the drawdown line, so the panel shows how close a
         # position is to its kill without waiting for the daily watch.
@@ -163,9 +167,13 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "kill_reason": verdict.get("reason", ""),
             "kill_unchecked": verdict.get("unchecked", []),
             "kill_checked_on": verdict.get("date", ""),
+            "conditions": (analysis or {}).get("conditions") or [],
+            "logic": (analysis or {}).get("logic", ""),
+            "pending_rules": pending,
             "max_drawdown_pct": max_dd,
             "price_below": rule.get("price_below"),
             "price_above": rule.get("price_above"),
+            "fundamental_rules": rule.get("fundamentals") or [],
             "rule_currency": rule.get("currency") or "",
             "pnl_pct": pnl,
             "dd_breached": bool(max_dd and pnl is not None and pnl <= -abs(max_dd)),
@@ -604,6 +612,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         if horizon_date.strip() and not watchplan.parse_horizon(horizon_date.strip()):
             return _back(f"Bad horizon date '{horizon_date}' — use YYYY-MM-DD.", 0)
 
+        previous_criterion = watchplan.get_kill_text(store).get(tkr, "")
         currency = meta["currency_map"].get(tkr)
         plan = watchplan.set_position_plan(
             store, tkr,
@@ -617,6 +626,15 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             horizon_months=horizon_months,
             horizon_note=horizon_note,
         )
+
+        # Read the criterion back at save time, so how it will be judged is
+        # visible now rather than discovered from a verdict tomorrow.
+        if kill_criterion.strip() and kill_criterion.strip() != previous_criterion:
+            analysis = await run_in_threadpool(watchplan.analyse_criterion,
+                                               kill_criterion.strip())
+            watchplan.save_analysis(store, tkr, analysis)
+        elif not kill_criterion.strip():
+            watchplan.save_analysis(store, tkr, None)
 
         bits = []
         if plan["kill_criterion"]:
@@ -633,6 +651,35 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         if not bits:
             return _back(f"Cleared the watch plan for {tkr}.", 1)
         return _back(f"{tkr}: saved {', '.join(bits)}.", 1)
+
+    @router.post("/{slug}/watchplan/apply-rules")
+    async def apply_suggested_rules(slug: str, ticker: str = Form(...)):
+        """Turn the thresholds found in a criterion into deterministic rules.
+
+        The criterion text stays exactly as written — this only adds the
+        machine-checkable half alongside it, so the same line is both judged in
+        context and compared against a number every run.
+        """
+        from urllib.parse import urlencode
+
+        try:
+            _meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            return _not_found()
+
+        tkr = (ticker or "").strip().upper()
+        suggestions = watchplan.suggested_rules(watchplan.get_analysis(store, tkr))
+        if not suggestions:
+            msg, ok = f"No checkable thresholds found in {tkr}'s criterion.", 0
+        else:
+            existing = (watchplan.get_kill_rules(store).get(tkr) or {}).get("fundamentals") or []
+            watchplan.set_position_plan(
+                store, tkr, fundamentals=existing + suggestions)
+            names = ", ".join(f"{s['label']} {s['op']} {s['value']:g}" for s in suggestions)
+            msg, ok = f"{tkr}: now checking {names} every run.", 1
+        return RedirectResponse(
+            url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}) + "#watch",
+            status_code=303)
 
     # ── Per-book dashboard ──────────────────────────────────────────────────
 

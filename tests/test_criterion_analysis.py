@@ -1,0 +1,380 @@
+"""Reading a kill criterion back at save time, and the rules lifted from it."""
+import json
+
+import pytest
+
+from fundmgr import evidence, paper, watchplan
+from fundmgr.state.models import Transaction
+from fundmgr.state.store import Store
+
+# The criterion that motivated all of this: two legs that need figures, one
+# that no feed will ever settle.
+SERIAL_ACQUIRER = ("Recurring growth falls below 8% while EBITA/FCF deteriorates, "
+                   "or acquisitions begin generating clearly weaker returns")
+
+ANALYSIS_ANSWER = json.dumps({
+    "logic": "(A and B) or C",
+    "conditions": [
+        {"id": "A", "text": "recurring growth falls below 8%",
+         "checkable": "fundamentals", "metric": "revenue_growth", "op": "below",
+         "value": 8, "note": "total revenue growth, not recurring specifically"},
+        {"id": "B", "text": "EBITA/FCF deteriorates",
+         "checkable": "fundamentals", "metric": "ebitda_margin", "op": "below",
+         "value": 22, "note": "EBITDA margin stands in for EBITA"},
+        {"id": "C", "text": "acquisitions begin generating clearly weaker returns",
+         "checkable": "manual", "metric": None, "op": None, "value": None,
+         "note": "deal-level returns are not disclosed in any feed"},
+    ],
+})
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = Store(tmp_path / "book.db")
+    s.initialise(100_000)
+    s.set_meta("paper_name", "Analysis Sleeve")
+    return s
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    """Stub the analyser's model call; record what it was asked."""
+    seen = {}
+
+    class _Msg:
+        def __init__(self, content): self.content = content
+
+    class _Choice:
+        def __init__(self, content): self.message = _Msg(content)
+
+    class _Resp:
+        def __init__(self, content): self.choices = [_Choice(content)]
+
+    class _Completions:
+        def create(self, **kw):
+            seen["kwargs"] = kw
+            return _Resp(seen.get("answer", ANALYSIS_ANSWER))
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        def __init__(self, api_key=None): self.chat = _Chat()
+
+    import openai
+    monkeypatch.setattr(openai, "OpenAI", _Client)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    return seen
+
+
+# ── Analysis ──────────────────────────────────────────────────────────────────
+
+def test_analyse_decomposes_a_compound_criterion(fake_llm):
+    out = watchplan.analyse_criterion(SERIAL_ACQUIRER)
+    assert out["logic"] == "(A and B) or C"
+    assert [c["checkable"] for c in out["conditions"]] == [
+        "fundamentals", "fundamentals", "manual"]
+    assert out["conditions"][0]["metric"] == "revenue_growth"
+    assert out["conditions"][0]["value"] == 8
+    assert "not recurring specifically" in out["conditions"][0]["note"]
+    assert out["criterion"] == SERIAL_ACQUIRER
+
+
+def test_analyse_offers_only_real_metrics(fake_llm):
+    """The model is shown the metric catalogue so it can't invent a key."""
+    watchplan.analyse_criterion(SERIAL_ACQUIRER)
+    prompt = fake_llm["kwargs"]["messages"][1]["content"]
+    for key in ("revenue_growth", "ebitda_margin", "free_cash_flow"):
+        assert key in prompt
+    assert SERIAL_ACQUIRER in prompt
+
+
+def test_analyse_rejects_an_unknown_metric(fake_llm):
+    """A hallucinated metric key must not become a rule — it degrades to news."""
+    fake_llm["answer"] = json.dumps({"logic": "A", "conditions": [
+        {"id": "A", "text": "churn rises above 5%", "checkable": "fundamentals",
+         "metric": "customer_churn", "op": "above", "value": 5},
+    ]})
+    out = watchplan.analyse_criterion("churn rises above 5%")
+    assert out["conditions"][0]["checkable"] == "news"
+    assert out["conditions"][0]["metric"] is None
+    assert watchplan.suggested_rules(out) == []
+
+
+def test_analyse_rejects_an_incomplete_comparison(fake_llm):
+    fake_llm["answer"] = json.dumps({"logic": "A", "conditions": [
+        {"id": "A", "text": "margins fall", "checkable": "fundamentals",
+         "metric": "ebitda_margin", "op": None, "value": None},
+    ]})
+    out = watchplan.analyse_criterion("margins fall")
+    assert out["conditions"][0]["checkable"] == "news"
+
+
+def test_analyse_keeps_a_zero_threshold(fake_llm):
+    """'FCF below 0' is a real line — the positive-only coercion must not eat it."""
+    fake_llm["answer"] = json.dumps({"logic": "A", "conditions": [
+        {"id": "A", "text": "free cash flow turns negative", "checkable": "fundamentals",
+         "metric": "free_cash_flow", "op": "below", "value": 0},
+    ]})
+    out = watchplan.analyse_criterion("free cash flow turns negative")
+    assert out["conditions"][0]["value"] == 0
+    assert watchplan.suggested_rules(out)[0]["value"] == 0
+
+
+def test_analyse_without_an_api_key_is_none(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert watchplan.analyse_criterion(SERIAL_ACQUIRER) is None
+
+
+def test_analyse_survives_a_failed_call(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    import openai
+
+    def boom(api_key=None):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(openai, "OpenAI", boom)
+    assert watchplan.analyse_criterion(SERIAL_ACQUIRER) is None
+
+
+def test_analyse_handles_junk_replies(fake_llm):
+    for junk in ("not json", "{}", '{"conditions": []}', '{"conditions": "nope"}'):
+        fake_llm["answer"] = junk
+        assert watchplan.analyse_criterion("x") is None
+
+
+def test_analyse_reads_json_out_of_prose(fake_llm):
+    fake_llm["answer"] = f"Sure, here it is:\n```json\n{ANALYSIS_ANSWER}\n```"
+    assert watchplan.analyse_criterion(SERIAL_ACQUIRER)["logic"] == "(A and B) or C"
+
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+
+def test_analysis_round_trips(store, fake_llm):
+    watchplan.set_position_plan(store, "VIT-B.ST", kill_criterion=SERIAL_ACQUIRER)
+    watchplan.save_analysis(store, "VIT-B.ST", watchplan.analyse_criterion(SERIAL_ACQUIRER))
+    assert len(watchplan.get_analysis(store, "VIT-B.ST")["conditions"]) == 3
+
+
+def test_stale_analysis_is_discarded_after_a_reword(store, fake_llm):
+    """An analysis of the old wording must never describe the new one."""
+    watchplan.set_position_plan(store, "VIT-B.ST", kill_criterion=SERIAL_ACQUIRER)
+    watchplan.save_analysis(store, "VIT-B.ST", watchplan.analyse_criterion(SERIAL_ACQUIRER))
+    watchplan.set_position_plan(store, "VIT-B.ST",
+                                kill_criterion="Recurring growth below 8% for two quarters")
+    assert watchplan.get_analysis(store, "VIT-B.ST") is None
+
+
+def test_clearing_a_plan_drops_the_analysis(store, fake_llm):
+    watchplan.set_position_plan(store, "VIT-B.ST", kill_criterion=SERIAL_ACQUIRER)
+    watchplan.save_analysis(store, "VIT-B.ST", watchplan.analyse_criterion(SERIAL_ACQUIRER))
+    watchplan.clear_position_plan(store, "VIT-B.ST")
+    assert watchplan.get_analysis(store, "VIT-B.ST") is None
+
+
+def test_suggested_rules_only_offers_the_checkable_legs(fake_llm):
+    rules = watchplan.suggested_rules(watchplan.analyse_criterion(SERIAL_ACQUIRER))
+    assert [r["metric"] for r in rules] == ["revenue_growth", "ebitda_margin"]
+    assert rules[0]["label"] == "Revenue growth (yoy)"
+    assert watchplan.suggested_rules(None) == []
+
+
+# ── Fundamentals rules ────────────────────────────────────────────────────────
+
+def _hold(store, ticker="VIT-B.ST", shares=100, cost=300.0):
+    store.apply_fill(Transaction(ticker=ticker, side="buy", shares=shares,
+                                 price_sek=cost, fee_sek=0.0, source="fill"))
+
+
+@pytest.fixture
+def sek_only(monkeypatch):
+    monkeypatch.setattr(paper, "sek_prices_for",
+                        lambda store, tickers, currency_map, native: dict(native))
+
+
+def test_current_metric_converts_fractions_to_percent(store):
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.071, "pe_ratio": 21.4})
+    assert evidence.current_metric(store, "VIT-B.ST", "revenue_growth") == pytest.approx(7.1)
+    assert evidence.current_metric(store, "VIT-B.ST", "pe_ratio") == pytest.approx(21.4)
+    assert evidence.current_metric(store, "VIT-B.ST", "nonsense") is None
+
+
+def test_fundamentals_rule_fires_below_threshold(store, sek_only):
+    _hold(store)
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.071})
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8}])
+
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["hit"]
+    assert "Revenue growth (yoy) 7.1% is below the 8.0% line" in row["reasons"][0]
+
+
+def test_fundamentals_rule_stays_quiet_above_threshold(store, sek_only):
+    _hold(store)
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.121})
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8}])
+    assert watchplan.evaluate_kill_rules(store)[0]["hit"] is False
+
+
+def test_fundamentals_rule_supports_above(store, sek_only):
+    _hold(store)
+    store.save_fundamentals("VIT-B.ST", {"ev_to_ebitda": 31.0})
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "ev_to_ebitda", "op": "above", "value": 30}])
+    assert watchplan.evaluate_kill_rules(store)[0]["hit"]
+
+
+def test_uncached_metric_is_unread_not_passing(store, sek_only):
+    """No data must never read as 'the line is fine'."""
+    _hold(store)
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8}])
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["hit"] is False
+    assert row["fundamentals"][0]["unread"] is True
+
+
+def test_malformed_fundamentals_rules_are_dropped(store):
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "made_up", "op": "below", "value": 8},
+        {"metric": "revenue_growth", "op": "sideways", "value": 8},
+        {"metric": "revenue_growth", "op": "below", "value": "abc"},
+        "not a dict",
+        {"metric": "revenue_growth", "op": "below", "value": 8},
+        {"metric": "revenue_growth", "op": "below", "value": 9},   # duplicate key
+    ])
+    rules = watchplan.get_kill_rules(store)["VIT-B.ST"]["fundamentals"]
+    assert rules == [{"metric": "revenue_growth", "op": "below", "value": 8.0, "note": ""}]
+
+
+def test_fundamentals_breach_keeps_the_watch_armed(store, sek_only, monkeypatch):
+    """Price recovering must not re-arm a watch whose metric is still breached."""
+    sent = []
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda t, **k: sent.append(t) or True)
+
+    _hold(store)
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.071})
+    watchplan.set_position_plan(store, "VIT-B.ST", max_drawdown_pct="25",
+                                fundamentals=[{"metric": "revenue_growth",
+                                               "op": "below", "value": 8}])
+    watchplan.check_kill_rules("slug", store=store)
+    assert len(sent) == 1
+
+    # Growth still below the line → no "re-armed" message, no repeat alert.
+    assert watchplan.check_kill_rules("slug", store=store) == []
+
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.14})
+    log = watchplan.check_kill_rules("slug", store=store)
+    assert any("re-armed" in line for line in log)
+
+
+def test_fundamentals_rules_survive_clearing_price_rules(store, sek_only):
+    watchplan.set_position_plan(store, "VIT-B.ST", max_drawdown_pct="25",
+                                fundamentals=[{"metric": "revenue_growth",
+                                               "op": "below", "value": 8}])
+    watchplan.set_position_plan(store, "VIT-B.ST", max_drawdown_pct="")
+    rules = watchplan.get_kill_rules(store)["VIT-B.ST"]
+    assert "max_drawdown_pct" not in rules
+    assert rules["fundamentals"]
+
+
+# ── Web flow ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def client(tmp_path, monkeypatch, fake_llm):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(paper, "PAPER_DIR", tmp_path / "paper")
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+    monkeypatch.setattr(paper, "_cache_price_history", lambda store, tickers, **kw: None)
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    import fundmgr.data.benchmark as benchmark
+    monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", lambda store, **kw: True)
+    import fundmgr.data.quotes as quotes
+    monkeypatch.setattr(quotes, "live_prices", lambda tickers: {t: 300.0 for t in tickers})
+
+    from fundmgr.web.app import app
+    paper.create_portfolio(
+        "Acquirer Sleeve", 30_000, "",
+        holdings_override=[{"ticker": "VIT-B.ST", "name": "Vitec", "weight_pct": 100,
+                            "shares": 100, "avg_cost_sek": 300.0}],
+        kind="live", seed_holdings=True)
+    return TestClient(app)
+
+
+def test_saving_a_criterion_analyses_it(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "kill_criterion": SERIAL_ACQUIRER},
+                follow_redirects=False)
+
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    analysis = watchplan.get_analysis(store, "VIT-B.ST")
+    assert analysis["logic"] == "(A and B) or C"
+
+
+def test_dashboard_shows_how_the_criterion_was_read(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "kill_criterion": SERIAL_ACQUIRER},
+                follow_redirects=False)
+
+    body = client.get("/live/acquirer-sleeve").text
+    assert "read as (A and B) or C" in body
+    assert "recurring growth falls below 8%" in body
+    assert "acquisitions begin generating clearly weaker returns" in body
+    assert "total revenue growth, not recurring specifically" in body   # the proxy warning
+    assert "Also check 2 of these as a hard rule" in body
+
+
+def test_applying_suggested_rules_creates_real_checks(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "kill_criterion": SERIAL_ACQUIRER},
+                follow_redirects=False)
+    r = client.post("/live/acquirer-sleeve/watchplan/apply-rules",
+                    data={"ticker": "VIT-B.ST"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert "ok=1" in r.headers["location"]
+
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    rules = watchplan.get_kill_rules(store)["VIT-B.ST"]["fundamentals"]
+    assert {r["metric"] for r in rules} == {"revenue_growth", "ebitda_margin"}
+    # The text criterion is untouched — both halves now watch the same line.
+    assert watchplan.get_kill_text(store)["VIT-B.ST"] == SERIAL_ACQUIRER
+
+
+def test_applying_twice_does_not_duplicate(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "kill_criterion": SERIAL_ACQUIRER},
+                follow_redirects=False)
+    for _ in range(2):
+        client.post("/live/acquirer-sleeve/watchplan/apply-rules",
+                    data={"ticker": "VIT-B.ST"}, follow_redirects=False)
+
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    assert len(watchplan.get_kill_rules(store)["VIT-B.ST"]["fundamentals"]) == 2
+    # …and the button is gone once everything is applied.
+    assert "as a hard rule" not in client.get("/live/acquirer-sleeve").text
+
+
+def test_apply_rules_with_nothing_to_apply(client):
+    r = client.post("/live/acquirer-sleeve/watchplan/apply-rules",
+                    data={"ticker": "VIT-B.ST"}, follow_redirects=False)
+    assert "ok=0" in r.headers["location"]
+
+
+def test_apply_rules_404s_on_unknown_sleeve(client):
+    r = client.post("/live/nope/watchplan/apply-rules", data={"ticker": "X"})
+    assert r.status_code == 404
+
+
+def test_clearing_the_criterion_clears_the_analysis(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "kill_criterion": SERIAL_ACQUIRER},
+                follow_redirects=False)
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "kill_criterion": ""},
+                follow_redirects=False)
+
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    assert watchplan.get_analysis(store, "VIT-B.ST") is None

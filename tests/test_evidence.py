@@ -507,3 +507,37 @@ def test_dashboard_flags_an_unverifiable_criterion(watched_book, monkeypatch):
     assert r.status_code == 200
     assert "not auto-checkable" in r.text
     assert "acquisitions begin generating clearly weaker returns" in r.text
+
+
+# ── JSON extraction (the bug that ate verdicts with arrays) ───────────────────
+
+def test_extract_json_object_prefers_the_outer_object():
+    """_extract_json_block looks for '[' first and would return the inner array."""
+    raw = 'Result:\n{"verdict": "NO", "unchecked": ["a", "b"], "reason": "x"}\nEnd.'
+    assert json.loads(paper.extract_json_object(raw))["verdict"] == "NO"
+    # The old helper grabs the nested array instead — the regression guarded here.
+    assert json.loads(paper._extract_json_block(raw)) == ["a", "b"]
+
+
+def test_extract_json_object_handles_fences_and_braces_in_strings():
+    raw = '```json\n{"reason": "the filing said {redacted}", "unchecked": []}\n```'
+    assert json.loads(paper.extract_json_object(raw))["reason"] == "the filing said {redacted}"
+
+
+def test_extract_json_object_handles_escaped_quotes():
+    raw = r'{"reason": "he said \"below 8%\" clearly", "unchecked": []}'
+    assert json.loads(paper.extract_json_object(raw))["unchecked"] == []
+
+
+def test_extract_json_object_gives_up_cleanly():
+    assert paper.extract_json_object("no object here [1,2]") is None
+    assert paper.extract_json_object("") is None
+
+
+def test_verdict_with_unchecked_array_parses():
+    """End-to-end guard: the real judge reply shape survives extraction."""
+    raw = ('Assessment follows.\n{"verdict": "INSUFFICIENT", "reason": "no deal data", '
+           '"unchecked": ["acquisition returns"]}')
+    out = paper._parse_verdict(raw)
+    assert out["verdict"] == "insufficient"
+    assert out["unchecked"] == ["acquisition returns"]

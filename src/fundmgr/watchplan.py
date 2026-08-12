@@ -22,14 +22,16 @@ exactly the same shape.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timezone
 
 from fundmgr.state.store import Store
 
 # app_meta keys
 KILL_TEXT_KEY = "paper_kill_criteria"      # {ticker: "text"} — shared with the JSON import
-KILL_RULES_KEY = "paper_kill_rules"        # {ticker: {max_drawdown_pct, price_below, price_above, currency}}
+KILL_RULES_KEY = "paper_kill_rules"        # {ticker: {max_drawdown_pct, price_below, price_above, fundamentals[], currency}}
 HORIZONS_KEY = "paper_horizons"            # {ticker: {review_date, label, note, set_at}}
+ANALYSIS_KEY = "paper_killanalysis"        # {ticker: {logic, conditions[], criterion}} — per-ticker key
 
 # Days-remaining buckets for horizon alerts. One alert per bucket per horizon:
 # the tightest bucket the date falls into fires, so a horizon set 10 days out
@@ -65,14 +67,24 @@ def get_horizons(store: Store) -> dict[str, dict]:
 
 
 def _num(value) -> float | None:
-    """Positive-or-None float coercion for user-entered rule fields."""
-    if value is None or value == "":
+    """Positive-or-None float coercion for user-entered rule fields.
+
+    Price floors, targets and drawdown percentages are all positive by
+    construction, so a 0 or a negative is a typo rather than a line.
+    """
+    out = _signed_num(value)
+    return out if out is not None and out > 0 else None
+
+
+def _signed_num(value) -> float | None:
+    """Any-sign float coercion — for thresholds where 0 and negatives are real
+    (free cash flow below 0, margin above -5)."""
+    if value is None or value == "" or isinstance(value, bool):
         return None
     try:
-        out = float(str(value).replace(",", ".").strip())
+        return float(str(value).replace(",", ".").strip())
     except (TypeError, ValueError):
         return None
-    return out if out > 0 else None
 
 
 def parse_horizon(review_date: str = "", months: str | float | None = None,
@@ -117,6 +129,7 @@ def set_position_plan(
     max_drawdown_pct=None,
     price_below=None,
     price_above=None,
+    fundamentals: list[dict] | None = None,
     currency: str | None = None,
     review_date: str | None = None,
     horizon_months=None,
@@ -145,7 +158,8 @@ def set_position_plan(
             texts.pop(ticker, None)
         store.set_meta(KILL_TEXT_KEY, json.dumps(texts))
 
-    if any(v is not None for v in (max_drawdown_pct, price_below, price_above)):
+    if any(v is not None for v in (max_drawdown_pct, price_below, price_above,
+                                   fundamentals)):
         rules = get_kill_rules(store)
         rule = dict(rules.get(ticker) or {})
         for field, value in (("max_drawdown_pct", max_drawdown_pct),
@@ -158,10 +172,17 @@ def set_position_plan(
                 rule.pop(field, None)
             else:
                 rule[field] = parsed
+        if fundamentals is not None:
+            cleaned = _clean_fundamental_rules(fundamentals)
+            if cleaned:
+                rule["fundamentals"] = cleaned
+            else:
+                rule.pop("fundamentals", None)
         if currency:
             rule["currency"] = currency.strip().upper()
         rule = {k: v for k, v in rule.items() if k == "currency" or v is not None}
-        if any(k in rule for k in ("max_drawdown_pct", "price_below", "price_above")):
+        if any(k in rule for k in ("max_drawdown_pct", "price_below", "price_above",
+                                   "fundamentals")):
             rule["set_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             rules[ticker] = rule
         else:
@@ -197,6 +218,28 @@ def set_position_plan(
     return plan_for(store, ticker)
 
 
+def _clean_fundamental_rules(rules: list[dict]) -> list[dict]:
+    """Keep only well-formed {metric, op, value} entries naming a known metric."""
+    from fundmgr.evidence import FUND_FIELD_META
+
+    out, seen = [], set()
+    for entry in rules or []:
+        if not isinstance(entry, dict):
+            continue
+        metric = str(entry.get("metric") or "").strip()
+        op = str(entry.get("op") or "").strip().lower()
+        value = _signed_num(entry.get("value"))
+        if metric not in FUND_FIELD_META or op not in ("below", "above") or value is None:
+            continue
+        key = (metric, op)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"metric": metric, "op": op, "value": value,
+                    "note": str(entry.get("note") or "").strip()})
+    return out
+
+
 def clear_position_plan(store: Store, ticker: str) -> None:
     """Remove every watch-plan entry for one ticker."""
     ticker = (ticker or "").strip().upper()
@@ -209,6 +252,7 @@ def clear_position_plan(store: Store, ticker: str) -> None:
             store.set_meta(key, json.dumps(data))
     store.set_meta(f"paper_killrule_state:{ticker}", "")
     store.set_meta(f"paper_horizon_stage:{ticker}", "")
+    save_analysis(store, ticker, None)
 
 
 def plan_for(store: Store, ticker: str) -> dict:
@@ -236,6 +280,189 @@ def days_left(review_date: str | None, today: date | None = None) -> int | None:
 def plan_tickers(store: Store) -> set[str]:
     """Every ticker carrying any part of a watch plan."""
     return set(get_kill_text(store)) | set(get_kill_rules(store)) | set(get_horizons(store))
+
+
+# ── Reading a criterion back at you ───────────────────────────────────────────
+
+_ANALYSIS_SYSTEM = """\
+You take a pre-registered kill criterion for a stock position — one sentence \
+written by an investor — and report how it decomposes, so the investor can see \
+how it will be read before relying on it.
+
+Split it into its separate conditions and describe how they combine. Then, for
+each condition, say how it could be checked:
+
+  "fundamentals" - it is a threshold on ONE of the metrics listed below, and
+                   that metric genuinely measures what the condition is about.
+                   Fill in metric, op and value.
+  "news"         - it is an observable event or disclosure that could plausibly
+                   appear in news coverage or an earnings write-up.
+  "manual"       - it needs the full report, a private figure, or a judgement
+                   no feed will settle (segment-level detail, deal-level
+                   returns, management intent).
+
+Rules:
+- Only use "fundamentals" for a metric in the list. Never invent a metric key.
+- If the available metric is only an approximation of what was written, still
+  use it, and say exactly how it differs in `note`. Example: a criterion about
+  *recurring* revenue growth can use total revenue growth as a proxy — note it.
+- Values are plain numbers in the unit shown: percentages as 8 (not 0.08).
+- `op` is "below" or "above".
+- Do not soften a "manual" condition into "news" to look useful. An honest
+  "manual" is the point of this exercise.
+
+Reply with a JSON object only:
+{"logic": "<how the conditions combine, e.g. '(A and B) or C'>",
+ "conditions": [
+   {"id": "A", "text": "<the condition in the investor's own words>",
+    "checkable": "fundamentals"|"news"|"manual",
+    "metric": "<key from the list, or null>",
+    "op": "below"|"above"|null,
+    "value": <number or null>,
+    "note": "<how the check differs from what was written, or ''>"}
+ ]}\
+"""
+
+
+def analyse_criterion(criterion: str, model: str | None = None) -> dict | None:
+    """Decompose a kill criterion into its conditions and how each can be checked.
+
+    Runs once when a criterion is saved, so the investor sees the reading at
+    entry time rather than discovering it from a verdict a day later. Returns
+    None when it can't run (no API key, call failed) — the criterion is still
+    saved and still judged; only the preview is missing.
+    """
+    criterion = (criterion or "").strip()
+    if not criterion or not os.getenv("OPENAI_API_KEY"):
+        return None
+
+    from fundmgr.evidence import FUND_FIELD_META
+
+    catalogue = "\n".join(f"  {key} — {meta['label']}"
+                          for key, meta in FUND_FIELD_META.items())
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        kwargs = {
+            "model": model or os.getenv("FUND_KILL_MODEL", "gpt-4o-mini"),
+            "messages": [
+                {"role": "system", "content": _ANALYSIS_SYSTEM},
+                {"role": "user", "content": (
+                    f"Available fundamentals metrics:\n{catalogue}\n\n"
+                    f"Kill criterion:\n{criterion}")},
+            ],
+            "max_tokens": 700,
+            "temperature": 0.0,
+        }
+        try:
+            resp = client.chat.completions.create(
+                response_format={"type": "json_object"}, **kwargs)
+        except Exception:
+            resp = client.chat.completions.create(**kwargs)
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return None
+
+    return _parse_analysis(raw, criterion)
+
+
+def _parse_analysis(raw: str, criterion: str) -> dict | None:
+    """Validate the analyser's reply, dropping anything malformed."""
+    from fundmgr.evidence import FUND_FIELD_META
+    from fundmgr.paper import extract_json_object
+
+    data = None
+    for candidate in (raw, extract_json_object(raw or "")):
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    if not isinstance(data, dict) or not isinstance(data.get("conditions"), list):
+        return None
+
+    conditions = []
+    for i, cond in enumerate(data["conditions"]):
+        if not isinstance(cond, dict):
+            continue
+        text = str(cond.get("text") or "").strip()
+        if not text:
+            continue
+        checkable = str(cond.get("checkable") or "manual").strip().lower()
+        if checkable not in ("fundamentals", "news", "manual"):
+            checkable = "manual"
+
+        metric = cond.get("metric")
+        metric = str(metric).strip() if metric else None
+        op = str(cond.get("op") or "").strip().lower()
+        value = _signed_num(cond.get("value"))
+        # A fundamentals condition is only trustworthy if every part of the
+        # comparison survived validation — otherwise it degrades to "news".
+        if checkable == "fundamentals" and not (
+                metric in FUND_FIELD_META and op in ("below", "above") and value is not None):
+            checkable = "news" if metric else "manual"
+            metric, op, value = None, None, None
+
+        conditions.append({
+            "id": str(cond.get("id") or chr(65 + i))[:2],
+            "text": text,
+            "checkable": checkable,
+            "metric": metric if checkable == "fundamentals" else None,
+            "op": op if checkable == "fundamentals" else None,
+            "value": value if checkable == "fundamentals" else None,
+            "note": str(cond.get("note") or "").strip(),
+        })
+
+    if not conditions:
+        return None
+    return {
+        "criterion": criterion,
+        "logic": str(data.get("logic") or "").strip(),
+        "conditions": conditions,
+        "analysed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def save_analysis(store: Store, ticker: str, analysis: dict | None) -> None:
+    key = f"{ANALYSIS_KEY}:{ticker.upper()}"
+    store.set_meta(key, json.dumps(analysis) if analysis else "")
+
+
+def get_analysis(store: Store, ticker: str) -> dict | None:
+    raw = store.get_meta(f"{ANALYSIS_KEY}:{ticker.upper()}")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # A stale analysis of a since-reworded criterion is worse than none.
+    if data.get("criterion") != get_kill_text(store).get(ticker.upper(), ""):
+        return None
+    return data
+
+
+def suggested_rules(analysis: dict | None) -> list[dict]:
+    """The fundamentals conditions an analysis found, ready to become rules."""
+    if not analysis:
+        return []
+    from fundmgr.evidence import FUND_FIELD_META
+    out = []
+    for cond in analysis["conditions"]:
+        if cond["checkable"] != "fundamentals":
+            continue
+        out.append({
+            "metric": cond["metric"],
+            "label": FUND_FIELD_META[cond["metric"]]["label"],
+            "op": cond["op"],
+            "value": cond["value"],
+            "note": cond["note"],
+        })
+    return out
 
 
 # ── Numeric kill-rule watch ───────────────────────────────────────────────────
@@ -307,6 +534,26 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
         if ceiling and price_native is not None and price_native >= ceiling:
             reasons.append(f"price {price_native:,.2f} {currency} at/above the {ceiling:,.2f} target")
 
+        # Fundamentals lines — the thresholds lifted out of the text criterion.
+        # A metric with nothing cached is reported as unread, never as passing.
+        from fundmgr.evidence import FUND_FIELD_META, current_metric
+        fundamental_rows = []
+        for f_rule in rule.get("fundamentals") or []:
+            label = FUND_FIELD_META.get(f_rule["metric"], {}).get("label", f_rule["metric"])
+            actual = current_metric(store, ticker, f_rule["metric"])
+            unit = "%" if FUND_FIELD_META.get(f_rule["metric"], {}).get("is_fraction") else ""
+            hit = actual is not None and (
+                actual <= f_rule["value"] if f_rule["op"] == "below"
+                else actual >= f_rule["value"])
+            if hit:
+                reasons.append(
+                    f"{label} {actual:,.1f}{unit} is {f_rule['op']} the "
+                    f"{f_rule['value']:,.1f}{unit} line")
+            fundamental_rows.append({
+                **f_rule, "label": label, "actual": actual, "unit": unit,
+                "hit": hit, "unread": actual is None,
+            })
+
         rows.append({
             "ticker": ticker,
             "hit": bool(reasons),
@@ -317,6 +564,7 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
             "currency": currency,
             "held": pos is not None,
             "rules": rule,
+            "fundamentals": fundamental_rows,
         })
     return rows
 
@@ -340,6 +588,10 @@ def _recovered(row: dict) -> bool:
     if ceiling and row["price_native"] is not None:
         if row["price_native"] >= ceiling * (1 - _KILL_RESET_BUFFER / 100):
             return False
+    # Fundamentals move quarterly, not tick by tick, so no buffer is needed —
+    # but a still-breached metric must keep the watch armed.
+    if any(f["hit"] for f in row.get("fundamentals") or []):
+        return False
     return True
 
 

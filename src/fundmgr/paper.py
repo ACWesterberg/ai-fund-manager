@@ -260,6 +260,46 @@ def _extract_json_block(text: str) -> str | None:
     return None
 
 
+def extract_json_object(text: str) -> str | None:
+    """Pull the first complete JSON *object* out of prose or ``` fences.
+
+    `_extract_json_block` looks for an array first, so on an object containing
+    one — an LLM verdict with `"unchecked": [...]`, an analysis with
+    `"conditions": [...]` — it returns the inner array and the caller sees a
+    list where it wanted a dict. This is brace-matched and string-aware, so
+    braces inside string values don't throw off the depth count.
+    """
+    if not text:
+        return None
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth, in_string, escaped = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def _parse_json_holdings(text: str) -> list[dict] | None:
     block = _extract_json_block(text)
     if not block:
@@ -1450,7 +1490,7 @@ def _parse_verdict(answer: str) -> dict | None:
     try:
         data = json.loads(answer)
     except json.JSONDecodeError:
-        block = _extract_json_block(answer)
+        block = extract_json_object(answer)
         if block:
             try:
                 data = json.loads(block)

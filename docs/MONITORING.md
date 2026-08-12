@@ -51,6 +51,42 @@ fund paper-plan kf-chokepoint-satellite NVDA --clear
 | **Kill rules** (numeric) | max % drop from cost, price floor, price target | prices, every run — no API key needed |
 | **Time horizon** | a date, or N months out | days remaining, every run |
 
+### How your criterion text is read
+
+The software never parses the string itself — it is stored verbatim and handed
+to the model. To make that reading visible, saving a criterion runs **one
+analysis call** and shows how it decomposed, right in the Watch panel:
+
+```
+Recurring growth falls below 8% while EBITA/FCF deteriorates, or
+acquisitions begin generating clearly weaker returns
+▸ read as (A and B) or C
+   [figure] recurring growth falls below 8%   → revenue growth below 8
+            ⚠ total revenue growth, not recurring specifically
+   [figure] EBITA/FCF deteriorates            → ebitda margin below 22
+            ⚠ EBITDA margin stands in for EBITA
+   [manual] acquisitions begin generating clearly weaker returns
+            ⚠ deal-level returns are not disclosed in any feed
+```
+
+Each condition is tagged **figure** (a threshold on a metric we cache),
+**news** (an event that could show up in coverage) or **manual** (needs the
+full report). The ⚠ lines are the analyser stating how the available metric
+differs from what you wrote — a proxy is used, but never silently.
+
+Where it finds a real threshold, the panel offers **"Also check N of these as
+a hard rule"**. One click lifts them into deterministic fundamentals rules
+(`metric` + `below`/`above` + value) checked against the cached figures every
+run — no LLM, no interpretation. The text criterion is left exactly as written,
+so the same line is both judged in context *and* compared against a number.
+
+Set the same thing from the CLI with repeated `--fundamental`-style entries via
+the dashboard, or inspect what is stored with `fund paper-plan <slug> <TICKER>`.
+The analysis needs `OPENAI_API_KEY`; without it the criterion still saves and is
+still judged, only the preview is missing.
+
+A metric with nothing cached is reported as **unread**, never as passing.
+
 ### What the text judge reads
 
 A criterion is only as good as the evidence it's judged against, so the judge

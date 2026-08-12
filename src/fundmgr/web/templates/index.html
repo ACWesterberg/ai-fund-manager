@@ -130,6 +130,17 @@
                 {% if r.price_above %}
                 <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">target {{ "{:g}".format(r.price_above) }} {{ r.rule_currency }}</span>
                 {% endif %}
+                {% for f in r.fundamental_rules %}
+                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">
+                  {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}</span>
+                {% endfor %}
+              </div>
+            {% elif r.fundamental_rules %}
+              <div class="flex flex-wrap gap-1">
+                {% for f in r.fundamental_rules %}
+                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">
+                  {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}</span>
+                {% endfor %}
               </div>
             {% else %}<span class="text-slate-600">—</span>{% endif %}
           </td>
@@ -147,8 +158,44 @@
             {% else %}<span class="text-slate-600">—</span>{% endif %}
           </td>
           <td class="text-slate-400">{{ r.next_earnings or '—' }}</td>
-          <td class="text-slate-500" style="max-width:300px">
+          <td class="text-slate-500" style="max-width:340px">
             {{ r.watch or r.kill or '—' }}
+
+            {% if r.conditions %}
+            <details class="mt-1">
+              <summary class="text-slate-600 hover:text-slate-400" style="cursor:pointer;font-size:10px;list-style:none">
+                ▸ read as {{ r.logic or (r.conditions|length ~ ' condition(s)') }}
+              </summary>
+              <ul class="mt-1 space-y-1">
+                {% for c in r.conditions %}
+                <li style="font-size:10px" class="text-slate-500">
+                  {% if c.checkable == 'fundamentals' %}
+                    <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">figure</span>
+                  {% elif c.checkable == 'news' %}
+                    <span class="badge" style="background:rgba(56,189,248,.1);color:#38bdf8">news</span>
+                  {% else %}
+                    <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24">manual</span>
+                  {% endif %}
+                  {{ c.text }}
+                  {% if c.metric %}
+                    <span class="text-slate-600">→ {{ c.metric.replace('_', ' ') }} {{ c.op }} {{ "{:g}".format(c.value) }}</span>
+                  {% endif %}
+                  {% if c.note %}<div class="text-slate-600 pl-1">⚠ {{ c.note }}</div>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              {% if r.pending_rules and watchplan_action %}
+              <form method="post" action="{{ watchplan_action }}/apply-rules" class="mt-1.5">
+                <input type="hidden" name="ticker" value="{{ r.ticker }}" />
+                <button type="submit" class="px-2 py-1 rounded border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                        style="font-size:10px">
+                  Also check {{ r.pending_rules|length }} of these as a hard rule
+                </button>
+              </form>
+              {% endif %}
+            </details>
+            {% endif %}
+
             {% if r.kill_unverifiable %}
               <div class="mt-1">
                 <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24"

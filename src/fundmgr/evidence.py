@@ -72,6 +72,29 @@ _FUND_FIELDS: list[tuple[str, str, bool]] = [
 # A move smaller than this is noise, not a trend, and is rendered as "flat".
 _TREND_EPSILON = 0.005
 
+# Public view of the field table: {key: {label, is_fraction}}. The criterion
+# analyser offers exactly these to the model, so a rule it proposes can only
+# name a metric this codebase can actually read.
+FUND_FIELD_META: dict[str, dict] = {
+    key: {"label": label, "is_fraction": is_fraction}
+    for key, label, is_fraction in _FUND_FIELDS
+}
+
+
+def current_metric(store: Store, ticker: str, metric: str) -> float | None:
+    """Current value of one fundamentals metric, in the unit a rule compares in.
+
+    Fractions from the provider (0.071) are returned as percent (7.1) so a rule
+    written as "below 8" means 8%, the way it reads on the screen.
+    """
+    meta = FUND_FIELD_META.get(metric)
+    if meta is None:
+        return None
+    value = _num((store.get_fundamentals(ticker) or {}).get(metric))
+    if value is None:
+        return None
+    return value * 100 if meta["is_fraction"] else value
+
 
 # ── News ──────────────────────────────────────────────────────────────────────
 

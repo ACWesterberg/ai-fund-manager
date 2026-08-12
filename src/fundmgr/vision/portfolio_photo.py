@@ -54,7 +54,12 @@ Return ONLY a JSON object of this exact shape:
       "name": "company name as shown",
       "ticker": "broker ticker as shown, or null",
       "isin": "12-character ISIN if visible, else null",
-      "shares": number of shares (float, null if not shown),
+      "shares": the SHARE COUNT for this row — the "Antal" / "Antal aktier" /
+                "Quantity" column. This is a COUNT of shares, almost always a
+                whole number, and it is NEVER a monetary amount. If the screen
+                does not show a share count, return null. Do NOT substitute the
+                position's value, cost or weight: a null here is correct and
+                recoverable, a value here silently corrupts the whole import.
       "avg_cost_native": average purchase price per share in the row's own
                          currency (GAV / Genomsnittligt anskaffningsvärde /
                          Inköpskurs / Avg price), else null,
@@ -77,6 +82,9 @@ Return ONLY a JSON object of this exact shape:
 
 Rules:
 - One object per holding row. Do not invent rows, and do not merge rows.
+- `shares` and `market_value_sek` must never be the same number. If you are
+  tempted to put a position's value in `shares`, the share count is not visible
+  — return null for it.
 - Copy numbers exactly as displayed. Nordic screens use space or dot as the
   thousands separator and comma as the decimal separator: "1 234,50" is 1234.50,
   "12.500" is 12500. Strip currency symbols and % signs.
@@ -285,10 +293,13 @@ def extract_holdings(
     if resolve:
         holdings = _resolve_tickers(holdings)
 
+    total_value = to_float(data.get("total_value_sek"))
+    warnings += _sanity_check(holdings, total_value)
+
     return {
         "holdings": holdings,
         "cash_sek": to_float(data.get("cash_sek")),
-        "total_value_sek": to_float(data.get("total_value_sek")),
+        "total_value_sek": total_value,
         "account_name": (data.get("account_name") or "").strip() or None,
         "notes": (data.get("notes") or "").strip(),
         "warnings": warnings,
@@ -407,6 +418,20 @@ def _normalise_rows(rows: list) -> tuple[list[dict], list[str]]:
         cost_sek = to_float(row.get("cost_value_sek"))
         currency = (str(row.get("currency") or "").strip().upper() or None)
 
+        # A share count equal to the row's own money column means the value
+        # column was read as the count. Left alone this is catastrophic and
+        # silent: cost derives as value/shares = 1.00, and the dashboard then
+        # multiplies a currency amount by a real share price. Drop the count
+        # rather than carry a number we know is a different quantity.
+        for money, label in ((value_sek, "market value"), (cost_sek, "purchase value")):
+            if shares and money and abs(shares - money) < max(0.01, abs(money) * 1e-6):
+                warnings.append(
+                    f"{name or raw_ticker}: the share count matched this row's "
+                    f"{label} exactly — read as a value, not a count. Cleared; "
+                    "enter the share count yourself.")
+                shares = None
+                break
+
         # Cost basis in SEK, most trustworthy source first: the broker's own
         # SEK purchase value ÷ shares beats the native GAV, which would need an
         # FX rate we don't have for the trade date. Same reasoning as the
@@ -451,6 +476,89 @@ def _normalise_rows(rows: list) -> tuple[list[dict], list[str]]:
     return out, warnings
 
 
+def _sanity_check(holdings: list[dict], total_value_sek: float | None) -> list[str]:
+    """Whole-portfolio checks for the failure modes a per-row look won't catch.
+
+    A column misread the same way on every row leaves each row individually
+    plausible, so the only place it shows up is in the totals.
+    """
+    out: list[str] = []
+    costed = [h for h in holdings if h["shares"] and h["avg_cost_sek"]]
+    if not costed:
+        return out
+
+    # A cost basis of exactly 1.00 is not a price, it is value/value.
+    unit_cost = [h for h in costed if abs(h["avg_cost_sek"] - 1.0) < 1e-9]
+    if len(unit_cost) == len(costed) and len(costed) > 1:
+        out.append(
+            "Every row came out at a cost basis of exactly 1.00 — the share-count "
+            "and value columns were almost certainly confused. Check the share "
+            "counts against the broker before importing.")
+
+    # The implied book should reconcile with the total the screen reported.
+    implied = sum(h["shares"] * h["avg_cost_sek"] for h in costed)
+    if total_value_sek and implied > 0:
+        ratio = implied / total_value_sek
+        if ratio > 1.5 or ratio < 0.5:
+            out.append(
+                f"The rows add up to {implied:,.0f} SEK but the screen's total reads "
+                f"{total_value_sek:,.0f} SEK — off by {ratio:.1f}×. Something was "
+                "read from the wrong column.")
+    return out
+
+
+# Trading-currency → the Yahoo suffixes that currency's home listings use, best
+# first. A holdings screen in one market resolves to that market's listing: a
+# Swedish ISK holding AstraZeneca means AZN.ST, not AZN.L or a Frankfurt line.
+_CURRENCY_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "SEK": (".ST",),
+    "NOK": (".OL",),
+    "DKK": (".CO",),
+    "EUR": (".HE", ".AS", ".DE", ".PA", ".BR", ".LS", ".MI"),
+    "GBP": (".L",),
+    "GBX": (".L",),
+    "CHF": (".SW",),
+    "CAD": (".TO", ".V"),
+}
+
+
+def _search_symbol_preferring(name: str, currency: str | None) -> str | None:
+    """Yahoo symbol search that prefers the row's own market.
+
+    Plain search returns whichever listing Yahoo ranks first, which for Nordic
+    small caps is routinely a thin Frankfurt or London line quoted in another
+    currency — the price then looks real and is wrong. Preferring the suffix
+    implied by the row's currency keeps the instrument the one actually held.
+    """
+    from fundmgr import paper
+
+    cur = (currency or "").upper()
+    preferred = _CURRENCY_SUFFIXES.get(cur, ())
+    # US listings carry no suffix, so USD expresses its preference as "bare".
+    prefer_bare = cur == "USD"
+
+    if preferred or prefer_bare:
+        try:
+            import yfinance as yf
+            quotes = yf.Search(name, max_results=10).quotes or []
+        except Exception:
+            quotes = []
+        candidates = [
+            str(q["symbol"]).upper() for q in quotes
+            if q.get("symbol") and str(q.get("quoteType", "")).upper() in ("EQUITY", "ETF")
+        ]
+        for suffix in preferred:
+            for symbol in candidates:
+                if symbol.endswith(suffix):
+                    return symbol
+        if prefer_bare:
+            for symbol in candidates:
+                if "." not in symbol:
+                    return symbol
+
+    return paper._search_symbol(name)
+
+
 def _resolve_tickers(holdings: list[dict]) -> list[dict]:
     """Resolve each row to a Yahoo symbol: ISIN → broker map → alias → search."""
     from fundmgr import paper
@@ -474,14 +582,16 @@ def _resolve_tickers(holdings: list[dict]) -> list[dict]:
             continue
         unresolved.append(h)
 
-    if unresolved:
-        # Alias map, then Yahoo symbol search — same ladder as pasted picks.
-        resolved = paper.resolve_holdings(
-            [{"name": h["name"], "ticker": None} for h in unresolved])
-        by_name = {r.get("name"): r for r in resolved}
-        for h in unresolved:
-            hit = by_name.get(h["name"]) or {}
-            if hit.get("ticker"):
-                h["ticker"] = hit["ticker"]
-                h["resolved_via"] = hit.get("resolved_via") or "name"
+    for h in unresolved:
+        # Alias map first (it already carries home listings), then a
+        # market-aware search so a Nordic name doesn't land on a Frankfurt line.
+        alias = paper._lookup_alias(paper._clean_name(h["name"]))
+        if alias:
+            h["ticker"] = alias
+            h["resolved_via"] = "name"
+            continue
+        symbol = _search_symbol_preferring(h["name"], h.get("currency"))
+        if symbol:
+            h["ticker"] = symbol
+            h["resolved_via"] = "search"
     return holdings

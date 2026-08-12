@@ -132,8 +132,18 @@
           </tr>
         </thead>
         <tbody id="pi-rows"></tbody>
+        <tfoot>
+          <tr style="border-top:1px solid rgba(148,163,184,.2)">
+            <td colspan="5" class="text-slate-400 font-semibold">Total at cost</td>
+            <td class="num font-semibold" id="pi-total">—</td>
+            <td colspan="3" class="text-slate-500" id="pi-total-note"></td>
+          </tr>
+        </tfoot>
       </table>
     </div>
+
+    <div id="pi-total-warning"
+         class="hidden mt-3 px-4 py-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 text-amber-400 text-xs font-semibold"></div>
 
     <p class="text-[11px] text-slate-600 mt-2">
       Cost basis is what you paid per share in SEK (Inköpsvärde ÷ antal) — check it against the broker;
@@ -237,6 +247,7 @@
   const nameInput  = document.getElementById('pi-name');
   const cashInput  = document.getElementById('pi-cash');
   const countSpan  = document.getElementById('pi-count');
+  let reportedTotal = null;
 
   const INPUT = 'w-full bg-slate-950/60 border border-slate-700/60 rounded px-2 py-1 text-xs ' +
                 'text-slate-200 focus:outline-none focus:border-sky-500/60';
@@ -248,6 +259,8 @@
     errorBox.textContent = msg;
     errorBox.classList.remove('hidden');
   };
+
+  cashInput.addEventListener('input', updateTotal);
 
   filesInput.addEventListener('change', () => {
     const names = [...filesInput.files].map(f => f.name);
@@ -300,6 +313,8 @@
 
     if (payload.account_name && !nameInput.value) nameInput.value = payload.account_name;
     if (payload.cash_sek) cashInput.value = Math.round(payload.cash_sek);
+    reportedTotal = payload.total_value_sek || null;
+    updateTotal();
     review.classList.remove('hidden');
     review.scrollIntoView({behavior: 'smooth', block: 'nearest'});
   }
@@ -330,6 +345,7 @@
     include.addEventListener('change', () => {
       tr.style.opacity = include.checked ? '1' : '0.4';
       updateCount();
+      updateTotal();
     });
     cell(tr, include);
 
@@ -395,6 +411,37 @@
       row.querySelector('.pi-value').textContent =
         (shares && cost) ? fmt(shares * cost) : '—';
     });
+    updateTotal();
+  }
+
+  // One number you can check against the broker. A column read from the wrong
+  // place leaves every row individually plausible and only shows up here.
+  function updateTotal() {
+    let total = 0, missing = 0;
+    rowsBody.querySelectorAll('tr').forEach(row => {
+      if (!row.querySelector('.pi-include').checked) return;
+      const shares = parseFloat(row.querySelector('.pi-shares').value);
+      const cost   = parseFloat(row.querySelector('.pi-cost').value);
+      if (shares && cost) total += shares * cost; else missing++;
+    });
+    document.getElementById('pi-total').textContent = total ? fmt(total) + ' SEK' : '—';
+    document.getElementById('pi-total-note').textContent =
+      missing ? `${missing} row(s) without shares × cost are not counted` : '';
+
+    const warn = document.getElementById('pi-total-warning');
+    const cash = parseFloat(cashInput.value) || 0;
+    if (reportedTotal && total) {
+      const ratio = (total + cash) / reportedTotal;
+      if (ratio > 1.5 || ratio < 0.5) {
+        warn.textContent = `These rows add up to ${fmt(total + cash)} SEK including cash, ` +
+          `but the screenshot's own total reads ${fmt(reportedTotal)} SEK — ` +
+          `off by ${ratio.toFixed(1)}×. Check the Shares and Avg cost columns ` +
+          `against the broker before importing.`;
+        warn.classList.remove('hidden');
+        return;
+      }
+    }
+    warn.classList.add('hidden');
   }
 
   function updateCount() {

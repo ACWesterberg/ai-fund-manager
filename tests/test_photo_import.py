@@ -513,3 +513,116 @@ def test_watchplan_form_requires_a_ticker(client):
 def test_watchplan_form_404s_on_unknown_sleeve(client):
     r = client.post("/live/nope/watchplan", data={"ticker": "NVDA"})
     assert r.status_code == 404
+
+
+# ── Regression: the value column read as the share count ──────────────────────
+#
+# A real Montrose ISK import produced 13 rows whose "shares" were each the
+# position's SEK market value. Cost derived as value/shares = exactly 1.00, and
+# the dashboard then multiplied a currency amount by a live share price: a
+# 1,004,314 SEK portfolio showed a NAV of 264,869,938 SEK.
+
+def test_share_count_equal_to_market_value_is_rejected():
+    rows, warnings = pp._normalise_rows([{
+        "name": "Evolution", "ticker": "EVO", "shares": 109783,
+        "market_value_sek": 109783, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] is None, "a value masquerading as a count must not survive"
+    assert rows[0]["avg_cost_sek"] is None, "and must not become a 1.00 cost basis"
+    assert any("read as a value, not a count" in w for w in warnings)
+
+
+def test_share_count_equal_to_purchase_value_is_rejected():
+    rows, warnings = pp._normalise_rows([{
+        "name": "Vitec", "ticker": "VIT-B", "shares": 98332,
+        "cost_value_sek": 98332, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] is None
+    assert any("purchase value" in w for w in warnings)
+
+
+def test_a_genuine_row_where_count_and_value_differ_survives():
+    rows, warnings = pp._normalise_rows([{
+        "name": "Volvo B", "ticker": "VOLV-B", "shares": 100,
+        "cost_value_sek": 29150, "currency": "SEK",
+    }])
+    assert rows[0]["shares"] == 100
+    assert rows[0]["avg_cost_sek"] == pytest.approx(291.5)
+    assert warnings == []
+
+
+def test_sanity_check_flags_a_book_of_unit_costs():
+    holdings = [{"shares": 1000.0, "avg_cost_sek": 1.0},
+                {"shares": 2000.0, "avg_cost_sek": 1.0}]
+    out = pp._sanity_check(holdings, None)
+    assert any("exactly 1.00" in w for w in out)
+
+
+def test_sanity_check_accepts_real_costs():
+    holdings = [{"shares": 100.0, "avg_cost_sek": 291.5},
+                {"shares": 50.0, "avg_cost_sek": 200.0}]
+    assert pp._sanity_check(holdings, 39_150) == []
+
+
+def test_sanity_check_flags_a_total_that_does_not_reconcile():
+    """The 264× discrepancy the real import produced, caught before import."""
+    holdings = [{"shares": 109783.0, "avg_cost_sek": 737.80}]
+    out = pp._sanity_check(holdings, 1_004_314)
+    assert any("read from the wrong column" in w for w in out)
+
+
+def test_sanity_check_needs_a_reported_total_to_reconcile():
+    holdings = [{"shares": 100.0, "avg_cost_sek": 291.5}]
+    assert pp._sanity_check(holdings, None) == []
+
+
+def test_sanity_check_ignores_rows_without_both_numbers():
+    assert pp._sanity_check([{"shares": None, "avg_cost_sek": None}], 1000) == []
+
+
+# ── Regression: Nordic names resolving to a foreign listing ────────────────────
+#
+# The same import resolved Swedish small caps to Frankfurt lines (52SA.F, 4HY.F,
+# X5T.F, 51R.F) and AstraZeneca to London (AZN.L). Those quote in the wrong
+# currency, so the price looks real and the position is wrong.
+
+def _mock_search(monkeypatch, symbols):
+    class _Search:
+        def __init__(self, query, max_results=10):
+            self.quotes = [{"symbol": s, "quoteType": "EQUITY"} for s in symbols]
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Search", _Search)
+
+
+def test_sek_row_prefers_the_stockholm_listing(monkeypatch):
+    _mock_search(monkeypatch, ["4HY.F", "4HY.DE", "VSSAB-B.ST"])
+    assert pp._search_symbol_preferring("Vestum", "SEK") == "VSSAB-B.ST"
+
+
+def test_gbp_row_prefers_london(monkeypatch):
+    _mock_search(monkeypatch, ["AZN.F", "AZN.L", "AZN"])
+    assert pp._search_symbol_preferring("AstraZeneca", "GBP") == "AZN.L"
+
+
+def test_usd_row_prefers_the_bare_us_symbol(monkeypatch):
+    _mock_search(monkeypatch, ["NVD.DE", "NVDA"])
+    assert pp._search_symbol_preferring("Nvidia", "USD") == "NVDA"
+
+
+def test_falls_back_to_plain_search_when_no_home_listing(monkeypatch):
+    _mock_search(monkeypatch, ["FOO.F"])
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: "FALLBACK")
+    assert pp._search_symbol_preferring("Obscure Co", "SEK") == "FALLBACK"
+
+
+def test_unknown_currency_falls_straight_through(monkeypatch):
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: "PLAIN")
+    assert pp._search_symbol_preferring("Whatever", "XYZ") == "PLAIN"
+
+
+def test_resolution_uses_the_market_aware_search(monkeypatch):
+    monkeypatch.setattr(pp, "_search_symbol_preferring",
+                        lambda name, currency: "VSSAB-B.ST" if currency == "SEK" else None)
+    holdings = [{"name": "Vestum", "raw_ticker": "", "isin": "", "ticker": None,
+                 "currency": "SEK", "resolved_via": None}]
+    assert pp._resolve_tickers(holdings)[0]["ticker"] == "VSSAB-B.ST"

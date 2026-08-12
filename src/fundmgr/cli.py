@@ -1438,6 +1438,56 @@ def paper_kill_check(slug: str | None):
             click.echo(f"  {line}")
 
 
+@cli.command("fundamentals-check")
+@click.argument("ticker")
+def fundamentals_check(ticker: str):
+    """Show which fundamentals fields the data layer really returns for TICKER.
+
+    Every metric the kill-criterion analyser can offer needs data behind it: a
+    key that is always None shows up as a watched line on the dashboard but can
+    never evaluate. yfinance `.info` is a passthrough of Yahoo's payload, so a
+    mis-mapped key name fails silently — run this after changing financedata's
+    _FIELD_MAP to confirm the new keys actually arrive.
+    """
+    tkr = ticker.upper()
+    try:
+        from financedata import get_fundamentals
+    except ImportError as e:
+        raise click.ClickException(f"financedata is not installed: {e}")
+    from fundmgr.evidence import FUND_FIELD_META
+
+    data = (get_fundamentals([tkr], ttl_days=0) or {}).get(tkr)
+    if not data:
+        raise click.ClickException(
+            f"No fundamentals returned for {tkr} — bad ticker, or the fetch failed.")
+
+    offered = set(FUND_FIELD_META)
+    populated = {k: v for k, v in sorted(data.items()) if v is not None}
+    empty = sorted(k for k, v in data.items() if v is None)
+
+    click.echo(f"\n─── {tkr}: {len(populated)}/{len(data)} fields populated ───")
+    for key, value in populated.items():
+        click.echo(f"  {'★' if key in offered else ' '} {key:<22} {value}")
+    if empty:
+        click.echo(f"\n  Returned but empty for this ticker:\n    {', '.join(empty)}")
+
+    missing = sorted(offered - set(data))
+    if missing:
+        click.echo(f"\n  ⚠ offered as kill-criterion metrics but NOT in the payload "
+                   f"at all:\n    {', '.join(missing)}")
+        click.echo("    → these can never evaluate; fix the mapping or drop them.")
+    else:
+        click.echo("\n  ✓ every offered kill-criterion metric is present in the payload.")
+
+    # The other direction: a field the data layer now returns that no criterion
+    # can yet be checked against — the cue to add it to evidence._FUND_FIELDS.
+    spare = sorted(k for k in populated if k not in offered
+                   and isinstance(populated[k], (int, float)))
+    if spare:
+        click.echo(f"\n  Available but not offered as a metric:\n    {', '.join(spare)}")
+    click.echo("\n  ★ = offered to the criterion analyser as a checkable metric\n")
+
+
 @cli.command("paper-watch")
 @click.option("--slug", default=None, help="Check a single portfolio instead of all.")
 def paper_watch(slug: str | None):

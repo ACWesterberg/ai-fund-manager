@@ -579,3 +579,53 @@ def test_fraction_flags_match_the_providers_units():
     fractions = {k for k, m in evidence.FUND_FIELD_META.items() if m["is_fraction"]}
     assert fractions == {"profit_margin", "gross_margin", "roe", "revenue_growth",
                          "earnings_growth", "dividend_yield"}
+
+
+# ── fundamentals-check CLI ────────────────────────────────────────────────────
+
+def _run_check(monkeypatch, payload):
+    from click.testing import CliRunner
+    import financedata
+    monkeypatch.setattr(financedata, "get_fundamentals",
+                        lambda tickers, **kw: {tickers[0]: payload})
+    from fundmgr.cli import cli
+    return CliRunner().invoke(cli, ["fundamentals-check", "volv-b.st"])
+
+
+def test_fundamentals_check_flags_a_metric_with_no_data(monkeypatch):
+    """The guard against a silently mis-mapped yfinance key."""
+    payload = {k: 0.1 for k in evidence.FUND_FIELD_META}
+    del payload["profit_margin"]                # simulate a mis-mapped key name
+    result = _run_check(monkeypatch, payload)
+    assert result.exit_code == 0
+    assert "NOT in the payload" in result.output
+    assert "profit_margin" in result.output
+    assert "can never evaluate" in result.output
+
+
+def test_fundamentals_check_reports_a_clean_payload(monkeypatch):
+    payload = {k: 0.1 for k in evidence.FUND_FIELD_META}
+    payload["sector"] = "Industrials"
+    payload["beta"] = None
+    result = _run_check(monkeypatch, payload)
+    assert result.exit_code == 0
+    assert "every offered kill-criterion metric is present" in result.output
+    assert "Returned but empty for this ticker" in result.output
+    assert "beta" in result.output
+
+
+def test_fundamentals_check_errors_on_no_data(monkeypatch):
+    result = _run_check(monkeypatch, None)
+    assert result.exit_code != 0
+    assert "No fundamentals returned" in result.output
+
+
+def test_fundamentals_check_surfaces_newly_available_fields(monkeypatch):
+    """A field the data layer returns but no criterion can use yet."""
+    payload = {k: 0.1 for k in evidence.FUND_FIELD_META}
+    payload.update({"ebitda_margin": 0.221, "free_cash_flow": 3.88e8,
+                    "sector": "Technology"})
+    result = _run_check(monkeypatch, payload)
+    assert "Available but not offered as a metric" in result.output
+    assert "ebitda_margin" in result.output and "free_cash_flow" in result.output
+    assert "sector" not in result.output.split("Available but not offered")[1]

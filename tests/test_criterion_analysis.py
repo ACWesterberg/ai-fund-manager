@@ -245,7 +245,91 @@ def test_malformed_fundamentals_rules_are_dropped(store):
         {"metric": "revenue_growth", "op": "below", "value": 9},   # duplicate key
     ])
     rules = watchplan.get_kill_rules(store)["VIT-B.ST"]["fundamentals"]
-    assert rules == [{"metric": "revenue_growth", "op": "below", "value": 8.0, "note": ""}]
+    assert rules == [{"metric": "revenue_growth", "op": "below", "value": 8.0,
+                      "quarters": 1, "note": ""}]
+
+
+# ── quarters: a duration in the criterion is a duration in the rule ───────────
+
+def _quarter(store, period, **values):
+    from fundmgr import evidence
+    store.save_fundamentals("VIT-B.ST", {"fiscal_period_end": period, **values})
+    evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today=period)
+
+
+def test_one_bad_quarter_does_not_fire_a_two_quarter_rule(store, sek_only):
+    """The false positive this exists to remove: a single weak print firing a
+    line the investor wrote as 'two quarters running'."""
+    _hold(store)
+    _quarter(store, "2026-03-31", revenue_growth=0.12)
+    _quarter(store, "2026-06-30", revenue_growth=0.071)
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8, "quarters": 2}])
+
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["hit"] is False
+    f = row["fundamentals"][0]
+    assert f["pending"] is True        # breaching now, one quarter short
+    assert f["streak"] == 1 and f["quarters"] == 2
+
+
+def test_a_second_bad_quarter_fires_it(store, sek_only):
+    _hold(store)
+    _quarter(store, "2026-03-31", revenue_growth=0.075)
+    _quarter(store, "2026-06-30", revenue_growth=0.071)
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8, "quarters": 2}])
+
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["hit"] is True
+    assert "for 2 straight quarters" in row["reasons"][0]
+    assert row["fundamentals"][0]["pending"] is False
+
+
+def test_a_multi_quarter_rule_on_thin_history_is_not_a_pass(store, sek_only):
+    _hold(store)
+    _quarter(store, "2026-06-30", revenue_growth=0.01)
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8, "quarters": 2}])
+
+    f = watchplan.evaluate_kill_rules(store)[0]["fundamentals"][0]
+    assert f["hit"] is False
+    assert f["thin_history"] is True and f["periods_seen"] == 1
+
+
+def test_quarters_defaults_to_one_and_is_bounded(store):
+    watchplan.set_position_plan(store, "VIT-B.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8},
+        {"metric": "profit_margin", "op": "below", "value": 5, "quarters": 999},
+        {"metric": "roe", "op": "below", "value": 5, "quarters": 0},
+    ])
+    rules = {r["metric"]: r["quarters"]
+             for r in watchplan.get_kill_rules(store)["VIT-B.ST"]["fundamentals"]}
+    assert rules == {"revenue_growth": 1, "profit_margin": watchplan._MAX_QUARTERS,
+                     "roe": 1}
+
+
+def test_the_analyser_carries_a_duration_into_the_rule(store):
+    """A criterion that says 'two quarters running' must not become a rule that
+    fires on one."""
+    analysis = watchplan._parse_analysis(json.dumps({
+        "logic": "A",
+        "conditions": [{"id": "A", "text": "growth below 8% two quarters running",
+                        "checkable": "fundamentals", "metric": "revenue_growth",
+                        "op": "below", "value": 8, "quarters": 2, "note": ""}],
+    }), "growth below 8% two quarters running")
+    assert analysis["conditions"][0]["quarters"] == 2
+    assert watchplan.suggested_rules(analysis)[0]["quarters"] == 2
+
+
+def test_a_criterion_with_no_duration_stays_single_quarter(store):
+    analysis = watchplan._parse_analysis(json.dumps({
+        "logic": "A",
+        "conditions": [{"id": "A", "text": "growth below 8%",
+                        "checkable": "fundamentals", "metric": "revenue_growth",
+                        "op": "below", "value": 8, "note": ""}],
+    }), "growth below 8%")
+    assert analysis["conditions"][0]["quarters"] == 1
 
 
 def test_fundamentals_breach_keeps_the_watch_armed(store, sek_only, monkeypatch):

@@ -47,6 +47,11 @@ HORIZON_STAGES = (30, 14, 7, 1, 0)
 # the line from alerting every single day.
 _KILL_RESET_BUFFER = 2.0
 
+# Upper bound on a rule's `quarters`. Beyond a couple of years the snapshot
+# series has been trimmed anyway, so a larger number would be a rule that can
+# never fire rather than a stricter one.
+_MAX_QUARTERS = 8
+
 
 # ── Reading / writing the plan ────────────────────────────────────────────────
 
@@ -313,7 +318,11 @@ def set_position_plan(
 
 
 def _clean_fundamental_rules(rules: list[dict]) -> list[dict]:
-    """Keep only well-formed {metric, op, value} entries naming a known metric."""
+    """Keep only well-formed {metric, op, value, quarters} entries.
+
+    `quarters` is how many consecutive *reported periods* must breach before the
+    rule fires — 1 (the default) is the old behaviour, a single reading.
+    """
     from fundmgr.evidence import FUND_FIELD_META
 
     out, seen = [], set()
@@ -329,7 +338,9 @@ def _clean_fundamental_rules(rules: list[dict]) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
+        quarters = _num(entry.get("quarters"))
         out.append({"metric": metric, "op": op, "value": value,
+                    "quarters": max(1, min(_MAX_QUARTERS, int(quarters or 1))),
                     "note": str(entry.get("note") or "").strip()})
     return out
 
@@ -405,6 +416,11 @@ Rules:
   prefer a sign test ("free cash flow below 0") over an absolute amount unless
   the criterion names one.
 - `op` is "below" or "above".
+- `quarters` is how many consecutive reported quarters the condition must hold
+  before it counts. Read it from the wording: "two quarters running", "for two
+  consecutive quarters", "sustained over a year" (4). Default to 1 when the
+  criterion names no duration — do not invent one. A duration written in the
+  criterion and dropped here turns a patient rule into a hair trigger.
 - Do not soften a "manual" condition into "news" to look useful. An honest
   "manual" is the point of this exercise.
 
@@ -416,6 +432,7 @@ Reply with a JSON object only:
     "metric": "<key from the list, or null>",
     "op": "below"|"above"|null,
     "value": <number or null>,
+    "quarters": <integer, 1 unless the criterion says otherwise>,
     "note": "<how the check differs from what was written, or ''>"}
  ]}\
 """
@@ -502,6 +519,7 @@ def _parse_analysis(raw: str, criterion: str) -> dict | None:
             checkable = "news" if metric else "manual"
             metric, op, value = None, None, None
 
+        quarters = _num(cond.get("quarters"))
         conditions.append({
             "id": str(cond.get("id") or chr(65 + i))[:2],
             "text": text,
@@ -509,6 +527,8 @@ def _parse_analysis(raw: str, criterion: str) -> dict | None:
             "metric": metric if checkable == "fundamentals" else None,
             "op": op if checkable == "fundamentals" else None,
             "value": value if checkable == "fundamentals" else None,
+            "quarters": (max(1, min(_MAX_QUARTERS, int(quarters or 1)))
+                         if checkable == "fundamentals" else None),
             "note": str(cond.get("note") or "").strip(),
         })
 
@@ -557,6 +577,7 @@ def suggested_rules(analysis: dict | None) -> list[dict]:
             "label": FUND_FIELD_META[cond["metric"]]["label"],
             "op": cond["op"],
             "value": cond["value"],
+            "quarters": int(cond.get("quarters") or 1),
             "note": cond["note"],
         })
     return out
@@ -637,22 +658,43 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
 
         # Fundamentals lines — the thresholds lifted out of the text criterion.
         # A metric with nothing cached is reported as unread, never as passing.
-        from fundmgr.evidence import FUND_FIELD_META, current_metric
+        from fundmgr.evidence import FUND_FIELD_META, current_metric, sustained_breach
         fundamental_rows = []
         for f_rule in rule.get("fundamentals") or []:
             label = FUND_FIELD_META.get(f_rule["metric"], {}).get("label", f_rule["metric"])
             actual = current_metric(store, ticker, f_rule["metric"])
             unit = "%" if FUND_FIELD_META.get(f_rule["metric"], {}).get("is_fraction") else ""
-            hit = actual is not None and (
+            quarters = int(f_rule.get("quarters") or 1)
+            breached_now = actual is not None and (
                 actual <= f_rule["value"] if f_rule["op"] == "below"
                 else actual >= f_rule["value"])
+
+            # A single-quarter rule is the current reading, as before. A rule
+            # asking for more has to be answered from the reported periods on
+            # file, not from how many days we happen to have been watching.
+            streak = periods_seen = None
+            if quarters > 1:
+                run = sustained_breach(store, ticker, f_rule["metric"],
+                                       f_rule["op"], f_rule["value"], quarters)
+                hit = run["hit"]
+                streak, periods_seen = run["streak"], run["periods_seen"]
+            else:
+                hit = breached_now
+
             if hit:
+                span = f" for {quarters} straight quarters" if quarters > 1 else ""
                 reasons.append(
                     f"{label} {actual:,.1f}{unit} is {f_rule['op']} the "
-                    f"{f_rule['value']:,.1f}{unit} line")
+                    f"{f_rule['value']:,.1f}{unit} line{span}")
             fundamental_rows.append({
                 **f_rule, "label": label, "actual": actual, "unit": unit,
                 "hit": hit, "unread": actual is None,
+                "quarters": quarters, "streak": streak, "periods_seen": periods_seen,
+                # Breaching today but short of the required run — the state the
+                # old code had no way to express, and reported as a hit.
+                "pending": bool(quarters > 1 and breached_now and not hit),
+                "thin_history": bool(quarters > 1 and periods_seen is not None
+                                     and periods_seen < quarters),
             })
 
         rows.append({

@@ -256,6 +256,12 @@ def snapshot_fundamentals(store: Store, tickers: list[str],
     Only writes when a value actually changed since the last snapshot, so a
     weekly-refreshed cache read daily doesn't fill the series with duplicates.
     Returns the number of tickers whose series grew.
+
+    Each row carries the **fiscal period** it belongs to where the statements
+    reported one. Rows sharing a period collapse onto the newest reading rather
+    than accumulating, which is what makes the series countable in quarters: a
+    restated figure replaces its period's row instead of looking like a second
+    quarter of the same result.
     """
     import json
 
@@ -269,6 +275,7 @@ def snapshot_fundamentals(store: Store, tickers: list[str],
         current = {k: v for k, v in current.items() if v is not None}
         if not current:
             continue
+        period = data.get("fiscal_period_end") or ""
 
         try:
             series = json.loads(store.get_meta(f"{SNAPSHOT_KEY}:{ticker}") or "[]")
@@ -277,12 +284,87 @@ def snapshot_fundamentals(store: Store, tickers: list[str],
         if not isinstance(series, list):
             series = []
 
-        if series and series[-1].get("values") == current:
+        last = series[-1] if series else None
+        if last and last.get("values") == current and last.get("period", "") == period:
             continue  # unchanged since the last snapshot — nothing new to record
-        series.append({"date": today, "values": current})
+
+        row = {"date": today, "period": period, "values": current}
+        if last and period and last.get("period", "") == period:
+            series[-1] = row          # same reporting period — a revision, not a quarter
+        else:
+            series.append(row)
         store.set_meta(f"{SNAPSHOT_KEY}:{ticker}", json.dumps(series[-MAX_SNAPSHOTS:]))
         written += 1
     return written
+
+
+def metric_history(store: Store, ticker: str, metric: str) -> list[dict]:
+    """[{period, date, value}] for one metric, newest first, one row per period.
+
+    Values come back in the unit a rule compares in — fractions scaled to
+    percent, exactly as `current_metric` does — so a threshold written "below 8"
+    means the same thing against history as against today's reading.
+
+    Only rows whose fiscal period is known are returned. A series recorded
+    before periods were tracked, or for a ticker whose statements carry no
+    period, yields nothing — which callers must treat as *unknown*, never as a
+    quarter that passed.
+    """
+    import json
+
+    meta = FUND_FIELD_META.get(metric)
+    if meta is None:
+        return []
+    try:
+        series = json.loads(store.get_meta(f"{SNAPSHOT_KEY}:{ticker}") or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(series, list):
+        return []
+
+    by_period: dict[str, dict] = {}
+    for row in series:
+        if not isinstance(row, dict):
+            continue
+        period = str(row.get("period") or "")
+        value = _num((row.get("values") or {}).get(metric))
+        if not period or value is None:
+            continue
+        by_period[period] = {"period": period, "date": row.get("date", ""),
+                             "value": value * 100 if meta["is_fraction"] else value}
+    return [by_period[p] for p in sorted(by_period, reverse=True)]
+
+
+def sustained_breach(store: Store, ticker: str, metric: str, op: str,
+                     value: float, quarters: int = 1) -> dict:
+    """Has `metric` been past its line for the last `quarters` reported periods?
+
+    Returns {hit, streak, periods_seen, quarters, latest}. A criterion written
+    "for two consecutive quarters" is a statement about the company's results,
+    not about how long we have been watching, so:
+
+      • fewer reported periods on file than the rule asks for → **not hit**,
+        with periods_seen < quarters saying why. Never a pass on thin history.
+      • the streak is counted from the newest period backwards and stops at the
+        first period that cleared, so one good quarter resets it.
+    """
+    quarters = max(1, int(quarters or 1))
+    history = metric_history(store, ticker, metric)
+    breached = (lambda v: v <= value) if op == "below" else (lambda v: v >= value)
+
+    streak = 0
+    for row in history:
+        if not breached(row["value"]):
+            break
+        streak += 1
+
+    return {
+        "hit": streak >= quarters,
+        "streak": streak,
+        "periods_seen": len(history),
+        "quarters": quarters,
+        "latest": history[0] if history else None,
+    }
 
 
 def _fmt(value: float, is_fraction: bool) -> str:

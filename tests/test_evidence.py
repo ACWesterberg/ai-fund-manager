@@ -191,6 +191,82 @@ def test_snapshot_series_is_capped(store):
     assert len(series) == evidence.MAX_SNAPSHOTS
 
 
+# ── Fiscal-period bucketing ───────────────────────────────────────────────────
+
+def _quarter(store, ticker, period, **values):
+    """Record one reported quarter for a ticker."""
+    store.save_fundamentals(ticker, {"fiscal_period_end": period, **values})
+    evidence.snapshot_fundamentals(store, [ticker], today=period)
+
+
+def test_a_revised_figure_replaces_its_quarter_rather_than_adding_one(store):
+    """Otherwise a restatement looks like a second quarter of the same result —
+    and a 'two consecutive quarters' rule fires on one quarter read twice."""
+    _quarter(store, "VIT-B.ST", "2026-03-31", revenue_growth=0.07)
+    store.save_fundamentals("VIT-B.ST", {"fiscal_period_end": "2026-03-31",
+                                         "revenue_growth": 0.065})   # restated
+    evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-05-20")
+
+    series = json.loads(store.get_meta("paper_fundsnap:VIT-B.ST"))
+    assert len(series) == 1
+    assert series[0]["period"] == "2026-03-31"
+    assert series[0]["values"]["revenue_growth"] == 0.065
+    assert series[0]["date"] == "2026-05-20"      # when we read it
+
+
+def test_metric_history_is_one_row_per_period_newest_first(store):
+    _quarter(store, "VIT-B.ST", "2025-12-31", revenue_growth=0.11)
+    _quarter(store, "VIT-B.ST", "2026-03-31", revenue_growth=0.07)
+    _quarter(store, "VIT-B.ST", "2026-06-30", revenue_growth=0.05)
+
+    history = evidence.metric_history(store, "VIT-B.ST", "revenue_growth")
+    assert [r["period"] for r in history] == ["2026-06-30", "2026-03-31", "2025-12-31"]
+    # Percent, the unit a rule is written in — not the provider's 0-1 fraction.
+    assert [round(r["value"], 1) for r in history] == [5.0, 7.0, 11.0]
+
+
+def test_readings_without_a_period_are_not_counted_as_quarters(store):
+    """A series recorded before periods were tracked is unknown, not passing."""
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.02})
+    evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-01")
+    assert evidence.metric_history(store, "VIT-B.ST", "revenue_growth") == []
+
+    run = evidence.sustained_breach(store, "VIT-B.ST", "revenue_growth", "below", 8, 2)
+    assert run["hit"] is False and run["periods_seen"] == 0
+
+
+def test_sustained_breach_counts_the_run_from_the_newest_period(store):
+    _quarter(store, "X", "2025-12-31", revenue_growth=0.11)
+    _quarter(store, "X", "2026-03-31", revenue_growth=0.07)
+    _quarter(store, "X", "2026-06-30", revenue_growth=0.05)
+
+    two = evidence.sustained_breach(store, "X", "revenue_growth", "below", 8, 2)
+    assert two["hit"] is True and two["streak"] == 2
+
+    three = evidence.sustained_breach(store, "X", "revenue_growth", "below", 8, 3)
+    assert three["hit"] is False          # 2025-12-31 was above the line
+    assert three["streak"] == 2 and three["periods_seen"] == 3
+
+
+def test_one_good_quarter_resets_the_run(store):
+    _quarter(store, "X", "2025-09-30", revenue_growth=0.04)
+    _quarter(store, "X", "2025-12-31", revenue_growth=0.03)
+    _quarter(store, "X", "2026-03-31", revenue_growth=0.12)   # recovered
+    _quarter(store, "X", "2026-06-30", revenue_growth=0.05)   # falls again
+
+    run = evidence.sustained_breach(store, "X", "revenue_growth", "below", 8, 2)
+    assert run["hit"] is False and run["streak"] == 1
+
+
+def test_thin_history_never_passes_a_multi_quarter_rule(store):
+    """One quarter on file cannot satisfy 'two consecutive quarters', however
+    badly that quarter reads."""
+    _quarter(store, "X", "2026-06-30", revenue_growth=0.01)
+    run = evidence.sustained_breach(store, "X", "revenue_growth", "below", 8, 2)
+    assert run["hit"] is False
+    assert run["streak"] == 1 and run["periods_seen"] == 1
+
+
 def test_trend_reports_direction_against_oldest_snapshot(store):
     store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.12, "profit_margin": 0.20})
     evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-01")

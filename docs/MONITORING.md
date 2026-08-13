@@ -153,9 +153,40 @@ so a mis-mapped key name fails silently rather than raising.
 
 Where it finds a real threshold, the panel offers **"Also check N of these as
 a hard rule"**. One click lifts them into deterministic fundamentals rules
-(`metric` + `below`/`above` + value) checked against the cached figures every
-run — no LLM, no interpretation. The text criterion is left exactly as written,
-so the same line is both judged in context *and* compared against a number.
+(`metric` + `below`/`above` + value + `quarters`) checked against the cached
+figures every run — no LLM, no interpretation. The text criterion is left
+exactly as written, so the same line is both judged in context *and* compared
+against a number.
+
+#### "for two consecutive quarters" is part of the rule
+
+A criterion written *"growth below 8% two quarters running"* used to become a
+rule that fired on **one** weak print — the duration was read, understood, and
+then dropped. `quarters` carries it through: the analyser reads the duration
+from your wording, and the rule only fires once that many consecutive **reported
+periods** have breached. The badge shows it (`revenue growth below 8 ×2q`), and
+one good quarter resets the run.
+
+This is why snapshots are keyed by fiscal period rather than by the day we read
+them. A cache read daily produces ~90 identical rows per quarter, and no amount
+of counting those tells you how many times the *company* reported. Each snapshot
+now carries the period end from the interim statements, rows sharing a period
+collapse onto the newest reading (a restatement is a revision, not a second
+quarter), and `evidence.metric_history` returns one row per period.
+
+Three things follow, all deliberate:
+
+- **Thin history never passes.** A two-quarter rule with one period on file is
+  `thin_history`, not a pass — same principle as *unread*.
+- **Breaching-but-short is its own state.** `pending` means the line is breached
+  today but the run isn't long enough yet. The old code had no way to say this
+  and reported it as a hit.
+- **A rule arms as history accumulates.** Periods are counted from what this
+  system has observed, so a multi-quarter rule set today needs that many
+  reporting cycles before it can fire, even where the company has already
+  published them. Back-filling past periods from the statement frames would fix
+  this for the capital-structure metrics; the `.info` metrics (growth, margins)
+  would need per-quarter derivation first.
 
 Set the same thing from the CLI with repeated `--fundamental`-style entries via
 the dashboard, or inspect what is stored with `fund paper-plan <slug> <TICKER>`.

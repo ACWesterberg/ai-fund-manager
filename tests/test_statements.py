@@ -100,7 +100,9 @@ def test_nan_values_are_dropped():
 def test_missing_frames_yield_all_none():
     m = statements.derive("X", frames={"balance": None, "income": None,
                                        "cashflow": None, "quarterly_cashflow": None})
-    assert set(m) == set(statements.STATEMENT_METRICS)
+    # fiscal_period_end rides along with the ratios: it is the period they
+    # describe, not a metric of its own.
+    assert set(m) == set(statements.STATEMENT_METRICS) | {"fiscal_period_end"}
     assert all(v is None for v in m.values())
 
 

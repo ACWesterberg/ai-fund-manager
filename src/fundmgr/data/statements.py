@@ -163,6 +163,12 @@ def derive(ticker: str, *, frames: dict | None = None) -> dict[str, float | None
     runway_frame = quarterly_cashflow if quarterly_cashflow is not None else cashflow
 
     return {
+        # Which fiscal period this reading belongs to. Not a metric — the key
+        # that makes "two consecutive quarters" answerable at all. Snapshots are
+        # otherwise stamped with the day we read them, and a cache read daily
+        # gives ~90 identical rows per quarter with no way to tell where one
+        # reporting period ends and the next begins.
+        "fiscal_period_end":  _period_end(frames),
         "equity_to_assets":   _ratio(equity, assets),
         "net_debt_to_assets": _ratio(net_debt, assets),
         "net_debt_to_ebitda": _ratio(net_debt, ebitda),
@@ -172,6 +178,33 @@ def derive(ticker: str, *, frames: dict | None = None) -> dict[str, float | None
         "fcf_to_net_income":  _ratio(fcf, net_income),
         "cash_runway_months": _cash_runway(cash, runway_frame),
     }
+
+
+def _period_end(frames: dict) -> str | None:
+    """ISO date of the newest reported period across the interim statements.
+
+    Quarterly frames first — that is the period a "latest quarter" figure
+    actually describes. An annual-only filer falls back to its year end, which
+    is still a real reporting boundary, just a coarser one.
+    """
+    for name in ("quarterly_balance", "quarterly_cashflow", "quarterly_income",
+                 "balance", "income", "cashflow"):
+        frame = frames.get(name)
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        try:
+            columns = list(frame.columns)
+        except Exception:
+            continue
+        if not columns:
+            continue
+        try:
+            # Columns are period-end dates, newest first.
+            newest = max(columns)
+            return newest.date().isoformat() if hasattr(newest, "date") else str(newest)[:10]
+        except Exception:
+            continue
+    return None
 
 
 def _cash_runway(cash: float | None, cashflow) -> float | None:
@@ -217,6 +250,7 @@ def fetch_frames(ticker: str) -> dict:
         "balance": _get("balance_sheet"),
         "quarterly_balance": _get("quarterly_balance_sheet"),
         "income": _get("income_stmt"),
+        "quarterly_income": _get("quarterly_income_stmt"),
         "cashflow": _get("cashflow"),
         "quarterly_cashflow": _get("quarterly_cashflow"),
     }

@@ -134,15 +134,15 @@
                 <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">target {{ "{:g}".format(r.price_above) }} {{ r.rule_currency }}</span>
                 {% endif %}
                 {% for f in r.fundamental_rules %}
-                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">
-                  {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}</span>
+                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8"{% if f.quarters and f.quarters > 1 %} title="Fires only after {{ f.quarters }} consecutive reported quarters past this line"{% endif %}>
+                  {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}{% if f.quarters and f.quarters > 1 %} ×{{ f.quarters }}q{% endif %}</span>
                 {% endfor %}
               </div>
             {% elif r.fundamental_rules %}
               <div class="flex flex-wrap gap-1">
                 {% for f in r.fundamental_rules %}
-                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">
-                  {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}</span>
+                <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8"{% if f.quarters and f.quarters > 1 %} title="Fires only after {{ f.quarters }} consecutive reported quarters past this line"{% endif %}>
+                  {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}{% if f.quarters and f.quarters > 1 %} ×{{ f.quarters }}q{% endif %}</span>
                 {% endfor %}
               </div>
             {% else %}<span class="text-slate-600">—</span>{% endif %}
@@ -181,7 +181,10 @@
                   {% endif %}
                   {{ c.text }}
                   {% if c.metric %}
-                    <span class="text-slate-600">→ {{ c.metric.replace('_', ' ') }} {{ c.op }} {{ "{:g}".format(c.value) }}</span>
+                    {# The duration is part of the reading: "below 8 for 2 quarters"
+                       is a different rule from "below 8", and dropping it here
+                       would hide a hair trigger behind a patient criterion. #}
+                    <span class="text-slate-600">→ {{ c.metric.replace('_', ' ') }} {{ c.op }} {{ "{:g}".format(c.value) }}{% if c.quarters and c.quarters > 1 %} for {{ c.quarters }} straight quarters{% endif %}</span>
                   {% endif %}
                   {% if c.note %}<div class="text-slate-600 pl-1">⚠ {{ c.note }}</div>{% endif %}
                 </li>

@@ -1532,10 +1532,15 @@ def fundamentals_check(ticker: str):
     # Statement metrics get their own section: an absent one almost always means
     # a row label this codebase doesn't accept, which is silent everywhere else.
     if statement_metrics:
-        derived_ok = [k for k, v in statement_metrics.items() if v is not None]
-        derived_missing = [k for k, v in statement_metrics.items() if v is None]
+        # fiscal_period_end rides along in the same payload but is a period
+        # label, not a metric — counting it would inflate the coverage figure.
+        ratios = {k: v for k, v in statement_metrics.items() if k in STATEMENT_METRICS}
+        derived_ok = [k for k, v in ratios.items() if v is not None]
+        derived_missing = [k for k, v in ratios.items() if v is None]
+        period = statement_metrics.get("fiscal_period_end")
         click.echo(f"\n  Derived from the financial statements "
-                   f"({len(derived_ok)}/{len(STATEMENT_METRICS)}):")
+                   f"({len(derived_ok)}/{len(STATEMENT_METRICS)}"
+                   f"{f', period ending {period}' if period else ''}):")
         for key, (label, is_fraction) in STATEMENT_METRICS.items():
             value = statement_metrics.get(key)
             if value is None:
@@ -1646,6 +1651,10 @@ def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
         click.echo(f"  Measured from: {anchor:,.2f} SEK on {rules.get('anchor_date', '')}"
                    if anchor else
                    "  Measured from: cost basis (no price cached when the line was set)")
+    for f in rules.get("fundamentals") or []:
+        span = (f" for {f['quarters']} straight quarters"
+                if int(f.get("quarters") or 1) > 1 else "")
+        click.echo(f"  Fundamental: {f['metric']} {f['op']} {f['value']:g}{span}")
     hz = plan["horizon"]
     if hz.get("review_date"):
         click.echo(f"  Horizon: {hz['review_date']} ({hz.get('label', '')}, "

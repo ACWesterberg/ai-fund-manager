@@ -152,6 +152,44 @@ def test_a_cash_generative_company_has_no_runway():
     assert statements.derive("X", frames=_frames())["cash_runway_months"] is None
 
 
+# ── Back-filling reported periods ─────────────────────────────────────────────
+
+QUARTERLY_SERIES = pd.DataFrame({
+    pd.Timestamp("2026-06-30"): {"Total Assets": 200_000.0, "Stockholders Equity": 74_000.0,
+                                 "Total Debt": 105_000.0, "Cash And Cash Equivalents": 4_200.0},
+    pd.Timestamp("2026-03-31"): {"Total Assets": 190_000.0, "Stockholders Equity": 76_000.0,
+                                 "Total Debt": 100_000.0, "Cash And Cash Equivalents": 5_000.0},
+    pd.Timestamp("2025-12-31"): {"Total Assets": 180_000.0, "Stockholders Equity": 76_500.0,
+                                 "Total Debt": 96_000.0, "Cash And Cash Equivalents": 6_000.0},
+})
+
+
+def test_period_history_covers_every_column_on_the_interim_sheet():
+    history = statements.period_history(
+        "BALD-B.ST", frames=_frames(quarterly_balance=QUARTERLY_SERIES))
+    assert sorted(history) == ["2025-12-31", "2026-03-31", "2026-06-30"]
+    assert history["2026-06-30"]["equity_to_assets"] == pytest.approx(0.37)
+    assert history["2025-12-31"]["equity_to_assets"] == pytest.approx(0.425)
+    assert history["2026-03-31"]["net_debt_to_assets"] == pytest.approx(0.5)
+
+
+def test_back_fill_only_covers_metrics_computed_the_same_way():
+    """A back-filled value is compared against a live one, so it has to be the
+    same statistic — not a quarterly lookalike of an annual measure."""
+    history = statements.period_history(
+        "X", frames=_frames(quarterly_balance=QUARTERLY_SERIES))
+    assert set(history["2026-06-30"]) == set(statements.BACKFILLABLE)
+    # Flow ratios take their numerator from the annual statements, so a
+    # per-quarter version would be a different measure under the same name.
+    for absent in ("interest_coverage", "cost_to_income", "fcf_to_net_income"):
+        assert absent not in history["2026-06-30"]
+
+
+def test_period_history_is_empty_without_an_interim_sheet():
+    assert statements.period_history("X", frames=_frames()) == {}
+    assert statements.period_history("X", frames={}) == {}
+
+
 # ── Merging into the cache ────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -166,7 +204,8 @@ def test_refresh_merges_and_does_not_clobber_info_keys(monkeypatch, store):
     store.save_fundamentals("BALD-B.ST", {"revenue_growth": 0.04, "pe_ratio": 12.0})
     monkeypatch.setattr(statements, "fetch_frames", lambda t: _frames())
 
-    assert statements.refresh(store, ["BALD-B.ST"]) == 1
+    updated, _seeded = statements.refresh(store, ["BALD-B.ST"])
+    assert updated == 1
     cached = store.get_fundamentals("BALD-B.ST")
     assert cached["revenue_growth"] == 0.04           # untouched
     assert cached["equity_to_assets"] == pytest.approx(0.37)
@@ -174,7 +213,7 @@ def test_refresh_merges_and_does_not_clobber_info_keys(monkeypatch, store):
 
 def test_refresh_skips_a_ticker_with_no_usable_statements(monkeypatch, store):
     monkeypatch.setattr(statements, "fetch_frames", lambda t: {})
-    assert statements.refresh(store, ["NOPE"]) == 0
+    assert statements.refresh(store, ["NOPE"]) == (0, 0)
     assert store.get_fundamentals("NOPE") is None
 
 
@@ -184,7 +223,8 @@ def test_refresh_survives_a_failing_ticker(monkeypatch, store):
             raise RuntimeError("statement fetch exploded")
         return _frames()
     monkeypatch.setattr(statements, "fetch_frames", flaky)
-    assert statements.refresh(store, ["BAD", "BALD-B.ST"]) == 1
+    updated, _seeded = statements.refresh(store, ["BAD", "BALD-B.ST"])
+    assert updated == 1
 
 
 def test_fetch_frames_survives_a_dead_feed(monkeypatch):

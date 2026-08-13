@@ -267,6 +267,56 @@ def test_thin_history_never_passes_a_multi_quarter_rule(store):
     assert run["streak"] == 1 and run["periods_seen"] == 1
 
 
+def test_backfill_seeds_past_periods_and_arms_a_multi_quarter_rule(store):
+    """Without this a two-quarter leverage rule is inert until we have watched
+    the company report twice — while the quarters sit in the statements."""
+    _quarter(store, "BALD-B.ST", "2026-06-30", net_debt_to_assets=0.528)
+    assert evidence.sustained_breach(
+        store, "BALD-B.ST", "net_debt_to_assets", "above", 50, 2)["hit"] is False
+
+    added = evidence.backfill_periods(store, "BALD-B.ST", {
+        "2026-03-31": {"net_debt_to_assets": 0.51},
+        "2025-12-31": {"net_debt_to_assets": 0.48},
+    })
+    assert added == 2
+
+    run = evidence.sustained_breach(store, "BALD-B.ST", "net_debt_to_assets",
+                                    "above", 50, 2)
+    assert run["hit"] is True and run["streak"] == 2 and run["periods_seen"] == 3
+
+
+def test_backfill_never_overwrites_an_observed_reading(store):
+    """What we actually saw beats a recomputation of the same period."""
+    _quarter(store, "X", "2026-06-30", net_debt_to_assets=0.528)
+    assert evidence.backfill_periods(store, "X", {
+        "2026-06-30": {"net_debt_to_assets": 0.99}}) == 0
+
+    history = evidence.metric_history(store, "X", "net_debt_to_assets")
+    assert [round(r["value"], 1) for r in history] == [52.8]
+
+
+def test_backfill_keeps_the_series_oldest_first(store):
+    """Trend reads the first row as the oldest, so order is load-bearing."""
+    store.save_fundamentals("X", {"revenue_growth": 0.05})          # legacy, no period
+    evidence.snapshot_fundamentals(store, ["X"], today="2024-01-01")
+    _quarter(store, "X", "2026-06-30", net_debt_to_assets=0.528)
+    evidence.backfill_periods(store, "X", {
+        "2026-03-31": {"net_debt_to_assets": 0.51},
+        "2025-12-31": {"net_debt_to_assets": 0.48},
+    })
+
+    series = json.loads(store.get_meta("paper_fundsnap:X"))
+    assert [r.get("period", "") for r in series] == [
+        "", "2025-12-31", "2026-03-31", "2026-06-30"]
+
+
+def test_backfill_is_idempotent(store):
+    history = {"2026-03-31": {"net_debt_to_assets": 0.51}}
+    assert evidence.backfill_periods(store, "X", history) == 1
+    assert evidence.backfill_periods(store, "X", history) == 0
+    assert evidence.backfill_periods(store, "X", {}) == 0
+
+
 def test_trend_reports_direction_against_oldest_snapshot(store):
     store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.12, "profit_margin": 0.20})
     evidence.snapshot_fundamentals(store, ["VIT-B.ST"], today="2026-01-01")

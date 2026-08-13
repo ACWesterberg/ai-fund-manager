@@ -298,6 +298,43 @@ def snapshot_fundamentals(store: Store, tickers: list[str],
     return written
 
 
+def backfill_periods(store: Store, ticker: str,
+                     history: dict[str, dict]) -> int:
+    """Seed the snapshot series with past reported periods. Returns rows added.
+
+    Only fills periods the series does not already hold — an observed reading
+    is what this system actually saw and always wins over a recomputation. The
+    result stays ordered oldest-first: any legacy rows recorded before periods
+    were tracked keep their place at the front, and everything dated sorts by
+    its period.
+    """
+    import json
+
+    if not history:
+        return 0
+    try:
+        series = json.loads(store.get_meta(f"{SNAPSHOT_KEY}:{ticker}") or "[]")
+    except json.JSONDecodeError:
+        series = []
+    if not isinstance(series, list):
+        series = []
+
+    legacy = [r for r in series if isinstance(r, dict) and not r.get("period")]
+    dated = [r for r in series if isinstance(r, dict) and r.get("period")]
+    known = {r["period"] for r in dated}
+
+    added = [{"date": "", "period": period, "values": values, "backfilled": True}
+             for period, values in history.items()
+             if period not in known and values]
+    if not added:
+        return 0
+
+    dated = sorted(dated + added, key=lambda r: r["period"])
+    store.set_meta(f"{SNAPSHOT_KEY}:{ticker}",
+                   json.dumps((legacy + dated)[-MAX_SNAPSHOTS:]))
+    return len(added)
+
+
 def metric_history(store: Store, ticker: str, metric: str) -> list[dict]:
     """[{period, date, value}] for one metric, newest first, one row per period.
 

@@ -1243,9 +1243,11 @@ def track_portfolio(slug: str) -> list[str]:
         # snapshot so trends include them.
         try:
             from fundmgr.data.statements import refresh as refresh_statements
-            merged = refresh_statements(store, watched)
+            merged, seeded = refresh_statements(store, watched)
             if merged:
                 log.append(f"Statement metrics merged for {merged} ticker(s)")
+            if seeded:
+                log.append(f"Back-filled {seeded} reported period(s) from the statements")
         except Exception as e:
             log.append(f"⚠ statement metrics skipped: {e}")
         try:

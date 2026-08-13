@@ -181,12 +181,26 @@ Three things follow, all deliberate:
 - **Breaching-but-short is its own state.** `pending` means the line is breached
   today but the run isn't long enough yet. The old code had no way to say this
   and reported it as a hit.
-- **A rule arms as history accumulates.** Periods are counted from what this
-  system has observed, so a multi-quarter rule set today needs that many
-  reporting cycles before it can fire, even where the company has already
-  published them. Back-filling past periods from the statement frames would fix
-  this for the capital-structure metrics; the `.info` metrics (growth, margins)
-  would need per-quarter derivation first.
+- **Two metrics arm immediately; the rest arm as history accumulates.**
+  `equity_to_assets` and `net_debt_to_assets` are back-filled from every column
+  on the interim balance sheet, so a two-quarter leverage rule works the day you
+  set it. Everything else counts only periods this system has observed, and a
+  multi-quarter rule on those needs that many reporting cycles before it can
+  fire — reporting `thin_history` until then, never a pass.
+
+**Why only those two.** A back-filled value gets compared against a live one, so
+it has to be the *same statistic*, not a lookalike. Both of those read a single
+balance-sheet column and nothing else, so an older column runs identical logic.
+The other statement ratios (`interest_coverage`, `cost_to_income`,
+`fcf_to_net_income`) take their flows from the **annual** statements — a
+per-quarter version would be a different measure under the same name. The
+`.info` metrics carry no per-period history at all: `profit_margin` there is
+TTM, and mixing a TTM reading with single-quarter ones in a streak counts two
+different things. `statements.BACKFILLABLE` is the enforced list, and
+`test_back_fill_only_covers_metrics_computed_the_same_way` pins it.
+
+An observed reading always beats a recomputation of the same period, so
+back-filling can only add history, never revise what was actually seen.
 
 Set the same thing from the CLI with repeated `--fundamental`-style entries via
 the dashboard, or inspect what is stored with `fund paper-plan <slug> <TICKER>`.

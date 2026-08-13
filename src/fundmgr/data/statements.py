@@ -119,6 +119,74 @@ def _pick(frame, key: str) -> float | None:
     return None
 
 
+def _pick_at(frame, key: str, column) -> float | None:
+    """One statement row's value in a specific period column."""
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    for label in _ROWS.get(key, ()):
+        try:
+            if label not in frame.index:
+                continue
+            return _num(frame.loc[label, column])
+        except Exception:
+            continue
+    return None
+
+
+# Metrics that can be recomputed for a past period with *exactly* the logic
+# that produced the current one. Both read a single balance-sheet column and
+# nothing else, so an older column yields the same statistic rather than a
+# similar-looking one.
+#
+# The rest are deliberately absent. interest_coverage, cost_to_income and
+# fcf_to_net_income take their flows from the annual statements, so a
+# per-quarter version would be a different measure wearing the same name; the
+# `.info` metrics (growth, margins, ROE) carry no per-period history at all.
+# A back-filled series has to be comparable to the live reading it will be
+# compared against, or the streak it feeds is counting two different things.
+BACKFILLABLE = ("equity_to_assets", "net_debt_to_assets")
+
+
+def period_history(ticker: str, *, frames: dict | None = None) -> dict[str, dict]:
+    """{period_end: {metric: value}} for the periods on the interim balance sheet.
+
+    Multi-quarter rules otherwise start from nothing and stay inert until this
+    system has watched the company report that many times — even where the
+    quarters are already published and sitting in the statements.
+    """
+    if frames is None:
+        frames = fetch_frames(ticker)
+    balance = frames.get("quarterly_balance")
+    if balance is None or getattr(balance, "empty", True):
+        return {}
+
+    out: dict[str, dict] = {}
+    try:
+        columns = list(balance.columns)
+    except Exception:
+        return {}
+    for column in columns:
+        assets = _pick_at(balance, "total_assets", column)
+        equity = _pick_at(balance, "total_equity", column)
+        debt = _pick_at(balance, "total_debt", column)
+        cash = _pick_at(balance, "cash", column)
+        net_debt = (debt - cash) if (debt is not None and cash is not None) else None
+        metrics = {
+            "equity_to_assets": _ratio(equity, assets),
+            "net_debt_to_assets": _ratio(net_debt, assets),
+        }
+        metrics = {k: v for k, v in metrics.items() if v is not None}
+        if not metrics:
+            continue
+        try:
+            period = (column.date().isoformat() if hasattr(column, "date")
+                      else str(column)[:10])
+        except Exception:
+            continue
+        out[period] = metrics
+    return out
+
+
 def _ratio(numerator: float | None, denominator: float | None) -> float | None:
     """Guarded division — a zero denominator is unknown, never infinite."""
     if numerator is None or denominator is None or denominator == 0:
@@ -257,34 +325,47 @@ def fetch_frames(ticker: str) -> dict:
 
 
 def refresh(store, tickers: list[str], ttl_days: int = 7,
-            max_workers: int = 8) -> int:
+            max_workers: int = 8) -> tuple[int, int]:
     """Derive statement metrics and merge them into the fundamentals cache.
 
     Merges rather than replaces: financedata owns the `.info` keys and rewrites
     the whole blob on its own refresh, so these are folded in afterwards on the
-    same schedule. Returns the number of tickers updated.
+    same schedule.
+
+    The same fetch also back-fills the reported periods the statements already
+    contain, since the frames are in hand and re-fetching them later would be
+    the expensive half done twice. Returns (tickers updated, periods seeded).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from fundmgr.evidence import backfill_periods
 
     stale = store.get_stale_fundamentals_tickers(list(tickers), ttl_days=0) \
         if ttl_days == 0 else list(tickers)
     if not stale:
-        return 0
+        return 0, 0
 
-    updated = 0
+    def _one(ticker: str) -> tuple[dict, dict]:
+        frames = fetch_frames(ticker)
+        return derive(ticker, frames=frames), period_history(ticker, frames=frames)
+
+    updated = seeded = 0
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(derive, t): t for t in stale}
+        futures = {pool.submit(_one, t): t for t in stale}
         for future in as_completed(futures):
             ticker = futures[future]
             try:
-                metrics = future.result()
+                metrics, history = future.result()
             except Exception:
                 continue
             metrics = {k: v for k, v in metrics.items() if v is not None}
-            if not metrics:
-                continue
-            existing = store.get_fundamentals(ticker) or {}
-            existing.update(metrics)
-            store.save_fundamentals(ticker, existing)
-            updated += 1
-    return updated
+            if metrics:
+                existing = store.get_fundamentals(ticker) or {}
+                existing.update(metrics)
+                store.save_fundamentals(ticker, existing)
+                updated += 1
+            try:
+                seeded += backfill_periods(store, ticker, history)
+            except Exception:
+                pass
+    return updated, seeded

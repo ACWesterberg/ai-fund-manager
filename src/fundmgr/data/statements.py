@@ -60,8 +60,11 @@ STATEMENT_METRICS: dict[str, tuple[str, bool]] = {
 # releases and filers differ, so every lookup accepts a list.
 _ROWS = {
     "total_assets":     ("Total Assets",),
-    "total_equity":     ("Stockholders Equity", "Total Stockholder Equity",
-                         "Common Stock Equity", "Total Equity Gross Minority Interest"),
+    # Gross first: a solvency ratio is reported on total equity, and excluding
+    # minority interest understates it (Balder: 34.0% vs 38.5% on the same
+    # balance sheet). Narrower rows are the fallback, not the preference.
+    "total_equity":     ("Total Equity Gross Minority Interest", "Stockholders Equity",
+                         "Total Stockholder Equity", "Common Stock Equity"),
     "total_debt":       ("Total Debt",),
     "cash":             ("Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments",
                          "Cash And Cash Equivalents At Carrying Value"),
@@ -123,7 +126,13 @@ def derive(ticker: str, *, frames: dict | None = None) -> dict[str, float | None
     """
     if frames is None:
         frames = fetch_frames(ticker)
-    balance = frames.get("balance")
+    # Balance-sheet items are stocks: take the freshest, which is the interim
+    # if there is one — an annual sheet is up to a year stale, and a criterion
+    # written against the latest report would be judged on last year's balance.
+    # Flows (income, cash flow) stay annual: one quarter of EBITDA would make
+    # net debt/EBITDA four times too high.
+    quarterly_balance = frames.get("quarterly_balance")
+    balance = quarterly_balance if quarterly_balance is not None else frames.get("balance")
     income = frames.get("income")
     cashflow = frames.get("cashflow")
     quarterly_cashflow = frames.get("quarterly_cashflow")
@@ -198,6 +207,7 @@ def fetch_frames(ticker: str) -> dict:
 
     return {
         "balance": _get("balance_sheet"),
+        "quarterly_balance": _get("quarterly_balance_sheet"),
         "income": _get("income_stmt"),
         "cashflow": _get("cashflow"),
         "quarterly_cashflow": _get("quarterly_cashflow"),

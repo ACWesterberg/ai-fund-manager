@@ -214,3 +214,52 @@ def test_only_reconciled_metrics_are_offered():
 def test_every_statement_metric_declares_its_unit():
     for key, (label, is_fraction) in statements.STATEMENT_METRICS.items():
         assert label and isinstance(is_fraction, bool), key
+
+
+# ── Period selection: stocks fresh, flows annual ──────────────────────────────
+
+QUARTERLY_BALANCE = pd.DataFrame({pd.Timestamp("2026-06-30"): {
+    "Total Assets": 276_292.0,
+    "Total Equity Gross Minority Interest": 106_491.0,
+    "Stockholders Equity": 93_852.0,
+    "Total Debt": 155_536.0,
+    "Cash And Cash Equivalents": 5_394.0,
+}})
+
+
+def test_total_equity_prefers_the_gross_row():
+    """Excluding minority interest understates solvency: 34.0% vs 38.5%."""
+    m = statements.derive("BALD-B.ST", frames=_frames(balance=QUARTERLY_BALANCE))
+    assert m["equity_to_assets"] == pytest.approx(0.385, abs=0.002)
+
+
+def test_stockholders_equity_is_still_accepted_as_a_fallback():
+    balance = QUARTERLY_BALANCE.drop(index=["Total Equity Gross Minority Interest"])
+    m = statements.derive("X", frames=_frames(balance=balance))
+    assert m["equity_to_assets"] == pytest.approx(0.340, abs=0.002)
+
+
+def test_the_quarterly_balance_sheet_wins_over_the_annual():
+    """An annual sheet is up to a year stale against an interim criterion."""
+    annual = pd.DataFrame({pd.Timestamp("2025-12-31"): {
+        "Total Assets": 100_000.0, "Total Equity Gross Minority Interest": 20_000.0}})
+    m = statements.derive("X", frames={
+        "balance": annual, "quarterly_balance": QUARTERLY_BALANCE,
+        "income": INCOME, "cashflow": CASHFLOW, "quarterly_cashflow": None})
+    assert m["equity_to_assets"] == pytest.approx(0.385, abs=0.002)   # not 0.20
+
+
+def test_the_annual_balance_sheet_is_used_when_there_is_no_interim():
+    m = statements.derive("X", frames={
+        "balance": QUARTERLY_BALANCE, "quarterly_balance": None,
+        "income": INCOME, "cashflow": CASHFLOW, "quarterly_cashflow": None})
+    assert m["equity_to_assets"] == pytest.approx(0.385, abs=0.002)
+
+
+def test_flows_stay_annual_so_leverage_is_not_inflated():
+    """A single quarter of EBITDA would make net debt/EBITDA four times too high."""
+    m = statements.derive("X", frames={
+        "balance": None, "quarterly_balance": QUARTERLY_BALANCE,
+        "income": INCOME, "cashflow": CASHFLOW, "quarterly_cashflow": None})
+    net_debt = 155_536.0 - 5_394.0
+    assert m["net_debt_to_ebitda"] == pytest.approx(net_debt / 8_500.0, rel=1e-3)

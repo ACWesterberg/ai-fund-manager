@@ -562,7 +562,10 @@ FINANCEDATA_KEYS = {
 
 
 def test_every_offered_metric_is_actually_fetched():
-    unknown = set(evidence.FUND_FIELD_META) - FINANCEDATA_KEYS
+    from fundmgr.data.statements import STATEMENT_METRICS
+    # Two sources feed the cache: financedata's `.info` map, and the ratios
+    # derived from the statements. An offered metric must come from one of them.
+    unknown = set(evidence.FUND_FIELD_META) - FINANCEDATA_KEYS - set(STATEMENT_METRICS)
     assert not unknown, (
         f"{unknown} are offered to the criterion analyser but financedata never "
         "fetches them — a rule naming one could never evaluate.")

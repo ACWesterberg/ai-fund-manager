@@ -1230,6 +1230,17 @@ def track_portfolio(slug: str) -> list[str]:
                 fetch_and_cache_fundamentals(stale, store, ttl_days=7)
         except Exception as e:
             log.append(f"⚠ fundamentals refresh skipped: {e}")
+        # Capital structure comes off the statements, which `.info` never
+        # carries. Merged after the financedata refresh — that call rewrites the
+        # whole blob, so these have to be folded in afterwards, and before the
+        # snapshot so trends include them.
+        try:
+            from fundmgr.data.statements import refresh as refresh_statements
+            merged = refresh_statements(store, watched)
+            if merged:
+                log.append(f"Statement metrics merged for {merged} ticker(s)")
+        except Exception as e:
+            log.append(f"⚠ statement metrics skipped: {e}")
         try:
             from fundmgr.evidence import snapshot_fundamentals
             snapped = snapshot_fundamentals(store, watched)

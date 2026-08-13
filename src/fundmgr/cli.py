@@ -1507,6 +1507,18 @@ def fundamentals_check(ticker: str):
         raise click.ClickException(
             f"No fundamentals returned for {tkr} — bad ticker, or the fetch failed.")
 
+    # A criterion reads the merged cache, not one provider, so the check has to
+    # show both sources or it answers the wrong question. Statement metrics are
+    # derived live here rather than read from a book's store — this command is
+    # about what a ticker *can* yield, independent of any portfolio.
+    from fundmgr.data.statements import STATEMENT_METRICS, derive
+    try:
+        statement_metrics = derive(tkr)
+    except Exception as e:
+        statement_metrics = {}
+        click.echo(f"  ⚠ statement metrics unavailable: {e}")
+    data.update({k: v for k, v in statement_metrics.items() if v is not None})
+
     offered = set(FUND_FIELD_META)
     populated = {k: v for k, v in sorted(data.items()) if v is not None}
     empty = sorted(k for k, v in data.items() if v is None)
@@ -1516,6 +1528,24 @@ def fundamentals_check(ticker: str):
         click.echo(f"  {'★' if key in offered else ' '} {key:<22} {value}")
     if empty:
         click.echo(f"\n  Returned but empty for this ticker:\n    {', '.join(empty)}")
+
+    # Statement metrics get their own section: an absent one almost always means
+    # a row label this codebase doesn't accept, which is silent everywhere else.
+    if statement_metrics:
+        derived_ok = [k for k, v in statement_metrics.items() if v is not None]
+        derived_missing = [k for k, v in statement_metrics.items() if v is None]
+        click.echo(f"\n  Derived from the financial statements "
+                   f"({len(derived_ok)}/{len(STATEMENT_METRICS)}):")
+        for key, (label, is_fraction) in STATEMENT_METRICS.items():
+            value = statement_metrics.get(key)
+            if value is None:
+                shown = "—  (no matching statement row)"
+            else:
+                shown = f"{value * 100:,.1f}%" if is_fraction else f"{value:,.2f}"
+            click.echo(f"    {'★' if key in offered else ' '} {key:<22} {shown}")
+        if derived_missing:
+            click.echo(f"    → {len(derived_missing)} missing: either this filer "
+                       "doesn't report them, or the row label needs adding.")
 
     missing = sorted(offered - set(data))
     if missing:

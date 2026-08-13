@@ -643,3 +643,31 @@ def test_fundamentals_check_surfaces_newly_available_fields(monkeypatch):
     tail = result.output.split("Available but not offered")[1]
     assert "market_cap" in tail and "beta" in tail
     assert "sector" not in tail          # non-numeric fields aren't rule candidates
+
+
+def test_fundamentals_check_shows_statement_derived_metrics(monkeypatch):
+    """A criterion reads the merged cache, so the check must show both sources."""
+    from fundmgr.data import statements
+    payload = {k: 0.1 for k in evidence.FUND_FIELD_META}
+    monkeypatch.setattr(statements, "derive", lambda t: {
+        "equity_to_assets": 0.37, "net_debt_to_assets": 0.504,
+        "net_debt_to_ebitda": 12.8, "interest_coverage": 2.65,
+        "cost_to_income": None, "fcf_to_net_income": 0.9,
+        "cash_runway_months": None,
+    })
+    result = _run_check(monkeypatch, payload)
+    assert "Derived from the financial statements (5/7)" in result.output
+    assert "equity_to_assets" in result.output and "37.0%" in result.output
+    assert "no matching statement row" in result.output
+    assert "row label needs adding" in result.output
+
+
+def test_fundamentals_check_survives_a_statement_failure(monkeypatch):
+    from fundmgr.data import statements
+
+    def boom(ticker):
+        raise RuntimeError("statements exploded")
+    monkeypatch.setattr(statements, "derive", boom)
+    result = _run_check(monkeypatch, {k: 0.1 for k in evidence.FUND_FIELD_META})
+    assert result.exit_code == 0
+    assert "statement metrics unavailable" in result.output

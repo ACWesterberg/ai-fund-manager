@@ -196,11 +196,19 @@ def test_fetch_frames_survives_a_dead_feed(monkeypatch):
 
 # ── Wiring ────────────────────────────────────────────────────────────────────
 
-def test_metrics_are_ready_to_be_offered_but_are_not_yet():
-    """Offered only after `fund fundamentals-check` confirms they arrive live —
-    the same discipline that caught price_to_sales returning null."""
+def test_only_reconciled_metrics_are_offered():
+    """Offered only after reconciling against the company's own reporting.
+
+    equity/assets reads ~3pp low (the equity row excludes minority and hybrid
+    capital) and net debt/EBITDA reads 24% low (income-statement EBITDA carries
+    revaluation gains the company excludes) — both would silently misjudge a
+    criterion written to the company's definition."""
     from fundmgr.evidence import FUND_FIELD_META
-    assert set(statements.STATEMENT_METRICS) & set(FUND_FIELD_META) == set()
+    offered = set(statements.STATEMENT_METRICS) & set(FUND_FIELD_META)
+    assert offered == {"net_debt_to_assets", "interest_coverage",
+                       "cost_to_income", "fcf_to_net_income"}
+    assert "equity_to_assets" not in FUND_FIELD_META
+    assert "net_debt_to_ebitda" not in FUND_FIELD_META
 
 
 def test_every_statement_metric_declares_its_unit():

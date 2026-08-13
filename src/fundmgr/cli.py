@@ -1539,12 +1539,18 @@ def fundamentals_check(ticker: str):
         for key, (label, is_fraction) in STATEMENT_METRICS.items():
             value = statement_metrics.get(key)
             if value is None:
-                shown = "—  (no matching statement row)"
+                if key == "cash_runway_months" and (data.get("operating_cash_flow") or 0) > 0:
+                    shown = "—  (n/a — cash generative)"
+                else:
+                    shown = "—  (no matching statement row)"
             else:
                 shown = f"{value * 100:,.1f}%" if is_fraction else f"{value:,.2f}"
             click.echo(f"    {'★' if key in offered else ' '} {key:<22} {shown}")
-        if derived_missing:
-            click.echo(f"    → {len(derived_missing)} missing: either this filer "
+        unexplained = [k for k in derived_missing
+                       if not (k == "cash_runway_months"
+                               and (data.get("operating_cash_flow") or 0) > 0)]
+        if unexplained:
+            click.echo(f"    → {len(unexplained)} unexplained: either this filer "
                        "doesn't report them, or the row label needs adding.")
 
     missing = sorted(offered - set(data))

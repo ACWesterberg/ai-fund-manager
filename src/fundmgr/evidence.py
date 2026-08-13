@@ -79,6 +79,14 @@ _FUND_FIELDS: list[tuple[str, str, bool]] = [
     ("total_cash",          "Total cash",            False),
     ("total_debt",          "Total debt",            False),
     ("debt_to_equity",      "Debt/equity",           False),
+    # Derived from the statements (fundmgr.data.statements). Offered only
+    # after reconciling against company-reported figures: net debt/assets
+    # came back 50.6% against Balder's own 50.4%. equity/assets and net
+    # debt/EBITDA are deliberately absent — see that module's notes.
+    ("net_debt_to_assets",  "Net debt/assets",       True),
+    ("interest_coverage",   "Interest coverage",     False),
+    ("cost_to_income",      "Cost/income",           True),
+    ("fcf_to_net_income",   "FCF/net income",        True),
     ("ev_to_ebitda",        "EV/EBITDA",             False),
     ("pe_ratio",            "P/E",                   False),
     ("forward_pe",          "Forward P/E",           False),

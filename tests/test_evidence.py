@@ -592,7 +592,9 @@ def test_fraction_flags_match_the_providers_units():
     fractions = {k for k, m in evidence.FUND_FIELD_META.items() if m["is_fraction"]}
     assert fractions == {"profit_margin", "gross_margin", "operating_margin",
                          "ebitda_margin", "roe", "roa", "revenue_growth",
-                         "earnings_growth", "dividend_yield"}
+                         "earnings_growth", "dividend_yield",
+                         # derived ratios, already fractions by construction
+                         "net_debt_to_assets", "cost_to_income", "fcf_to_net_income"}
 
 
 # ── fundamentals-check CLI ────────────────────────────────────────────────────

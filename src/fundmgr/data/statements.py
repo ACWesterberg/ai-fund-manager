@@ -22,6 +22,23 @@ Two rules throughout:
   • **Never fabricate a ratio.** A zero or missing denominator returns None,
     not infinity — an interest coverage of 1e18 because interest expense
     rounded to zero would sail through any "coverage ≥ 2.5" gate.
+
+Reconciled against Balder's own Q2 reporting, which is why two of these are
+derived but NOT offered as criterion metrics:
+
+  net debt/assets   50.6% vs 50.4% reported — trustworthy, offered
+  equity/assets     34.0% vs 37.0% reported — "Stockholders Equity" excludes
+                    minority and hybrid capital that the company's own ratio
+                    includes; a criterion written to the company's definition
+                    would read ~3pp low against this
+  net debt/EBITDA   9.75x vs 12.8x reported — income-statement EBITDA for a
+                    property company includes revaluation gains the company
+                    excludes from its leverage metric. This one flatters, which
+                    is the wrong direction for a leverage gate, and no choice of
+                    row label fixes it
+
+A derived figure is not automatically the company's figure, and the difference
+decides whether it can back a criterion at all.
 """
 from __future__ import annotations
 

@@ -478,6 +478,25 @@ fund paper-add-plan my-sleeve SYSR.ST --confirm-proof   # after a good report
 fund paper-adds                                          # current signals
 ```
 
+### The Add signals panel
+
+On a live sleeve, below Watch status. One row per position carrying an add
+plan, most actionable first, with each gate shown as **actual / gate** so a
+HOLD explains itself: dislocation against the book's threshold, expected annual
+return against the book's minimum, weight against the ceiling, and proof as
+**confirmed / stale / —**. The `why` column is the engine's own sentence — the
+same one `fund paper-adds` prints. The panel is absent entirely until some
+position has a plan, since an empty table on every sleeve is just noise.
+
+The editor sets book, ceiling, tranche, target and review anchor. Three actions
+are **separate submits rather than fields**, because each stamps a date:
+*Anchor review at today's price*, *Proof confirmed*, *Withdraw proof*. A dated
+confirmation that happens as a side effect of saving an unrelated field is
+exactly how a stale anchor starts looking fresh, so saving the form never
+touches them. Confirming proof while the target still predates the last report
+says so in the flash message rather than leaving you to wonder why the state
+didn't move.
+
 Both run inside `fund paper-track`, after the kill watches so a position that
 has just tripped a kill can never also be suggested.
 

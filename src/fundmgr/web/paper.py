@@ -212,6 +212,31 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
     }
 
 
+def _add_status(store) -> dict | None:
+    """Add signals for the dashboard, or None when no position carries a plan.
+
+    The engine already answers "which gate stopped this?" for every position;
+    this only shapes it for rendering. The panel exists because the answer was
+    previously reachable only from the CLI or a Telegram alert — so a HOLD had
+    no visible explanation anywhere you would actually look.
+    """
+    from fundmgr import addsignal
+
+    rows = addsignal.evaluate_all(store)
+    if not rows:
+        return None
+
+    actionable = {addsignal.ADD, addsignal.STRONG_ADD}
+    return {
+        "rows": rows,
+        "books": list(addsignal.BOOK_GATES),
+        "gates": addsignal.BOOK_GATES,
+        "actionable": sum(1 for r in rows if r["state"] in actionable),
+        "stale": sum(1 for r in rows if r["valuation_status"] == "stale"
+                     or r["proof_status"] == "stale"),
+    }
+
+
 def _kill_verdicts(store, tickers: list[str]) -> dict[str, dict]:
     """Last judge verdict per ticker, for the Watch panel's criterion column.
 
@@ -282,6 +307,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "fill_action": f"{book_prefix}/fill" if real else None,
             # kill criteria + time horizons are editable on every book
             "watchplan_action": f"{book_prefix}/watchplan",
+            # add plans are a real-sleeve concern — a paper book has no tranches
+            "addplan_action": f"{book_prefix}/addplan" if real else None,
         }
 
     def _home_ctx(request: Request, error: str | None = None, form: dict | None = None) -> dict:
@@ -716,6 +743,101 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}) + "#watch",
             status_code=303)
 
+    @router.post("/{slug}/addplan")
+    async def save_addplan(
+        slug: str,
+        ticker: str = Form(...),
+        book: str = Form(""),
+        max_weight_pct: str = Form(""),
+        tranche_pct: str = Form(""),
+        target_price: str = Form(""),
+        review_price: str = Form(""),
+        anchor_live: str = Form(""),
+        proof: str = Form(""),
+        remove: str = Form(""),
+    ):
+        """Set (or clear) one position's add plan — the web twin of
+        `fund paper-add-plan`.
+
+        Proof and the review price are separate submits rather than fields,
+        because both are dated confirmations rather than settings: stamping one
+        as a side effect of saving an unrelated field is how a stale anchor
+        starts looking fresh.
+        """
+        from urllib.parse import urlencode
+
+        from fundmgr import addsignal
+
+        def _back(msg: str, ok: int) -> RedirectResponse:
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}) + "#adds",
+                status_code=303)
+
+        try:
+            meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            return _not_found()
+
+        tkr = (ticker or "").strip().upper()
+        if not tkr:
+            return _back("Pick a ticker to set an add plan for.", 0)
+
+        if remove:
+            addsignal.clear_plan(store, tkr)
+            return _back(f"Cleared the add plan for {tkr}.", 1)
+
+        if proof:
+            confirmed = proof == "yes"
+            addsignal.set_plan(store, tkr, proof_confirmed=confirmed)
+            return _back(
+                f"{tkr}: fundamental proof {'confirmed' if confirmed else 'withdrawn'}."
+                + (" The target price still dates from before the last report — "
+                   "restate it to clear the valuation gate."
+                   if confirmed and addsignal.valuation_status(store, tkr)["status"] == "stale"
+                   else ""), 1)
+
+        anchored = review_price
+        if anchor_live:
+            # Dislocation compares SEK prices, so the anchor must be SEK. The
+            # daily track refreshes the cache, so that is the normal path; a
+            # live quote covers a plan set on a ticker not yet tracked.
+            price = watchplan._current_price_sek(store, tkr)
+            if not price:
+                try:
+                    from fundmgr.data.quotes import live_price
+                    native = live_price(tkr)
+                    currency = meta["currency_map"].get(tkr, "SEK")
+                    price = (native if currency == "SEK"
+                             else paper.to_sek_price(native, currency, store)) if native else None
+                except Exception:
+                    price = None
+            if not price:
+                return _back(f"No price available for {tkr} to anchor the review at.", 0)
+            anchored = price
+
+        try:
+            plan = addsignal.set_plan(
+                store, tkr, book=book or None, max_weight_pct=max_weight_pct,
+                tranche_pct=tranche_pct, target_price=target_price,
+                review_price=anchored)
+        except ValueError as e:
+            return _back(str(e), 0)
+
+        bits = []
+        if plan.get("book"):
+            bits.append(f"book {plan['book']}")
+        if plan.get("max_weight_pct"):
+            bits.append(f"max {plan['max_weight_pct']:g}%")
+        if plan.get("tranche_pct"):
+            bits.append(f"tranche {plan['tranche_pct']:g}%")
+        if plan.get("target_price"):
+            bits.append(f"target {plan['target_price']:,.2f}")
+        if plan.get("review_price"):
+            bits.append(f"review anchor {plan['review_price']:,.2f}")
+        if not bits:
+            return _back(f"Cleared the add plan for {tkr}.", 1)
+        return _back(f"{tkr}: saved {', '.join(bits)}.", 1)
+
     # ── Per-book dashboard ──────────────────────────────────────────────────
 
     @router.get("/{slug}", response_class=HTMLResponse)
@@ -817,6 +939,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "active_page": "portfolio",
             # Live sleeves only — paper books keep the plain simulation framing.
             "watch": _watch_status(store, positions_data) if real else None,
+            "adds": _add_status(store) if real else None,
             "flash": flash,
             **_base_ctx(meta),
         })

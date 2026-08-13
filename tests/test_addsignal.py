@@ -480,3 +480,109 @@ def test_a_broken_add_watch_does_not_stop_the_track(tmp_path, monkeypatch, teleg
     assert any("add-signal watch failed" in line for line in log)
     assert any("NAV" in line for line in log)
     assert datetime and timezone   # imports used by the price helper above
+
+
+# ── The dashboard panel ───────────────────────────────────────────────────────
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    """A live sleeve with one holding, served through the real app."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(paper, "PAPER_DIR", tmp_path / "paper")
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+    monkeypatch.setattr(paper, "_cache_price_history", lambda store, tickers, **kw: None)
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    import fundmgr.data.benchmark as benchmark
+    monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", lambda store, **kw: True)
+    import fundmgr.data.quotes as quotes
+    monkeypatch.setattr(quotes, "live_prices", lambda tickers: {t: 100.0 for t in tickers})
+    monkeypatch.setattr(quotes, "live_price", lambda ticker: 100.0)
+
+    from fundmgr.web.app import app
+    paper.create_portfolio(
+        "Add Sleeve", 30_000, "",
+        holdings_override=[{"ticker": "SYSR.ST", "name": "Systemair", "weight_pct": 100,
+                            "shares": 100, "avg_cost_sek": 100.0}],
+        kind="live", seed_holdings=True)
+    return TestClient(app)
+
+
+def test_the_panel_is_absent_until_a_position_carries_a_plan(client):
+    """No plan, no panel — an empty table would be noise on every sleeve."""
+    assert "Add signals" not in client.get("/live/add-sleeve").text
+
+
+def test_the_panel_shows_the_state_and_which_gate_stopped_it(client):
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "book": "A", "max_weight_pct": "100",
+                      "tranche_pct": "1", "review_price": "100"},
+                follow_redirects=False)
+
+    body = client.get("/live/add-sleeve").text
+    assert "Add signals" in body
+    assert "SYSR.ST" in body
+    assert "HOLD" in body
+    # The engine's reason, rendered — the thing that was CLI-only before.
+    assert "no fundamental proof and no price dislocation" in body
+
+
+def test_confirming_proof_from_the_panel_moves_the_state(client):
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "book": "A", "max_weight_pct": "100",
+                      "tranche_pct": "1", "target_price": "160", "review_price": "100"},
+                follow_redirects=False)
+    r = client.post("/live/add-sleeve/addplan",
+                    data={"ticker": "SYSR.ST", "proof": "yes"}, follow_redirects=False)
+    assert r.status_code == 303 and "ok=1" in r.headers["location"]
+
+    _meta, store = paper.open_portfolio("add-sleeve")
+    assert addsignal.get_plan(store, "SYSR.ST")["proof_confirmed_at"]
+
+
+def test_proof_is_its_own_submit_not_a_side_effect_of_saving(client):
+    """Saving an unrelated field must not stamp a dated confirmation."""
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "book": "A", "tranche_pct": "1"},
+                follow_redirects=False)
+    _meta, store = paper.open_portfolio("add-sleeve")
+    assert "proof_confirmed_at" not in addsignal.get_plan(store, "SYSR.ST")
+
+
+def test_anchoring_at_todays_price_uses_the_cached_price(client):
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "book": "A", "anchor_live": "1"},
+                follow_redirects=False)
+    _meta, store = paper.open_portfolio("add-sleeve")
+    plan = addsignal.get_plan(store, "SYSR.ST")
+    assert plan["review_price"] == 100.0
+    assert plan["review_date"]
+
+
+def test_clearing_removes_the_plan_and_the_panel(client):
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "book": "A", "tranche_pct": "1"},
+                follow_redirects=False)
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "remove": "1"}, follow_redirects=False)
+
+    _meta, store = paper.open_portfolio("add-sleeve")
+    assert addsignal.get_plan(store, "SYSR.ST") == {}
+    assert "Add signals" not in client.get("/live/add-sleeve").text
+
+
+def test_a_stale_proof_is_visible_on_the_panel(client):
+    """The state the panel exists for: confirmed, but for a superseded quarter."""
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "book": "A", "tranche_pct": "1",
+                      "target_price": "160", "review_price": "100"},
+                follow_redirects=False)
+    client.post("/live/add-sleeve/addplan",
+                data={"ticker": "SYSR.ST", "proof": "yes"}, follow_redirects=False)
+
+    _meta, store = paper.open_portfolio("add-sleeve")
+    store.set_meta("paper_earnpost:SYSR.ST:2099-01-01", "2099-01-01")
+
+    body = client.get("/live/add-sleeve").text
+    assert "stale" in body
+    assert "re-read the print" in body

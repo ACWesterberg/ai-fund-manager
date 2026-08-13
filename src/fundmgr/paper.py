@@ -1261,6 +1261,14 @@ def track_portfolio(slug: str) -> list[str]:
     except Exception as e:
         log.append(f"⚠ horizon watch failed: {e}")
 
+    # Add signals — the other half of monitoring. Runs after the kill watches
+    # so a position that just tripped a kill can never also be suggested.
+    try:
+        from fundmgr import addsignal
+        log += addsignal.check_add_signals(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ add-signal watch failed: {e}")
+
     # Portfolio-level capex kill criterion (e.g. "2 of 5 hyperscalers guide
     # 2027 capex flat/down"), the master trigger for the whole sleeve.
     try:

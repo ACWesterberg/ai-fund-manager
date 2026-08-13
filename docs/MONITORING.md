@@ -281,3 +281,69 @@ fund aliases --forget 4HY                      # remove a bad one
 
 KEY may be an ISIN, a broker ticker or a company name. An ISIN is the strongest
 key — it survives renames and re-listings — and is tried before the others.
+
+## Add signals — the other half of monitoring
+
+A kill criterion asks *"has the thesis become materially worse?"*. An add
+criterion asks a different question: *"has the probability-weighted return
+become materially better?"* — which happens when the business improves, when
+the price falls while the business does not, or both.
+
+The naive version of each is a trap. "Good news → buy" adds to an already
+expensive stock; "price down 20% → buy" automates catching falling knives. So a
+signal is never a trigger on its own:
+
+```
+(proof OR dislocation) AND valuation AND weight AND NOT killed
+```
+
+| Input | Meaning |
+|-------|---------|
+| **Proof** | the company-specific fundamental test — organic growth, ARR, adjusted margins. Almost none of it is in any price feed, so it's a **human-confirmed flag with a date**, refreshed at each report. |
+| **Dislocation** | price fall since the last **thesis-confirmed review price** — never since original cost. A winner down 15% from its review price is dislocated; measured from cost it looks untouched. |
+| **Valuation** | `(target / price) ^ (12 / months_left) − 1` against the book's gate. |
+| **Weight** | is there room for a tranche below the ceiling. |
+
+Gates are set per risk book:
+
+| Book | Dislocation | Min expected return |
+|------|-------------|---------------------|
+| A | −12% | 15%/yr |
+| A/B | −15% | 20%/yr |
+| B | −20% | 25%/yr |
+
+### States
+
+**HOLD** nothing actionable · **ADD-WATCH** dislocation without proof, or a
+valuation that needs recalculating · **ADD** proof confirmed and every gate
+clear · **STRONG ADD** proof *and* dislocation together · **KILL** overrides
+everything. ADD and KILL never coexist.
+
+Alerts are transition-based: an ADD that stays ADD for six weeks is one
+message, not forty.
+
+### Staleness — the safeguard that matters most
+
+The dangerous failure mode is a stock halving because intrinsic value halved,
+while the engine compares the new price with a target set before the news and
+declares it cheap. So a target price carries the date it was set, and any
+thesis-changing event recorded after that date — an earnings report, a kill hit
+— marks it **STALE**. A stale valuation suppresses every add signal until fair
+value is recalculated. Staleness reads the breadcrumbs the earnings and kill
+watches already leave, so noticing a report landed needs no new bookkeeping.
+
+### Three weights, not one
+
+Target is the normal allocation, current is where you are, **max** is the
+ceiling justified by an active positive thesis. Passing the gates suggests one
+tranche toward max; drifting *above* max is a concentration review, not an add.
+
+```bash
+fund paper-add-plan my-sleeve SYSR.ST --book A --max-weight 13 \
+    --tranche 1 --target 145 --review-price live
+fund paper-add-plan my-sleeve SYSR.ST --confirm-proof   # after a good report
+fund paper-adds                                          # current signals
+```
+
+Both run inside `fund paper-track`, after the kill watches so a position that
+has just tripped a kill can never also be suggested.

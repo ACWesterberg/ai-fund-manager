@@ -1611,6 +1611,110 @@ def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
         click.echo("  Horizon: —")
 
 
+@cli.command("paper-add-plan")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--book", default=None, help="Risk book: A, A/B or B (sets the gates).")
+@click.option("--max-weight", default=None, help="Ceiling weight % while an add thesis is active.")
+@click.option("--tranche", default=None, help="Size of one add step, in weight points.")
+@click.option("--target", default=None, help="Target review price (stamped with today's date).")
+@click.option("--review-price", default=None,
+              help="Anchor for price dislocation — the thesis-confirmed price. "
+                   "Use 'live' to anchor at the current price.")
+@click.option("--confirm-proof", is_flag=True, help="Record that the fundamental proof criterion is met.")
+@click.option("--drop-proof", is_flag=True, help="Withdraw the proof confirmation.")
+@click.option("--clear", is_flag=True, help="Remove the whole add plan for this ticker.")
+def paper_add_plan(slug, ticker, book, max_weight, tranche, target, review_price,
+                   confirm_proof, drop_proof, clear):
+    """Set a position's add plan, then show the resulting signal.
+
+    An add needs (proof OR dislocation) AND valuation AND weight AND no kill:
+
+        fund paper-add-plan my-sleeve SYSR.ST --book A --max-weight 13 \\
+            --tranche 1 --target 145 --review-price live
+    """
+    from fundmgr import addsignal
+    from fundmgr.paper import open_portfolio
+    try:
+        meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    tkr = ticker.upper()
+    if clear:
+        addsignal.clear_plan(store, tkr)
+        click.echo(f"✓ Cleared the add plan for {tkr}.")
+        return
+
+    if review_price and str(review_price).strip().lower() == "live":
+        from fundmgr.data.quotes import live_price
+        from fundmgr.paper import to_sek_price
+        native = live_price(tkr)
+        if not native:
+            raise click.ClickException(f"Could not fetch a live price for {tkr}.")
+        # Dislocation is compared against SEK prices, so the anchor must be SEK.
+        currency = meta["currency_map"].get(tkr, "SEK")
+        review_price = (native if currency == "SEK"
+                        else to_sek_price(native, currency, store))
+        if not review_price:
+            raise click.ClickException(f"No {currency}→SEK rate to anchor {tkr}.")
+        click.echo(f"  Anchoring review price at {review_price:,.2f} SEK")
+
+    addsignal.set_plan(
+        store, tkr, book=book, max_weight_pct=max_weight, tranche_pct=tranche,
+        target_price=target, review_price=review_price,
+        proof_confirmed=True if confirm_proof else (False if drop_proof else None),
+    )
+
+    row = next((r for r in addsignal.evaluate_all(store) if r["ticker"] == tkr), None)
+    if row is None:
+        click.echo(f"✓ Saved. No signal computed for {tkr} yet.")
+        return
+
+    click.echo(f"\n─── {tkr} in {meta['name']} — {row['state'].upper()} ───")
+    click.echo(f"  {row['why']}")
+    click.echo(f"  Book {row['book']}  ·  proof {'yes' if row['proof'] else 'no'}"
+               f"{' (' + row['proof_confirmed_at'] + ')' if row['proof_confirmed_at'] else ''}")
+    if row["dislocation_pct"] is not None:
+        click.echo(f"  Dislocation {row['dislocation_pct']:+.1f}% vs review "
+                   f"{row['review_price']:,.2f} (gate {row['dislocation_gate']:+.0f}%)")
+    click.echo(f"  Valuation {row['valuation_status']} — {row['valuation_reason']}")
+    if row["expected_annual_return"] is not None:
+        click.echo(f"  Expected {row['expected_annual_return']:.0f}%/yr over "
+                   f"{row['months_left']:.0f}m (gate {row['return_gate']:.0f}%)")
+    if row["max_weight_pct"]:
+        click.echo(f"  Weight {row['weight_pct']:.1f}% of max {row['max_weight_pct']:.1f}% "
+                   f"(tranche {row['tranche_pct']:.1f}pp)")
+    click.echo("")
+
+
+@cli.command("paper-adds")
+@click.option("--slug", default=None, help="Check a single portfolio instead of all.")
+def paper_adds(slug):
+    """Show the current add signal for every position carrying an add plan."""
+    from fundmgr import addsignal
+    from fundmgr.paper import list_portfolios, open_portfolio
+    slugs = [slug] if slug else [m["slug"] for m in list_portfolios()]
+    shown = False
+    for s in slugs:
+        try:
+            meta, store = open_portfolio(s)
+        except KeyError:
+            continue
+        rows = addsignal.evaluate_all(store)
+        if not rows:
+            continue
+        shown = True
+        click.echo(f"\n─── {meta['name']} ───")
+        click.echo(f"  {'TICKER':<14} {'STATE':<11} {'EXP/YR':>7} {'DISLOC':>8}  WHY")
+        for r in rows:
+            exp = f"{r['expected_annual_return']:.0f}%" if r["expected_annual_return"] is not None else "—"
+            dis = f"{r['dislocation_pct']:+.1f}%" if r["dislocation_pct"] is not None else "—"
+            click.echo(f"  {r['ticker']:<14} {r['state']:<11} {exp:>7} {dis:>8}  {r['why']}")
+    if not shown:
+        click.echo("No add plans yet — set one with 'fund paper-add-plan'.")
+
+
 @cli.command("paper-list")
 def paper_list():
     """List the paper portfolios and their current state."""

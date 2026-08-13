@@ -82,10 +82,32 @@ differs from what you wrote — a proxy is used, but never silently.
 | Margins | gross, operating, EBITDA, net |
 | Returns | ROE, ROA |
 | Cash & debt | free cash flow, operating cash flow, total cash, total debt, debt/equity |
+| Capital structure | equity/assets, net debt/assets, interest coverage, cost/income, FCF/net income |
 | Valuation | EV/EBITDA, P/E, forward P/E, price/book, dividend yield |
 
 Cash and debt figures are in the company's own reporting currency, so prefer a
 sign test ("free cash flow below 0") over an absolute amount.
+
+The **capital structure** row is not in `.info` at all — that payload is a
+normalised snapshot with nothing about leverage or solvency, so a criterion
+phrased "net debt/assets below 50%" had no field behind it. Those five are
+derived from the full statements (`fundmgr/data/statements.py`), taking balance
+-sheet stocks from the interim sheet and flows from the annual one, and merged
+into the same fundamentals cache. Everything downstream reads them without
+knowing the difference.
+
+Two more are derived but deliberately **not** offered, because a derived figure
+is not automatically the company's figure:
+
+| Metric | Derived | Balder reports | Offered? |
+|--------|---------|----------------|----------|
+| equity/assets | 37.0% | 37.0% | yes — exact |
+| net debt/assets | 52.8% | 50.4% | yes, +2.4pp — reads leverage high, which kills early rather than late |
+| net debt/EBITDA | 10.4x | 12.8x | **no** — property-company EBITDA carries revaluation gains the company excludes; it flatters |
+| cash runway | — | — | no — only defined while operations burn cash |
+
+Set a leverage gate more than ~3pp away from the current ratio, or it will trip
+on the debt definition rather than on the business.
 
 Two rules keep this list honest, both enforced in `tests/test_evidence.py`:
 every metric offered must exist in financedata's `_FIELD_MAP`, and a mapped key

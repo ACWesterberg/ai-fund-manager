@@ -23,22 +23,30 @@ Two rules throughout:
     not infinity — an interest coverage of 1e18 because interest expense
     rounded to zero would sail through any "coverage ≥ 2.5" gate.
 
-Reconciled against Balder's own Q2 reporting, which is why two of these are
-derived but NOT offered as criterion metrics:
+Reconciled against Balder's own Q2 reporting. A derived figure is not
+automatically the company's figure, and both the size and the *direction* of
+the difference decide whether it can back a criterion:
 
-  net debt/assets   50.6% vs 50.4% reported — trustworthy, offered
-  equity/assets     34.0% vs 37.0% reported — "Stockholders Equity" excludes
-                    minority and hybrid capital that the company's own ratio
-                    includes; a criterion written to the company's definition
-                    would read ~3pp low against this
-  net debt/EBITDA   9.75x vs 12.8x reported — income-statement EBITDA for a
-                    property company includes revaluation gains the company
-                    excludes from its leverage metric. This one flatters, which
-                    is the wrong direction for a leverage gate, and no choice of
-                    row label fixes it
+  equity/assets     37.0% vs 37.0% reported — exact, offered. Reaching it took
+                    both fixes below: the gross equity row and the interim
+                    sheet. Either one alone lands ~3pp out.
+  net debt/assets   52.8% vs 50.4% reported — offered, with a known +2.4pp
+                    bias. yfinance's "Total Debt" appears to fold in lease
+                    liabilities the company keeps out of its own net debt.
+                    Reading leverage *high* is the safe direction for a gate
+                    written "below X" — it kills early, never late — but a
+                    criterion set within ~3pp of the current ratio will trip on
+                    the definition rather than on the business.
+  net debt/EBITDA   10.4x vs 12.8x reported — derived, NOT offered.
+                    Income-statement EBITDA for a property company includes
+                    revaluation gains the company excludes from its leverage
+                    metric. This one flatters, which is the wrong direction for
+                    a leverage gate, and no choice of row label fixes it.
 
-A derived figure is not automatically the company's figure, and the difference
-decides whether it can back a criterion at all.
+An earlier version of this note recorded net debt/assets as 50.6% vs 50.4% and
+called it near-exact. That agreement was an artefact: an annual balance sheet
+compared against an interim reported ratio. Once both sides came from the same
+quarter the real gap appeared.
 """
 from __future__ import annotations
 

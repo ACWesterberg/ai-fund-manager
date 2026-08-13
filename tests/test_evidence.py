@@ -594,7 +594,8 @@ def test_fraction_flags_match_the_providers_units():
                          "ebitda_margin", "roe", "roa", "revenue_growth",
                          "earnings_growth", "dividend_yield",
                          # derived ratios, already fractions by construction
-                         "net_debt_to_assets", "cost_to_income", "fcf_to_net_income"}
+                         "equity_to_assets", "net_debt_to_assets",
+                         "cost_to_income", "fcf_to_net_income"}
 
 
 # ── fundamentals-check CLI ────────────────────────────────────────────────────

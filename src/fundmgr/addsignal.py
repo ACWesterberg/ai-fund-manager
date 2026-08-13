@@ -208,25 +208,58 @@ def valuation_status(store: Store, ticker: str, plan: dict | None = None,
     if not plan.get("target_price") or not set_at:
         return {"status": "unset", "reason": "no target review price set", "events": []}
 
+    events = _events_since(store, ticker, set_at)
+    if events:
+        return {"status": "stale",
+                "reason": f"{len(events)} thesis-changing event(s) since {set_at}",
+                "events": sorted(events)}
+    return {"status": "fresh", "reason": f"set {set_at}", "events": []}
+
+
+def _events_since(store: Store, ticker: str, stamp: str) -> list[str]:
+    """Thesis-changing breadcrumbs recorded after `stamp` (an ISO date).
+
+    Reads the keys the earnings and kill watches already leave behind, so
+    noticing that a report landed needs no bookkeeping of its own.
+    """
     ticker = ticker.upper()
-    events: list[str] = []
     with store._conn() as conn:
         rows = conn.execute("SELECT key FROM app_meta WHERE key LIKE ?",
                             (f"%:{ticker}:%",)).fetchall()
+    out: list[str] = []
     for row in rows:
         key = row["key"]
         if not key.startswith(_STALE_EVENT_PREFIXES):
             continue
         when = key.rsplit(":", 1)[-1]
         # Keys end in the event date; anything after the stamp invalidates it.
-        if len(when) == 10 and when > set_at:
-            events.append(key)
+        if len(when) == 10 and when > stamp:
+            out.append(key)
+    return out
 
+
+def proof_status(store: Store, ticker: str, plan: dict | None = None) -> dict:
+    """Whether a confirmed proof still stands. {status, reason, events}.
+
+    Proof is a human reading of a report, so it is only ever true *of a
+    report*. Once the next print lands it is a statement about a quarter that
+    has been superseded — and an ADD resting on it is resting on a judgement
+    nobody has made about the current numbers. The target price already expires
+    this way; proof did not, which meant a confirmation from Q1 still opened
+    the gate after Q3 had reported.
+    """
+    plan = get_plan(store, ticker) if plan is None else plan
+    confirmed_at = plan.get("proof_confirmed_at")
+    if not confirmed_at:
+        return {"status": "unset", "reason": "proof not confirmed", "events": []}
+
+    events = _events_since(store, ticker, confirmed_at)
     if events:
         return {"status": "stale",
-                "reason": f"{len(events)} thesis-changing event(s) since {set_at}",
+                "reason": f"{len(events)} report(s) since proof was confirmed on "
+                          f"{confirmed_at}",
                 "events": sorted(events)}
-    return {"status": "fresh", "reason": f"set {set_at}", "events": []}
+    return {"status": "fresh", "reason": f"confirmed {confirmed_at}", "events": []}
 
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
@@ -249,9 +282,11 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
     gates = BOOK_GATES.get(book, BOOK_GATES[DEFAULT_BOOK])
 
     # Proof: human-confirmed at the last report. Almost none of these metrics
-    # (organic growth, ARR, adjusted margins) exist in any price feed.
+    # (organic growth, ARR, adjusted margins) exist in any price feed — and a
+    # confirmation expires with the report it was made about.
     proof_at = plan.get("proof_confirmed_at")
-    proof = bool(proof_at)
+    proof_state = proof_status(store, ticker, plan)
+    proof = proof_state["status"] == "fresh"
 
     # Dislocation from the thesis-confirmed anchor, never from cost.
     review_price = plan.get("review_price")
@@ -281,7 +316,8 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
                 and weight_pct > max_weight)
 
     state, why = _classify(killed, proof, dislocated, valuation_ok, weight_ok,
-                           valuation, expected, gates, room, tranche, over_max)
+                           valuation, expected, gates, room, tranche, over_max,
+                           proof_state)
 
     return {
         "ticker": ticker,
@@ -290,6 +326,8 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
         "book": book,
         "proof": proof,
         "proof_confirmed_at": proof_at,
+        "proof_status": proof_state["status"],
+        "proof_reason": proof_state["reason"],
         "dislocation_pct": round(dislocation_pct, 1) if dislocation_pct is not None else None,
         "dislocation_gate": gates["dislocation_pct"],
         "dislocated": dislocated,
@@ -314,13 +352,18 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
 
 
 def _classify(killed, proof, dislocated, valuation_ok, weight_ok,
-              valuation, expected, gates, room, tranche, over_max):
+              valuation, expected, gates, room, tranche, over_max,
+              proof_state=None):
     """The state machine, with the reason the state was reached."""
+    proof_state = proof_state or {"status": "unset"}
     if killed:
         return KILL, "kill criterion active — add signals are suppressed"
     if over_max:
         return HOLD, "above max weight — concentration review, not an add"
     if not (proof or dislocated):
+        if proof_state["status"] == "stale":
+            return HOLD, (f"proof is stale ({proof_state['reason']}) and there is "
+                          f"no price dislocation — re-read the print")
         return HOLD, "no fundamental proof and no price dislocation"
 
     # A stale target is the failure this module exists to prevent: the price

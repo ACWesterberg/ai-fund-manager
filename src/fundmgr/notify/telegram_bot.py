@@ -12,6 +12,7 @@ Commands:
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
   /setcash AMOUNT — correct the cash balance (SEK)
+  /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
   /help          — show this message
 
 Photo messages:
@@ -389,6 +390,40 @@ async def cmd_psetcost(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
 
 
+async def cmd_proof(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/proof [SLUG] TICKER yes|no — answer the post-earnings proof question.
+
+    The post-earnings alert asks whether the print confirmed the thesis; this
+    is how it gets answered, in the same place the question arrived. The slug
+    is optional when a book is already active, but the alert quotes it in full
+    so the reply works from a cold chat.
+    """
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    verdict = args[-1].lower() if args else ""
+    if verdict not in ("yes", "y", "no", "n") or len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /proof [SLUG] TICKER yes|no\n"
+            "Example: /proof kf-chokepoint-satellite SYSR.ST yes\n"
+            "'yes' records the fundamental proof as met at this report; "
+            "'no' withdraws it.")
+        return
+
+    if len(args) >= 3:
+        slug, ticker = args[0].lower(), args[1].upper()
+    else:
+        slug = _active_book.get(update.effective_chat.id)
+        ticker = args[0].upper()
+        if not slug:
+            await update.message.reply_text(
+                "No active book — either /ptarget <slug> first, or give it "
+                "explicitly: /proof <slug> TICKER yes|no")
+            return
+
+    flag = "--confirm-proof" if verdict in ("yes", "y") else "--drop-proof"
+    output = _run_cli("paper-add-plan", slug, ticker, flag, timeout=45)
+    await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
+
+
 async def cmd_pstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/pstatus — snapshot of the active paper book."""
     chat_id = update.effective_chat.id
@@ -445,6 +480,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/pretag OLD [NEW] — fix a mis-tagged holding (e.g. ENR → ENR.DE)\n"
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
         "/pstatus — snapshot of the active book\n"
+        "/proof [SLUG] TICKER yes|no — answer the post-earnings proof question\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -784,6 +820,7 @@ def main() -> None:
     app.add_handler(CommandHandler("pretag",   cmd_pretag))
     app.add_handler(CommandHandler("psetcost", cmd_psetcost))
     app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
+    app.add_handler(CommandHandler("proof",    cmd_proof))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

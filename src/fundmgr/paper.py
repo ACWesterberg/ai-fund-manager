@@ -1758,9 +1758,52 @@ def check_earnings_calendar(slug: str, store: Store | None = None) -> list[str]:
             if kill:
                 lines.append(f"Kill criterion: {kill}")
             lines.append("If the kill criterion is met, act per the plan.")
+            lines += _proof_prompt(store, slug, ticker)
             send_telegram("\n".join(lines))
             log.append(f"📊 {ticker} post-earnings reminder ({estr})")
     return log
+
+
+def _proof_prompt(store: Store, slug: str, ticker: str) -> list[str]:
+    """The proof question for a position that has an add plan, or [].
+
+    The reminder used to say "check the print against the thesis" and stop
+    there. The one thing it never did was *ask* — so `proof_confirmed` stayed
+    whatever it was, and the report that just invalidated it is the same report
+    that should have prompted a new answer. This closes that loop: the question
+    arrives where the alert does, with the figures that moved, and an answer
+    that is one reply long.
+    """
+    from fundmgr import addsignal
+
+    plan = addsignal.get_plan(store, ticker)
+    if not plan:
+        return []
+
+    lines = ["", "<b>Proof check</b> — did this print confirm the thesis?"]
+    state = addsignal.proof_status(store, ticker, plan)
+    if state["status"] == "fresh":
+        lines.append(f"Currently confirmed ({plan.get('proof_confirmed_at')}); "
+                     f"this report supersedes it.")
+    elif state["status"] == "stale":
+        lines.append(f"⚠ {state['reason']}")
+    else:
+        lines.append("Not yet confirmed for any report.")
+
+    # The numbers that moved, so the question can be answered from the message
+    # rather than from memory.
+    try:
+        from fundmgr.evidence import FUND_FIELD_META, fundamentals_trend
+        moved = [r for r in fundamentals_trend(store, ticker)
+                 if r.get("direction") in ("up", "down")][:4]
+        for row in moved:
+            lines.append(f"• {row['label']}: {row['text']}")
+    except Exception:
+        pass
+
+    lines.append(f"Reply <code>/proof {slug} {ticker} yes</code> "
+                 f"— or <code>no</code> to clear it.")
+    return lines
 
 
 def _next_earnings_date(ticker: str):

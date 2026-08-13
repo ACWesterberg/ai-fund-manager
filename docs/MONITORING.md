@@ -426,6 +426,45 @@ thesis-changing event recorded after that date — an earnings report, a kill hi
 value is recalculated. Staleness reads the breadcrumbs the earnings and kill
 watches already leave, so noticing a report landed needs no new bookkeeping.
 
+**Proof expires the same way.** A confirmation is a human reading of a report,
+so it is only ever true *of that report* — once the next print lands, it is a
+statement about a superseded quarter, and an ADD resting on it rests on a
+judgement nobody has made about the current numbers. Proof used to be a plain
+boolean, so a confirmation from Q1 still opened the gate after Q3 had reported.
+It now carries `proof_status`: **unset**, **fresh**, or **stale**, on the same
+event scan as the target.
+
+Proof and target expire together but are cleared separately, deliberately: *"the
+thesis still holds"* is not *"and 145 is still the right number"*. Answering the
+proof question after a report leaves the valuation gate asking to be
+recalculated, and the position sits at ADD-WATCH until both are done.
+
+#### The post-earnings prompt
+
+The day-after-earnings alert used to say "check the print against the thesis"
+and stop there — the one thing it never did was *ask*. The same report that
+invalidates a proof is the report that should prompt a new answer, so for any
+position with an add plan the alert now carries the question, the current proof
+state, the figures that moved since the last snapshot, and a reply that answers
+it from the phone:
+
+```
+📊 KF Chokepoint Satellite — SYSR.ST reported yesterday (2026-08-20)
+Check the print against the thesis:
+Watch: order intake in the defence segment
+Kill criterion: recurring growth below 8% two quarters running
+
+Proof check — did this print confirm the thesis?
+Currently confirmed (2026-08-12); this report supersedes it.
+• Revenue growth (yoy): +7.1%  (was +12.0% on 2026-05-20 — down)
+• Operating margin: +18.2%  (was +21.0% on 2026-05-20 — down)
+Reply /proof kf-chokepoint-satellite SYSR.ST yes — or no to clear it.
+```
+
+`/proof [SLUG] TICKER yes|no` is a Telegram command; the slug is optional when a
+book is already active via `/ptarget`, and the alert quotes it in full so the
+reply works from a cold chat.
+
 ### Three weights, not one
 
 Target is the normal allocation, current is where you are, **max** is the
@@ -441,3 +480,39 @@ fund paper-adds                                          # current signals
 
 Both run inside `fund paper-track`, after the kill watches so a position that
 has just tripped a kill can never also be suggested.
+
+---
+
+## Data sources considered and rejected
+
+### MFN (Modular Finance) — investigated 2026-08-13, not built
+
+Most of the criterion coverage gap is language only a company's own release
+carries: order intake, segment detail, guidance changes. MFN distributes Nordic
+regulatory disclosures, so it looked like the way to close it. It is not, at
+least not cheaply, and the reasons are worth keeping so this doesn't get
+re-derived from scratch:
+
+- **`feed.mfn.se/v1` is a WebSub hub**, not a REST archive — it answers
+  `https://feed.mfn.se/v1 - WebSub hub server`. Every `GET` returns 400 because
+  a hub expects `POST hub.mode=subscribe&hub.topic=…&hub.callback=…`. Consuming
+  it means **push**: a publicly reachable inbound HTTPS callback, which the Pi
+  deliberately does not have — `poll-deploy.sh` exists precisely so nothing has
+  to reach in. A tunnel plus a receiver plus subscription renewal is real
+  infrastructure for one feed.
+- **The website is slug-addressed**, not id-addressed: `/all/a/castellum` is the
+  company page, `/a/<company>/<article>` the release. The UUIDs on those pages
+  are per-document storage keys, not company ids. Link count is a sound slug
+  test — Castellum returns 48, a nonsense slug returns 0.
+- **`mfn.se/robots.txt` disallows `*.json$`, `*.rss$`, `*.xml$`, `*.atom$`** for
+  every agent, while leaving the HTML pages open. `feed.mfn.se` serves no
+  robots.txt at all, which is an absence of direction rather than a permission.
+- **Issuer coverage is unverified.** Site search is client-side JavaScript, so a
+  server-side `?query=` proves nothing either way — the probes that appeared to
+  show a name missing were simply incapable of answering. No single distributor
+  covers the Swedish market (Cision and Nasdaq carry the rest), so coverage has
+  to be checked holding by holding before this is worth building.
+
+If it is revisited, the order is: ask Modular Finance whether a documented feed
+exists for this use, then check slug coverage across the actual book, and only
+then choose between WebSub and reading the HTML company pages.

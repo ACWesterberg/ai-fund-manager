@@ -287,6 +287,104 @@ def test_a_text_kill_verdict_also_overrides(store):
     assert _state(store)["state"] == addsignal.KILL
 
 
+# ── Proof expires with the report it was made about ───────────────────────────
+
+def _reported(store, ticker="SYSR.ST", on="2026-08-20"):
+    """The breadcrumb the post-earnings watch leaves when a print lands."""
+    store.set_meta(f"paper_earnpost:{ticker}:{on}", on)
+
+
+def test_proof_goes_stale_when_the_next_report_lands(store):
+    """A confirmation is a reading of a report. Once the next one lands it is a
+    statement about a quarter that has been superseded."""
+    _setup(store, price=100, target=145, review=100, proof=True)
+    assert addsignal.proof_status(store, "SYSR.ST")["status"] == "fresh"
+
+    _reported(store)
+    state = addsignal.proof_status(store, "SYSR.ST")
+    assert state["status"] == "stale"
+    assert "since proof was confirmed on 2026-08-12" in state["reason"]
+
+
+def test_stale_proof_does_not_open_the_add_gate(store):
+    """The failure this closes: an ADD resting on a judgement nobody has made
+    about the current numbers."""
+    _setup(store, price=100, target=145, review=100, proof=True)
+    assert _state(store)["state"] == addsignal.ADD
+
+    _reported(store)
+    row = _state(store)
+    assert row["state"] == addsignal.HOLD
+    assert row["proof"] is False
+    assert row["proof_status"] == "stale"
+    assert "re-read the print" in row["why"]
+
+
+def test_re_confirming_after_the_report_restores_proof_but_not_the_target(store):
+    """Answering the proof question must not silently re-validate fair value.
+
+    The same report that superseded the proof also superseded the target price,
+    and they are separate judgements: "the thesis still holds" is not "and 145
+    is still the right number". Confirming proof clears its own gate and leaves
+    the valuation one asking to be recalculated.
+    """
+    _setup(store, price=100, target=145, review=100, proof=True)
+    _reported(store, on="2026-08-20")
+    addsignal.set_plan(store, "SYSR.ST", proof_confirmed=True, today=date(2026, 8, 21))
+
+    row = _state(store)
+    assert addsignal.proof_status(store, "SYSR.ST")["status"] == "fresh"
+    assert row["proof"] is True
+    assert row["state"] == addsignal.ADD_WATCH
+    assert "valuation is stale" in row["why"]
+
+    # Restating the target as well is what completes the review.
+    addsignal.set_plan(store, "SYSR.ST", target_price=150, today=date(2026, 8, 21))
+    assert _state(store)["state"] == addsignal.ADD
+
+
+def test_unconfirmed_proof_is_unset_not_stale(store):
+    _setup(store, price=100, target=145, review=100)
+    _reported(store)
+    row = _state(store)
+    assert row["proof_status"] == "unset"
+    assert "no fundamental proof" in row["why"]
+
+
+def test_a_dislocated_name_still_moves_on_stale_proof(store):
+    """Staleness removes the proof leg, not the dislocation one."""
+    _setup(store, price=85, target=145, review=100, proof=True)
+    _reported(store)
+    row = _state(store)
+    assert row["proof"] is False
+    assert row["dislocated"] is True
+    assert row["state"] == addsignal.ADD_WATCH      # dislocation alone, as designed
+
+
+# ── The post-earnings proof prompt ────────────────────────────────────────────
+
+def test_the_post_earnings_alert_asks_the_proof_question(store):
+    _setup(store, price=100, target=145, review=100, proof=True)
+    lines = paper._proof_prompt(store, "add-sleeve", "SYSR.ST")
+    text = "\n".join(lines)
+    assert "did this print confirm the thesis?" in text
+    assert "/proof add-sleeve SYSR.ST yes" in text
+    assert "this report supersedes it" in text
+
+
+def test_the_prompt_flags_an_already_stale_proof(store):
+    _setup(store, price=100, target=145, review=100, proof=True)
+    _reported(store)
+    text = "\n".join(paper._proof_prompt(store, "add-sleeve", "SYSR.ST"))
+    assert "⚠" in text and "since proof was confirmed" in text
+
+
+def test_no_add_plan_means_no_proof_question(store):
+    """The prompt is for positions being scaled into, not every holding."""
+    _hold(store)
+    assert paper._proof_prompt(store, "add-sleeve", "SYSR.ST") == []
+
+
 # ── The watch ─────────────────────────────────────────────────────────────────
 
 def test_add_alerts_once_per_state_change(store, telegram):

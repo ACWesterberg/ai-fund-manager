@@ -130,6 +130,8 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
     # drift fill in for held positions.
     weight_by = {p["ticker"]: p["weight_pct"] for p in positions_data}
     pnl_by = {p["ticker"]: p.get("pnl_pct") for p in positions_data}
+    price_by = {p["ticker"]: p.get("current_price") for p in positions_data}
+    cost_by = {p["ticker"]: p.get("avg_cost") for p in positions_data}
     tickers = list(dict.fromkeys(
         list(targets) + [p["ticker"] for p in positions_data] + sorted(watchplan.plan_tickers(store))
     ))
@@ -149,9 +151,14 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
                    if (s["metric"], s["op"]) not in applied]
         left = watchplan.days_left(horizon.get("review_date"))
         # Live P&L against the drawdown line, so the panel shows how close a
-        # position is to its kill without waiting for the daily watch.
+        # position is to its kill without waiting for the daily watch. It goes
+        # through watchplan.drawdown_for rather than comparing P&L directly:
+        # the panel and the watch have to breach on the same number, and P&L is
+        # measured from cost while the line is measured from the review anchor.
         pnl = pnl_by.get(t)
         max_dd = rule.get("max_drawdown_pct")
+        dd = watchplan.drawdown_for(rule, price_sek=price_by.get(t),
+                                    avg_cost_sek=cost_by.get(t))
         rows.append({
             "ticker": t,
             "held": held,
@@ -176,7 +183,11 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "fundamental_rules": rule.get("fundamentals") or [],
             "rule_currency": rule.get("currency") or "",
             "pnl_pct": pnl,
-            "dd_breached": bool(max_dd and pnl is not None and pnl <= -abs(max_dd)),
+            "drawdown_pct": round(dd["pct"], 1) if dd["pct"] is not None else None,
+            "drawdown_basis": dd["basis"],
+            "anchor_date": dd["anchor_date"],
+            "dd_breached": bool(max_dd and dd["pct"] is not None
+                                and dd["pct"] <= -abs(max_dd)),
             "horizon_date": horizon.get("review_date", ""),
             "horizon_label": horizon.get("label", ""),
             "horizon_note": horizon.get("note", ""),
@@ -603,6 +614,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         horizon_date: str = Form(""),
         horizon_months: str = Form(""),
         horizon_note: str = Form(""),
+        re_anchor: str = Form(""),
         remove: str = Form(""),
     ):
         """Set (or clear) one position's kill criteria and time horizon."""
@@ -642,6 +654,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             review_date=horizon_date,
             horizon_months=horizon_months,
             horizon_note=horizon_note,
+            re_anchor=bool(re_anchor),
         )
 
         # Read the criterion back at save time, so how it will be judged is
@@ -658,7 +671,12 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             bits.append("kill criterion")
         rules = plan["kill_rules"]
         if rules.get("max_drawdown_pct"):
-            bits.append(f"-{rules['max_drawdown_pct']:g}% drawdown line")
+            # Say what the line is measured from — the whole point of the
+            # anchor is that it is visible, not inferred.
+            anchored = (f" from {rules['anchor_price_sek']:,.2f} SEK on "
+                        f"{rules.get('anchor_date', '')}"
+                        if rules.get("anchor_price_sek") else " from cost")
+            bits.append(f"-{rules['max_drawdown_pct']:g}% drawdown line{anchored}")
         if rules.get("price_below"):
             bits.append(f"floor {rules['price_below']:g}")
         if rules.get("price_above"):

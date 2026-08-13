@@ -1575,7 +1575,7 @@ def fundamentals_check(ticker: str):
 def paper_watch(slug: str | None):
     """Check numeric kill lines and time horizons across the portfolios.
 
-    Kill lines (max drawdown from cost, price floor, price target) are compared
+    Kill lines (max drawdown from the review anchor, price floor, price target) are compared
     with current prices; horizons alert at 30/14/7/1 days out and on the day.
     Neither needs an API key. Both also run as part of 'fund paper-track'."""
     from fundmgr.paper import list_portfolios
@@ -1597,16 +1597,18 @@ def paper_watch(slug: str | None):
 @click.argument("slug")
 @click.argument("ticker")
 @click.option("--kill", default=None, help="Kill criterion text (empty string clears it).")
-@click.option("--max-drop", default=None, help="Max % drawdown from cost before alerting.")
+@click.option("--max-drop", default=None, help="Max % drawdown from the review price before alerting.")
 @click.option("--price-below", default=None, help="Alert when price falls to/below this (native currency).")
 @click.option("--price-above", default=None, help="Alert when price rises to/above this (native currency).")
 @click.option("--horizon", default=None, help="Review date, YYYY-MM-DD.")
 @click.option("--months", default=None, help="…or a horizon this many months out.")
 @click.option("--note", default=None, help="Note on what should be true by the horizon.")
+@click.option("--re-anchor", is_flag=True,
+              help="Measure the drawdown line from today's price (do this after a fresh analysis).")
 @click.option("--clear", is_flag=True, help="Remove the whole watch plan for this ticker.")
 def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
                price_below: str | None, price_above: str | None, horizon: str | None,
-               months: str | None, note: str | None, clear: bool):
+               months: str | None, note: str | None, re_anchor: bool, clear: bool):
     """Set a position's kill criteria and time horizon.
 
     The CLI twin of the dashboard's watch-plan editor:
@@ -1631,7 +1633,7 @@ def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
         store, tkr, kill_criterion=kill, max_drawdown_pct=max_drop,
         price_below=price_below, price_above=price_above,
         currency=meta["currency_map"].get(tkr), review_date=horizon,
-        horizon_months=months, horizon_note=note,
+        horizon_months=months, horizon_note=note, re_anchor=re_anchor,
     )
     click.echo(f"✓ {tkr} in {meta['name']}:")
     click.echo(f"  Kill criterion: {plan['kill_criterion'] or '—'}")
@@ -1639,6 +1641,11 @@ def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
     click.echo(f"  Max drop: {rules.get('max_drawdown_pct') or '—'}   "
                f"Floor: {rules.get('price_below') or '—'}   "
                f"Target: {rules.get('price_above') or '—'}")
+    if rules.get("max_drawdown_pct"):
+        anchor = rules.get("anchor_price_sek")
+        click.echo(f"  Measured from: {anchor:,.2f} SEK on {rules.get('anchor_date', '')}"
+                   if anchor else
+                   "  Measured from: cost basis (no price cached when the line was set)")
     hz = plan["horizon"]
     if hz.get("review_date"):
         click.echo(f"  Horizon: {hz['review_date']} ({hz.get('label', '')}, "

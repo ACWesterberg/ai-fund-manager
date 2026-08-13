@@ -48,8 +48,35 @@ fund paper-plan kf-chokepoint-satellite NVDA --clear
 | Condition | Set with | Checked by |
 |-----------|----------|------------|
 | **Kill criterion** (text) | what would falsify the thesis | daily judge (gpt-4o-mini) over an evidence pack |
-| **Kill rules** (numeric) | max % drop from cost, price floor, price target | prices, every run — no API key needed |
+| **Kill rules** (numeric) | max % drop from the review anchor, price floor, price target | prices, every run — no API key needed |
 | **Time horizon** | a date, or N months out | days remaining, every run |
+
+#### What a drawdown line is measured from
+
+Not cost. A max-drop line anchors to the price **on the day you set it**, because
+that is when the thesis it tests was written. Bought at 40, reviewed at 100, now
+70: that is −30% against a −25% line — a kill — even though the position is still
++75% on cost and would look untouched from there. The anchor is the same idea the
+add plan's **review price** already uses for dislocation, and a new drawdown line
+falls back to it when no price is cached yet.
+
+Three rules keep the anchor honest:
+
+- **Editing the threshold does not move it.** Tightening 25% → 20% is a change of
+  mind about the line, not a fresh review; re-anchoring there would quietly reset
+  a position already halfway to its kill.
+- **Moving it is a deliberate act** — the *Re-anchor to today* button, or
+  `fund paper-plan <slug> <TICKER> --re-anchor`. Do it after you have actually
+  re-run the analysis.
+- **Rules written before anchors existed keep measuring from cost**, and say so
+  in the badge and in the alert text. Silently re-anchoring an armed kill line
+  would have disarmed it.
+
+The badge on the Watch panel carries both the line and the live number against
+it (`−25% from review · −12%`), and the P&L column stays measured from cost — two
+different questions, so they are no longer mixed in one cell. Panel and daily
+watch both call `watchplan.drawdown_for`, so a line cannot read breached in one
+and clear in the other.
 
 ### How your criterion text is read
 
@@ -186,7 +213,7 @@ fund paper-watch                 # kill lines + horizons, all books
 fund paper-watch --slug my-sleeve
 ```
 
-The dashboard's Watch-status panel shows live P&L against each drawdown line
+The dashboard's Watch-status panel shows the live drop against each drawdown line
 and the days left on each horizon, most urgent first.
 
 ## 1. Create the mirror from a structured LLM answer
@@ -230,7 +257,7 @@ Telegram only when something fires:
 | Watch | Fires when |
 |-------|-----------|
 | Per-position kill criteria | Recent news plausibly meets a position's pre-registered kill line |
-| **Numeric kill rules** | A position drops past its max-drop line from cost, or through a price floor / up to a price target |
+| **Numeric kill rules** | A position drops past its max-drop line from the review anchor, or through a price floor / up to a price target |
 | **Time horizons** | A position's review date is 30 / 14 / 7 / 1 days out, or has arrived — time for fresh analysis |
 | **Portfolio capex kill** | 1 of the 5 largest hyperscalers guides 2027 capex flat/down → **warning**; 2+ → **KILL: halve the compute cluster** |
 | **Earnings calendar** | Day before/of a holding's report → heads-up (quotes its `watch` + kill lines); day after → check-the-print reminder |

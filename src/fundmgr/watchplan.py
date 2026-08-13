@@ -8,8 +8,12 @@ and all editable from the live dashboard:
     thesis ("loses the Apple socket", "capex guide cut"). Judged daily against
     fresh headlines by `paper.check_kill_criteria`.
   • **Kill rules (numeric)** — hard lines that need no interpretation: a max
-    drawdown from cost, a price floor, a price ceiling. Checked here, against
-    prices, deterministically.
+    drawdown, a price floor, a price ceiling. Checked here, against prices,
+    deterministically. Drawdown is measured from the **review anchor** — the
+    price on the day the line was set — not from cost: a position bought in
+    2021 and reviewed last month should be judged on the month. Rules written
+    before anchors existed keep measuring from cost, and say so, because
+    silently re-anchoring an armed kill line would disarm it.
   • **Time horizon** — the date the thesis is supposed to have played out by.
     Nearing it is the cue to run fresh analysis rather than to sell, so the
     alerts escalate as it approaches (30 / 14 / 7 / 1 days, then on the day).
@@ -29,7 +33,7 @@ from fundmgr.state.store import Store
 
 # app_meta keys
 KILL_TEXT_KEY = "paper_kill_criteria"      # {ticker: "text"} — shared with the JSON import
-KILL_RULES_KEY = "paper_kill_rules"        # {ticker: {max_drawdown_pct, price_below, price_above, fundamentals[], currency}}
+KILL_RULES_KEY = "paper_kill_rules"        # {ticker: {max_drawdown_pct, price_below, price_above, fundamentals[], currency, anchor_price_sek, anchor_date}}
 HORIZONS_KEY = "paper_horizons"            # {ticker: {review_date, label, note, set_at}}
 ANALYSIS_KEY = "paper_killanalysis"        # {ticker: {logic, conditions[], criterion}} — per-ticker key
 
@@ -87,6 +91,59 @@ def _signed_num(value) -> float | None:
         return None
 
 
+def drawdown_for(rule: dict, *, price_sek: float | None,
+                 avg_cost_sek: float | None) -> dict:
+    """How far a position is down, and from what.
+
+    One definition, shared by the daily watch and the dashboard panel — they
+    used to compute this separately, so a drawdown line could read "breached"
+    in one and clear in the other the moment the two anchors diverged.
+
+    Returns {pct, basis, anchor_price_sek, anchor_date, from_cost_pct}:
+
+      basis "review"  measured from the price when the line was set — what a
+                      kill line is actually about, since the thesis it tests
+                      dates from the review, not from the purchase
+      basis "cost"    the fallback, for rules predating the anchor and for
+                      positions whose price was unknown when the line was set
+    """
+    anchor = _signed_num(rule.get("anchor_price_sek"))
+    cost = _signed_num(avg_cost_sek)
+    basis_price = anchor if (anchor and anchor > 0) else (cost if cost and cost > 0 else None)
+
+    def _pct(reference):
+        if not reference or not price_sek:
+            return None
+        return (price_sek / reference - 1) * 100
+
+    return {
+        "pct": _pct(basis_price),
+        "basis": "review" if (anchor and anchor > 0) else "cost",
+        "anchor_price_sek": anchor,
+        "anchor_date": rule.get("anchor_date") or "",
+        "from_cost_pct": _pct(cost),
+    }
+
+
+def _current_price_sek(store: Store, ticker: str) -> float | None:
+    """Cached SEK price for one ticker, or None.
+
+    Never makes a network call: an anchor is only worth recording if the price
+    is already known, and saving a plan must not block on a quote feed. No
+    anchor simply means the rule keeps measuring from cost.
+    """
+    try:
+        rows = store.get_prices(ticker)
+        if not rows or not rows[-1].get("close"):
+            return None
+        from fundmgr import paper
+        native = {ticker: float(rows[-1]["close"])}
+        return paper.sek_prices_for(
+            store, [ticker], _load(store, "paper_currency_map"), native).get(ticker)
+    except Exception:
+        return None
+
+
 def parse_horizon(review_date: str = "", months: str | float | None = None,
                   today: date | None = None) -> tuple[str, str] | None:
     """Turn user input into (ISO review date, label).
@@ -134,6 +191,8 @@ def set_position_plan(
     review_date: str | None = None,
     horizon_months=None,
     horizon_note: str | None = None,
+    re_anchor: bool = False,
+    anchor_price_sek=None,
     today: date | None = None,
 ) -> dict:
     """Set (or clear) one position's kill criterion, kill rules and horizon.
@@ -144,6 +203,13 @@ def set_position_plan(
 
     Editing a rule re-arms its alert, so a tightened line can fire again today
     instead of staying suppressed by the previous rule's state.
+
+    A new drawdown line anchors to today's price. Editing an existing one does
+    **not** move that anchor — tightening a line from 25% to 20% is a change of
+    mind about the threshold, not a fresh review, and re-anchoring there would
+    quietly reset a position already halfway to its kill. Moving the anchor is
+    its own deliberate act: `re_anchor=True`, after you have actually re-run
+    the analysis.
     """
     ticker = (ticker or "").strip().upper()
     if not ticker:
@@ -158,8 +224,8 @@ def set_position_plan(
             texts.pop(ticker, None)
         store.set_meta(KILL_TEXT_KEY, json.dumps(texts))
 
-    if any(v is not None for v in (max_drawdown_pct, price_below, price_above,
-                                   fundamentals)):
+    if re_anchor or any(v is not None for v in (max_drawdown_pct, price_below,
+                                                price_above, fundamentals)):
         rules = get_kill_rules(store)
         rule = dict(rules.get(ticker) or {})
         for field, value in (("max_drawdown_pct", max_drawdown_pct),
@@ -180,6 +246,34 @@ def set_position_plan(
                 rule.pop("fundamentals", None)
         if currency:
             rule["currency"] = currency.strip().upper()
+
+        # Anchor a drawdown line to the price it was set at — but only when
+        # there isn't one yet, or when a re-anchor was asked for explicitly.
+        if rule.get("max_drawdown_pct"):
+            if re_anchor or not rule.get("anchor_price_sek"):
+                anchored = _signed_num(anchor_price_sek)
+                if anchored is None:
+                    anchored = _current_price_sek(store, ticker)
+                if anchored is None:
+                    # The add plan already records a review price — the same
+                    # idea, kept for the dislocation gate. Reuse it rather than
+                    # leave the line on cost, so the two halves of a position's
+                    # monitoring measure from the same day.
+                    try:
+                        from fundmgr import addsignal
+                        anchored = _signed_num(
+                            addsignal.get_plan(store, ticker).get("review_price"))
+                    except Exception:
+                        anchored = None
+                if anchored and anchored > 0:
+                    rule["anchor_price_sek"] = round(float(anchored), 6)
+                    rule["anchor_date"] = (
+                        today or datetime.now(timezone.utc).date()).isoformat()
+        else:
+            # No drawdown line, no anchor to keep.
+            rule.pop("anchor_price_sek", None)
+            rule.pop("anchor_date", None)
+
         rule = {k: v for k, v in rule.items() if k == "currency" or v is not None}
         if any(k in rule for k in ("max_drawdown_pct", "price_below", "price_above",
                                    "fundamentals")):
@@ -521,15 +615,19 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
         price_sek = prices_sek.get(ticker)
         currency = rule.get("currency") or currency_map.get(ticker) or "SEK"
 
-        drawdown = None
-        if pos and pos.avg_cost_sek and price_sek:
-            drawdown = (price_sek / pos.avg_cost_sek - 1) * 100
+        dd = drawdown_for(rule, price_sek=price_sek,
+                          avg_cost_sek=pos.avg_cost_sek if pos else None)
+        drawdown = dd["pct"]
 
         reasons: list[str] = []
         max_dd = rule.get("max_drawdown_pct")
         if max_dd and drawdown is not None and drawdown <= -abs(max_dd):
+            # Name the anchor in the alert: "down 22% from cost" and "down 22%
+            # since the review" call for different responses.
+            since = (f"the {dd['anchor_date']} review price" if dd["anchor_date"]
+                     else "the review price") if dd["basis"] == "review" else "cost"
             reasons.append(
-                f"down {drawdown:+.1f}% from cost — past the -{abs(max_dd):.0f}% kill line")
+                f"down {drawdown:+.1f}% from {since} — past the -{abs(max_dd):.0f}% kill line")
         floor = rule.get("price_below")
         if floor and price_native is not None and price_native <= floor:
             reasons.append(f"price {price_native:,.2f} {currency} at/below the {floor:,.2f} floor")
@@ -562,6 +660,11 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
             "hit": bool(reasons),
             "reasons": reasons,
             "drawdown_pct": round(drawdown, 1) if drawdown is not None else None,
+            "drawdown_basis": dd["basis"],
+            "drawdown_from_cost_pct": (round(dd["from_cost_pct"], 1)
+                                       if dd["from_cost_pct"] is not None else None),
+            "anchor_price_sek": dd["anchor_price_sek"],
+            "anchor_date": dd["anchor_date"],
             "price_native": price_native,
             "price_sek": price_sek,
             "currency": currency,

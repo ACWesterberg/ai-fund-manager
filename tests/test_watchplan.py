@@ -128,8 +128,9 @@ def test_set_plan_requires_a_ticker(store):
 
 def test_drawdown_rule_fires_and_dedupes(store, sek_only, no_telegram):
     _hold(store, "NVDA", 10, 100.0)
-    _price(store, "NVDA", 70.0)                     # −30% from cost
-    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")   # anchors at 100
+    _price(store, "NVDA", 70.0)                     # −30% from the anchor
 
     log = watchplan.check_kill_rules("slug", store=store)
     assert any("kill rule hit" in line for line in log)
@@ -143,8 +144,9 @@ def test_drawdown_rule_fires_and_dedupes(store, sek_only, no_telegram):
 
 def test_drawdown_rule_rearms_after_recovery(store, sek_only, no_telegram):
     _hold(store, "NVDA", 10, 100.0)
-    _price(store, "NVDA", 70.0)
+    _price(store, "NVDA", 100.0)
     watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    _price(store, "NVDA", 70.0)
     watchplan.check_kill_rules("slug", store=store)
 
     _price(store, "NVDA", 95.0)                     # recovered well clear of the line
@@ -159,8 +161,9 @@ def test_drawdown_rule_rearms_after_recovery(store, sek_only, no_telegram):
 def test_drawdown_within_buffer_does_not_rearm(store, sek_only, no_telegram):
     """A position hovering on its line must not flip-flop into daily alerts."""
     _hold(store, "NVDA", 10, 100.0)
-    _price(store, "NVDA", 74.0)
+    _price(store, "NVDA", 100.0)
     watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    _price(store, "NVDA", 74.0)
     watchplan.check_kill_rules("slug", store=store)
 
     _price(store, "NVDA", 75.5)                     # back over the line, inside the buffer
@@ -192,14 +195,161 @@ def test_untouched_rule_stays_quiet(store, sek_only, no_telegram):
 def test_editing_a_rule_rearms_it(store, sek_only, no_telegram):
     """Tightening the line after a hit should be able to fire again today."""
     _hold(store, "NVDA", 10, 100.0)
-    _price(store, "NVDA", 80.0)
+    _price(store, "NVDA", 100.0)
     watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="15")
+    _price(store, "NVDA", 80.0)                     # −20% from the anchor
     watchplan.check_kill_rules("slug", store=store)
     assert len(no_telegram) == 1
 
     watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="10")
     watchplan.check_kill_rules("slug", store=store)
     assert len(no_telegram) == 2
+
+
+# ── The review anchor ─────────────────────────────────────────────────────────
+
+def test_a_new_drawdown_line_anchors_to_todays_price(store, sek_only):
+    _hold(store, "NVDA", 10, 40.0)                  # bought cheap, long ago
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25",
+                                today=date(2026, 8, 13))
+    rule = watchplan.get_kill_rules(store)["NVDA"]
+    assert rule["anchor_price_sek"] == 100.0
+    assert rule["anchor_date"] == "2026-08-13"
+
+
+def test_the_line_is_measured_from_the_anchor_not_from_cost(store, sek_only, no_telegram):
+    """The point of the whole change: a big gain must not absorb a big fall.
+
+    Bought at 40, reviewed at 100, now 70. That is −30% since the review — a
+    kill — while still +75% on cost, which the old anchor would have read as
+    nowhere near the line.
+    """
+    _hold(store, "NVDA", 10, 40.0)
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    _price(store, "NVDA", 70.0)
+
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["hit"] is True
+    assert row["drawdown_pct"] == -30.0
+    assert row["drawdown_basis"] == "review"
+    assert row["drawdown_from_cost_pct"] == 75.0      # still well up on cost
+    assert "review price" in row["reasons"][0]
+
+
+def test_editing_the_threshold_does_not_move_the_anchor(store, sek_only):
+    """Tightening a line is a change of mind, not a fresh review — re-anchoring
+    there would quietly reset a position already halfway to its kill."""
+    _hold(store, "NVDA", 10, 100.0)
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25",
+                                today=date(2026, 8, 13))
+    _price(store, "NVDA", 80.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="15",
+                                today=date(2026, 9, 1))
+
+    rule = watchplan.get_kill_rules(store)["NVDA"]
+    assert rule["anchor_price_sek"] == 100.0
+    assert rule["anchor_date"] == "2026-08-13"
+    assert watchplan.evaluate_kill_rules(store)[0]["drawdown_pct"] == -20.0
+
+
+def test_re_anchor_moves_it_deliberately(store, sek_only):
+    _hold(store, "NVDA", 10, 100.0)
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25",
+                                today=date(2026, 8, 13))
+    _price(store, "NVDA", 80.0)
+    watchplan.set_position_plan(store, "NVDA", re_anchor=True, today=date(2026, 9, 1))
+
+    rule = watchplan.get_kill_rules(store)["NVDA"]
+    assert rule["anchor_price_sek"] == 80.0
+    assert rule["anchor_date"] == "2026-09-01"
+    assert rule["max_drawdown_pct"] == 25.0          # the line itself is untouched
+    assert watchplan.evaluate_kill_rules(store)[0]["drawdown_pct"] == 0.0
+
+
+def test_a_rule_written_before_anchors_still_measures_from_cost(store, sek_only):
+    """Migrating an armed kill line by silently re-anchoring would disarm it,
+    so old rules keep their meaning and say which one they have."""
+    import json
+    _hold(store, "NVDA", 10, 100.0)
+    _price(store, "NVDA", 70.0)
+    store.set_meta(watchplan.KILL_RULES_KEY,
+                   json.dumps({"NVDA": {"max_drawdown_pct": 25.0}}))   # no anchor
+
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["drawdown_basis"] == "cost"
+    assert row["drawdown_pct"] == -30.0
+    assert row["hit"] is True
+    assert "from cost" in row["reasons"][0]
+
+
+def test_no_cached_price_leaves_the_line_on_cost(store, sek_only):
+    """An anchor is only recorded when the price is already known — saving a
+    plan must not block on a quote feed."""
+    _hold(store, "NVDA", 10, 100.0)                  # no _price() call
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    assert "anchor_price_sek" not in watchplan.get_kill_rules(store)["NVDA"]
+
+
+def test_the_add_plans_review_price_backs_the_anchor(store, sek_only):
+    """Both halves of a position's monitoring should date from the same review."""
+    from fundmgr import addsignal
+    _hold(store, "NVDA", 10, 100.0)                  # no cached price
+    addsignal.set_plan(store, "NVDA", review_price=140.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    assert watchplan.get_kill_rules(store)["NVDA"]["anchor_price_sek"] == 140.0
+
+
+def test_clearing_the_drawdown_line_drops_its_anchor(store, sek_only):
+    _hold(store, "NVDA", 10, 100.0)
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25", price_below="50")
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="")
+    rule = watchplan.get_kill_rules(store)["NVDA"]
+    assert "anchor_price_sek" not in rule and "anchor_date" not in rule
+    assert rule["price_below"] == 50.0                # the other line survives
+
+
+def test_the_dashboard_panel_breaches_on_the_same_number_as_the_watch(store, sek_only):
+    """The panel used to compare P&L (from cost) against a line the watch
+    measured from the anchor, so one could read breached and the other clear."""
+    from fundmgr.web.paper import _watch_status
+    _hold(store, "NVDA", 10, 40.0)
+    _price(store, "NVDA", 100.0)
+    watchplan.set_position_plan(store, "NVDA", max_drawdown_pct="25")
+    _price(store, "NVDA", 70.0)
+
+    positions_data = [{"ticker": "NVDA", "weight_pct": 100.0, "pnl_pct": 75.0,
+                       "current_price": 70.0, "avg_cost": 40.0}]
+    row = _watch_status(store, positions_data)["rows"][0]
+
+    assert row["dd_breached"] is True                 # despite being +75% on cost
+    assert row["drawdown_pct"] == -30.0
+    assert row["drawdown_basis"] == "review"
+    assert row["pnl_pct"] == 75.0                     # P&L still reported from cost
+    assert row["dd_breached"] is watchplan.evaluate_kill_rules(store)[0]["hit"]
+
+
+def test_drawdown_for_is_the_one_definition(store):
+    """The dashboard panel and the daily watch both call this, so a line cannot
+    read breached in one and clear in the other."""
+    dd = watchplan.drawdown_for({"anchor_price_sek": 100.0, "anchor_date": "2026-08-13"},
+                                price_sek=70.0, avg_cost_sek=40.0)
+    assert dd["pct"] == pytest.approx(-30.0)         # raw; rounding is the caller's
+    assert dd["from_cost_pct"] == pytest.approx(75.0)
+    assert dd["basis"] == "review"
+    assert dd["anchor_price_sek"] == 100.0
+    assert dd["anchor_date"] == "2026-08-13"
+
+    no_anchor = watchplan.drawdown_for({}, price_sek=70.0, avg_cost_sek=100.0)
+    assert no_anchor["basis"] == "cost"
+    assert no_anchor["pct"] == pytest.approx(-30.0)
+
+    nothing = watchplan.drawdown_for({}, price_sek=None, avg_cost_sek=None)
+    assert nothing["pct"] is None and nothing["from_cost_pct"] is None
 
 
 def test_kill_rules_noop_without_rules(store):

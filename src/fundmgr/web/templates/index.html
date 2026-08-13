@@ -114,15 +114,18 @@
           <td class="num">
             {% if r.pnl_pct is not none %}
               <span class="{{ 'text-red-400 font-semibold' if r.dd_breached else ('ret-pos' if r.pnl_pct > 0 else 'ret-neg' if r.pnl_pct < 0 else 'ret-neu') }}">
-                {{ "{:+.1f}".format(r.pnl_pct) }}%</span>{% if r.max_drawdown_pct %}<span class="text-slate-600"> / -{{ "{:g}".format(r.max_drawdown_pct) }}%</span>{% endif %}
+                {{ "{:+.1f}".format(r.pnl_pct) }}%</span>
             {% else %}<span class="text-slate-600">—</span>{% endif %}
           </td>
           <td>
             {% if r.max_drawdown_pct or r.price_below or r.price_above %}
               <div class="flex flex-wrap gap-1">
                 {% if r.max_drawdown_pct %}
-                <span class="badge" style="background:{{ 'rgba(248,113,113,.14)' if r.dd_breached else 'rgba(255,255,255,.04)' }};color:{{ '#f87171' if r.dd_breached else '#94a3b8' }}">
-                  −{{ "{:g}".format(r.max_drawdown_pct) }}% from cost</span>
+                {# The line and the live number against it, sharing one anchor —
+                   the P&L column measures from cost and would disagree. #}
+                <span class="badge" title="{% if r.drawdown_basis == 'review' %}Measured from the {{ r.anchor_date }} review price{% else %}Measured from cost — set a review anchor to judge this line from your last analysis instead{% endif %}"
+                      style="background:{{ 'rgba(248,113,113,.14)' if r.dd_breached else 'rgba(255,255,255,.04)' }};color:{{ '#f87171' if r.dd_breached else '#94a3b8' }}">
+                  −{{ "{:g}".format(r.max_drawdown_pct) }}% from {{ 'review' if r.drawdown_basis == 'review' else 'cost' }}{% if r.drawdown_pct is not none %} · {{ "{:+.1f}".format(r.drawdown_pct) }}%{% endif %}</span>
                 {% endif %}
                 {% if r.price_below %}
                 <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">floor {{ "{:g}".format(r.price_below) }} {{ r.rule_currency }}</span>
@@ -270,7 +273,7 @@
                placeholder="e.g. loses the Apple socket, or capex guide cut two quarters running" />
       </div>
       <div>
-        <label class="kpi-label" for="wp-drop">Max drop from cost</label>
+        <label class="kpi-label" for="wp-drop">Max drop from review</label>
         <input id="wp-drop" name="max_drawdown_pct" type="number" step="1" min="0" max="99" placeholder="25" class="{{ wcls }}" />
       </div>
       <div>
@@ -298,9 +301,15 @@
         <button type="submit" name="remove" value="1"
                 onclick="return confirm('Clear the kill criteria and horizon for this ticker?')"
                 class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-red-400">Clear</button>
+        {# Re-anchoring moves a live kill line, so it is never a side effect of
+           saving — it is its own button, with its own confirmation. #}
+        <button type="submit" name="re_anchor" value="1"
+                onclick="return confirm('Reset the drawdown line to measure from today\'s price? Do this after a fresh analysis — it clears the drop accumulated so far.')"
+                class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-sky-400">Re-anchor to today</button>
         <span class="text-[11px] text-slate-600">
-          Empty fields clear that line. Price floor/target are in the stock's own trading currency;
-          the drop is measured in SEK from your cost basis.
+          Empty fields clear that line. Price floor/target are in the stock's own trading currency.
+          The drop is measured in SEK from the price on the day you set the line — not from cost —
+          so an old position is judged on your latest thesis. Re-anchor after a fresh analysis.
         </span>
       </div>
     </form>

@@ -270,7 +270,9 @@ def test_above_max_weight_is_a_concentration_review(store):
 def test_kill_overrides_every_add_signal(store):
     """ADD and KILL must never coexist. Kill wins."""
     _setup(store, price=85, target=145, review=100, proof=True)
-    watchplan.set_position_plan(store, "SYSR.ST", max_drawdown_pct="10")  # −15% on cost
+    # Reviewed at 100, now 85 — −15% against a −10% line.
+    watchplan.set_position_plan(store, "SYSR.ST", max_drawdown_pct="10",
+                                anchor_price_sek=100)
     row = _state(store)
     assert row["state"] == addsignal.KILL
     assert "suppressed" in row["why"]

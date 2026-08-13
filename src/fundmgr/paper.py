@@ -1024,6 +1024,13 @@ def create_portfolio(
         fetch_and_cache_benchmark(store, symbol=benchmark)
         if native:
             _cache_price_history(store, list(native.keys()))
+            # Drawdown lines are set above, before any price is cached, so they
+            # would all fall back to cost. Now that today's prices exist, anchor
+            # the ones still missing one — creating a book *is* the review.
+            from fundmgr import watchplan
+            for tkr, rule in watchplan.get_kill_rules(store).items():
+                if rule.get("max_drawdown_pct") and not rule.get("anchor_price_sek"):
+                    watchplan.set_position_plan(store, tkr, re_anchor=True)
 
         bench_rows = store.get_benchmark()
         store.upsert_nav(NavPoint(

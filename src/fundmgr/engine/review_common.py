@@ -72,7 +72,15 @@ def context_blocks(ticker: str, store: Store) -> tuple[str, str]:
             ts = (d.get("timestamp") or "")[:10]
             conf = d.get("confidence")
             conf_s = f", conf {conf:.2f}" if conf is not None else ""
-            dlines.append(f"  {ts}: {str(d.get('action','')).upper()}{conf_s} — \"{(d.get('thesis') or '').strip()}\"")
+            # Mark which decisions came from an intra-week review rather than a
+            # weekly run, so a reviewer can tell a whole-portfolio call from a
+            # single-name one made under different information.
+            src = d.get("source")
+            tag = " (review)" if src and src != "run" else ""
+            dlines.append(
+                f"  {ts}: {str(d.get('action','')).upper()}{tag}{conf_s} — "
+                f"\"{(d.get('thesis') or '').strip()}\""
+            )
         decisions_block = "\n".join(dlines)
     else:
         decisions_block = "  (no logged decisions on this name)"
@@ -135,6 +143,39 @@ def majority(reviews: list) -> tuple[str, list, dict[str, int]]:
     winner, _ = counts.most_common(1)[0]
     agreeing = [r for r in reviews if r.recommendation == winner]
     return winner, agreeing, dict(counts)
+
+
+# Review verbs → the buy/sell/hold vocabulary decision_outcomes is scored in.
+# A partial sale is scored as a sale: the question the evaluator answers for a
+# sell — "did the stock then underperform?" — is the right one for a trim too.
+# Everything that keeps the position is a hold, which the evaluator measures the
+# return of but deliberately does not grade correct/incorrect.
+_ACTION_FOR_VERDICT = {
+    # take-profit review
+    "sell": "sell", "trim": "sell", "raise": "hold",
+    # stop review
+    "exit": "sell", "add": "buy",
+    "hold": "hold",
+}
+
+
+def action_for_verdict(verdict: str) -> str:
+    """The decision_outcomes action a review verdict is recorded as."""
+    return _ACTION_FOR_VERDICT.get(verdict, "hold")
+
+
+def log_review(review, store: Store, source: str, native_price: float | None) -> str | None:
+    """Record a review verdict as an evaluable decision. Returns the run_id."""
+    if native_price is None:
+        return None      # the evaluator skips priceless outcomes; don't write one
+    return store.log_review_decision(
+        ticker=review.ticker,
+        action=action_for_verdict(review.recommendation),
+        confidence=review.confidence,
+        thesis=f"[{source}: {review.recommendation.upper()}] {review.rationale}",
+        price_at_decision=native_price,
+        source=source,
+    )
 
 
 def votes_str(votes: dict[str, int], n: int) -> str:

@@ -418,8 +418,11 @@
 
     const horizon = document.createElement('select');
     horizon.className = INPUT + ' pi-horizon';
-    [['', 'none'], ['3', '3 months'], ['6', '6 months'], ['12', '12 months'],
-     ['18', '18 months'], ['24', '2 years'], ['36', '3 years']]
+    // Policy horizons in use are 12/15/18/24 months, so those are all offered
+    // rather than rounded to whichever option happens to exist.
+    [['', 'none'], ['3', '3 months'], ['6', '6 months'], ['9', '9 months'],
+     ['12', '12 months'], ['15', '15 months'], ['18', '18 months'],
+     ['21', '21 months'], ['24', '2 years'], ['36', '3 years']]
       .forEach(([value, label]) => {
         const opt = document.createElement('option');
         opt.value = value;

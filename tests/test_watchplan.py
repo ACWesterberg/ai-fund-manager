@@ -133,7 +133,7 @@ def test_drawdown_rule_fires_and_dedupes(store, sek_only, no_telegram):
     _price(store, "NVDA", 70.0)                     # −30% from the anchor
 
     log = watchplan.check_kill_rules("slug", store=store)
-    assert any("kill rule hit" in line for line in log)
+    assert any("max drop reached" in line for line in log)
     assert len(no_telegram) == 1
     assert "NVDA" in no_telegram[0]
 
@@ -482,7 +482,7 @@ def test_track_portfolio_runs_the_new_watches(tmp_path, monkeypatch, no_telegram
     store.set_meta("paper_horizons", '{"VOLV-B.ST": {"review_date": "2020-01-01"}}')
 
     log = paper.track_portfolio(slug)
-    assert any("kill rule hit" in line for line in log)
+    assert any("max drop reached" in line for line in log)
     assert any("fresh analysis due" in line for line in log)
 
 

@@ -462,3 +462,103 @@ def test_clearing_the_criterion_clears_the_analysis(client):
 
     _meta, store = paper.open_portfolio("acquirer-sleeve")
     assert watchplan.get_analysis(store, "VIT-B.ST") is None
+
+
+# ── The ADD criterion: written like a kill criterion, read as its mirror ──────
+
+def test_saving_an_add_criterion_analyses_it_with_the_add_framing(client, monkeypatch):
+    seen = {}
+    import fundmgr.watchplan as wp
+    real = wp.analyse_criterion
+    monkeypatch.setattr(wp, "analyse_criterion",
+                        lambda c, model=None, *, kind="kill": seen.update(kind=kind) or real(c, model, kind=kind))
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST",
+                      "add_criterion": "Recurring revenue growth at least 10%"},
+                follow_redirects=False)
+    assert seen["kind"] == "add"
+
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    assert watchplan.get_add_text(store)["VIT-B.ST"].startswith("Recurring revenue")
+
+
+def test_the_add_criterion_appears_on_the_dashboard(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST",
+                      "add_criterion": "Recurring revenue growth at least 10%"},
+                follow_redirects=False)
+    body = client.get("/live/acquirer-sleeve").text
+    assert "Recurring revenue growth at least 10%" in body
+    assert "ADD criterion (what must still be true to add)" in body
+
+
+def test_clearing_the_add_criterion_clears_its_analysis(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "add_criterion": "Growth at least 10%"},
+                follow_redirects=False)
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "add_criterion": ""},
+                follow_redirects=False)
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    assert watchplan.get_add_text(store) == {}
+    assert watchplan.get_add_analysis(store, "VIT-B.ST") is None
+
+
+def test_an_add_condition_passes_when_the_metric_holds(store):
+    """The mirror of a kill rule: it passes on the named side of the line."""
+    watchplan.set_add_text(store, "VIT-B.ST", "Revenue growth at least 10%")
+    watchplan.save_add_analysis(store, "VIT-B.ST", {
+        "criterion": "Revenue growth at least 10%", "logic": "A",
+        "conditions": [{"id": "A", "text": "growth >= 10", "checkable": "fundamentals",
+                        "metric": "revenue_growth", "op": "above", "value": 10,
+                        "quarters": 1, "note": ""}]})
+
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.12})
+    out = watchplan.evaluate_add_criterion(store, "VIT-B.ST")
+    assert out["satisfied"] is True and out["checked"] and not out["failed"]
+
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.07})
+    out = watchplan.evaluate_add_criterion(store, "VIT-B.ST")
+    assert out["satisfied"] is False and out["failed"]
+
+
+def test_an_uncached_add_metric_is_unread_never_satisfied(store):
+    """Unknown must not open a gate — the same rule the kill side follows."""
+    watchplan.set_add_text(store, "VIT-B.ST", "Revenue growth at least 10%")
+    watchplan.save_add_analysis(store, "VIT-B.ST", {
+        "criterion": "Revenue growth at least 10%", "logic": "A",
+        "conditions": [{"id": "A", "text": "growth >= 10", "checkable": "fundamentals",
+                        "metric": "revenue_growth", "op": "above", "value": 10,
+                        "quarters": 1, "note": ""}]})
+    out = watchplan.evaluate_add_criterion(store, "VIT-B.ST")
+    assert out["satisfied"] is False and out["unread"]
+
+
+def test_a_manual_add_condition_still_needs_the_human(store):
+    """"Cash generation intact" is not in any feed, so it cannot auto-satisfy."""
+    watchplan.set_add_text(store, "VIT-B.ST", "Growth at least 10%, cash generation intact")
+    watchplan.save_add_analysis(store, "VIT-B.ST", {
+        "criterion": "Growth at least 10%, cash generation intact", "logic": "A and B",
+        "conditions": [
+            {"id": "A", "text": "growth >= 10", "checkable": "fundamentals",
+             "metric": "revenue_growth", "op": "above", "value": 10, "quarters": 1, "note": ""},
+            {"id": "B", "text": "cash generation intact", "checkable": "manual",
+             "metric": None, "op": None, "value": None, "quarters": None, "note": ""}]})
+    store.save_fundamentals("VIT-B.ST", {"revenue_growth": 0.12})
+
+    out = watchplan.evaluate_add_criterion(store, "VIT-B.ST")
+    assert out["checked"] and out["manual"]
+    assert out["satisfied"] is False
+
+
+def test_a_reworded_add_criterion_drops_its_stale_analysis(store):
+    watchplan.set_add_text(store, "VIT-B.ST", "Growth at least 10%")
+    watchplan.save_add_analysis(store, "VIT-B.ST", {
+        "criterion": "Growth at least 10%", "logic": "A", "conditions": []})
+    assert watchplan.get_add_analysis(store, "VIT-B.ST") is not None
+    watchplan.set_add_text(store, "VIT-B.ST", "Growth at least 12%")
+    assert watchplan.get_add_analysis(store, "VIT-B.ST") is None
+
+
+def test_no_add_criterion_evaluates_to_none(store):
+    assert watchplan.evaluate_add_criterion(store, "VIT-B.ST") is None

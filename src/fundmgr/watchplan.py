@@ -36,6 +36,8 @@ KILL_TEXT_KEY = "paper_kill_criteria"      # {ticker: "text"} — shared with th
 KILL_RULES_KEY = "paper_kill_rules"        # {ticker: {max_drawdown_pct, price_below, price_above, fundamentals[], currency, anchor_price_sek, anchor_date}}
 HORIZONS_KEY = "paper_horizons"            # {ticker: {review_date, label, note, set_at}}
 ANALYSIS_KEY = "paper_killanalysis"        # {ticker: {logic, conditions[], criterion}} — per-ticker key
+ADD_TEXT_KEY = "paper_add_criteria"        # {ticker: "text"} — the thesis-still-true test
+ADD_ANALYSIS_KEY = "paper_addanalysis"     # {ticker: {logic, conditions[], criterion}} — per-ticker key
 
 # Days-remaining buckets for horizon alerts. One alert per bucket per horizon:
 # the tightest bucket the date falls into fires, so a horizon set 10 days out
@@ -65,6 +67,114 @@ def _load(store: Store, key: str) -> dict:
 
 def get_kill_text(store: Store) -> dict[str, str]:
     return {t: str(v or "") for t, v in _load(store, KILL_TEXT_KEY).items()}
+
+
+def get_add_text(store: Store) -> dict[str, str]:
+    """The ADD criterion per ticker — what must be true for the thesis to still
+    be working, written the same way a kill criterion is."""
+    return {t: str(v or "") for t, v in _load(store, ADD_TEXT_KEY).items()}
+
+
+def set_add_text(store: Store, ticker: str, criterion: str) -> str:
+    """Store (or clear) one position's ADD criterion. Returns what was stored."""
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("Ticker is required.")
+    texts = get_add_text(store)
+    cleaned = (criterion or "").strip()
+    if cleaned:
+        texts[ticker] = cleaned
+    else:
+        texts.pop(ticker, None)
+    store.set_meta(ADD_TEXT_KEY, json.dumps(texts))
+    return cleaned
+
+
+def save_add_analysis(store: Store, ticker: str, analysis: dict | None) -> None:
+    store.set_meta(f"{ADD_ANALYSIS_KEY}:{ticker.upper()}",
+                   json.dumps(analysis) if analysis else "")
+
+
+def get_add_analysis(store: Store, ticker: str) -> dict | None:
+    """The stored decomposition, or None if it no longer matches the text."""
+    raw = store.get_meta(f"{ADD_ANALYSIS_KEY}:{ticker.upper()}")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # A stale analysis of a since-reworded criterion is worse than none.
+    if data.get("criterion") != get_add_text(store).get(ticker.upper(), ""):
+        return None
+    return data
+
+
+def evaluate_add_criterion(store: Store, ticker: str) -> dict | None:
+    """Check an ADD criterion's conditions against the cached figures.
+
+    Returns None when no criterion is set. Otherwise
+    {satisfied, checked[], manual[], unread[], failed[], criterion, logic}.
+
+    An ADD criterion reads as a conjunction — "organic growth ≥6% AND adj. EBIT
+    margin ≥9%, cash generation intact" — so every checkable condition must pass.
+    Three outcomes are kept apart, because collapsing them is how a gate opens
+    on no evidence:
+
+      • **failed**  a figure we have is below the line — the thesis is not working
+      • **unread**  the metric is offered but nothing is cached — unknown, and
+                    unknown never counts as passing
+      • **manual**  no feed settles it ("cash generation intact", "no adverse
+                    reimbursement change") — these need the human confirmation
+                    that `proof_confirmed` already is
+
+    `satisfied` therefore means: at least one condition was actually checked,
+    none failed, none unread, and nothing manual is outstanding.
+    """
+    from fundmgr.evidence import FUND_FIELD_META, current_metric, sustained_breach
+
+    criterion = get_add_text(store).get(ticker.upper(), "")
+    if not criterion:
+        return None
+    analysis = get_add_analysis(store, ticker)
+    conditions = (analysis or {}).get("conditions") or []
+
+    checked, manual, unread, failed = [], [], [], []
+    for cond in conditions:
+        if cond.get("checkable") != "fundamentals" or not cond.get("metric"):
+            manual.append(cond)
+            continue
+        metric, op, value = cond["metric"], cond["op"], cond["value"]
+        label = FUND_FIELD_META.get(metric, {}).get("label", metric)
+        unit = "%" if FUND_FIELD_META.get(metric, {}).get("is_fraction") else ""
+        actual = current_metric(store, ticker, metric)
+        quarters = int(cond.get("quarters") or 1)
+
+        # An ADD condition is written as the state that must HOLD, so it passes
+        # when the metric is on the named side of the line — the mirror image of
+        # a kill rule, which fires when it crosses.
+        if actual is None:
+            unread.append({**cond, "label": label, "unit": unit})
+            continue
+        holds = actual >= value if op == "above" else actual <= value
+        if holds and quarters > 1:
+            run = sustained_breach(store, ticker, metric, op, value, quarters)
+            holds = run["hit"]
+        row = {**cond, "label": label, "unit": unit, "actual": actual, "holds": holds}
+        (checked if holds else failed).append(row)
+
+    return {
+        "criterion": criterion,
+        "logic": (analysis or {}).get("logic", ""),
+        "checked": checked,
+        "failed": failed,
+        "unread": unread,
+        "manual": manual,
+        "satisfied": bool(checked) and not failed and not unread and not manual,
+        "analysed": analysis is not None,
+    }
 
 
 def get_kill_rules(store: Store) -> dict[str, dict]:
@@ -389,10 +499,34 @@ def plan_tickers(store: Store) -> set[str]:
 
 # ── Reading a criterion back at you ───────────────────────────────────────────
 
-_ANALYSIS_SYSTEM = """\
+# The ADD criterion is the mirror of the kill: conditions that must HOLD for the
+# thesis to still be working, rather than conditions that falsify it. Same
+# schema, same metric menu — only the direction of `op` differs, and getting
+# that backwards would turn "growth at least 6%" into a rule that fires when
+# growth is healthy.
+_ADD_FRAMING = """\
+You take a pre-registered ADD criterion for a stock position — the conditions \
+the investor requires to still be TRUE before putting more money in — and report \
+how it decomposes, so the investor can see how it will be read before relying on \
+it.
+
+These are conditions that must HOLD, not conditions that break the thesis. \
+"Organic growth at least 6%" is metric revenue_growth, op "above", value 6. \
+"Cost/income no worse than 45%" is op "below", value 45. Never invert them: an \
+ADD criterion read as a kill criterion would open the gate exactly when the \
+business is deteriorating.
+"""
+
+_KILL_FRAMING = """\
 You take a pre-registered kill criterion for a stock position — one sentence \
 written by an investor — and report how it decomposes, so the investor can see \
 how it will be read before relying on it.
+"""
+
+# Body shared by both framings. Kept separate and concatenated rather than
+# formatted: the template is mostly a JSON example, and str.format treats every
+# brace in it as a field.
+_ANALYSIS_BODY = """\
 
 Split it into its separate conditions and describe how they combine. Then, for
 each condition, say how it could be checked:
@@ -438,8 +572,13 @@ Reply with a JSON object only:
 """
 
 
-def analyse_criterion(criterion: str, model: str | None = None) -> dict | None:
-    """Decompose a kill criterion into its conditions and how each can be checked.
+def analyse_criterion(criterion: str, model: str | None = None, *,
+                      kind: str = "kill") -> dict | None:
+    """Decompose a criterion into its conditions and how each can be checked.
+
+    `kind` is "kill" (conditions that falsify the thesis) or "add" (conditions
+    that must hold before adding). Same schema and metric menu either way; the
+    framing differs because reading one as the other inverts every threshold.
 
     Runs once when a criterion is saved, so the investor sees the reading at
     entry time rather than discovering it from a verdict a day later. Returns
@@ -460,10 +599,12 @@ def analyse_criterion(criterion: str, model: str | None = None) -> dict | None:
         kwargs = {
             "model": model or os.getenv("FUND_KILL_MODEL", "gpt-4o-mini"),
             "messages": [
-                {"role": "system", "content": _ANALYSIS_SYSTEM},
+                {"role": "system", "content": (
+                    (_ADD_FRAMING if kind == "add" else _KILL_FRAMING)
+                    + _ANALYSIS_BODY)},
                 {"role": "user", "content": (
                     f"Available fundamentals metrics:\n{catalogue}\n\n"
-                    f"Kill criterion:\n{criterion}")},
+                    f"{'ADD' if kind == 'add' else 'Kill'} criterion:\n{criterion}")},
             ],
             "max_tokens": 700,
             "temperature": 0.0,
@@ -641,8 +782,11 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
         drawdown = dd["pct"]
 
         reasons: list[str] = []
+        fundamental_reasons: list[str] = []
+        drawdown_breached = False
         max_dd = rule.get("max_drawdown_pct")
         if max_dd and drawdown is not None and drawdown <= -abs(max_dd):
+            drawdown_breached = True
             # Name the anchor in the alert: "down 22% from cost" and "down 22%
             # since the review" call for different responses.
             since = (f"the {dd['anchor_date']} review price" if dd["anchor_date"]
@@ -683,9 +827,10 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
 
             if hit:
                 span = f" for {quarters} straight quarters" if quarters > 1 else ""
-                reasons.append(
-                    f"{label} {actual:,.1f}{unit} is {f_rule['op']} the "
-                    f"{f_rule['value']:,.1f}{unit} line{span}")
+                text = (f"{label} {actual:,.1f}{unit} is {f_rule['op']} the "
+                        f"{f_rule['value']:,.1f}{unit} line{span}")
+                reasons.append(text)
+                fundamental_reasons.append(text)
             fundamental_rows.append({
                 **f_rule, "label": label, "actual": actual, "unit": unit,
                 "hit": hit, "unread": actual is None,
@@ -697,10 +842,20 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
                                      and periods_seen < quarters),
             })
 
+        # A price fall and a fundamental breach are different events and must not
+        # be pooled. A −25% drawdown with the business intact is a reason to
+        # re-read the evidence — possibly an ADD — while the same fall alongside
+        # deteriorating figures is a red review. Pooling them made every drop
+        # suppress the add signals, which is precisely backwards.
+        price_reasons = [r for r in reasons if r not in fundamental_reasons]
         rows.append({
             "ticker": ticker,
             "hit": bool(reasons),
             "reasons": reasons,
+            "price_reasons": price_reasons,
+            "fundamental_reasons": fundamental_reasons,
+            "drawdown_hit": drawdown_breached,
+            "fundamentals_hit": bool(fundamental_reasons),
             "drawdown_pct": round(drawdown, 1) if drawdown is not None else None,
             "drawdown_basis": dd["basis"],
             "drawdown_from_cost_pct": (round(dd["from_cost_pct"], 1)
@@ -772,7 +927,9 @@ def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
                 f"paper_killhit:{ticker}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
                 "; ".join(row["reasons"]))
             fired.append(row)
-            log.append(f"🚨 {ticker}: kill rule hit — {'; '.join(row['reasons'])}")
+            mark = "🚨" if row["fundamentals_hit"] else "🟡"
+            what = "kill rule hit" if row["fundamentals_hit"] else "max drop reached"
+            log.append(f"{mark} {ticker}: {what} — {'; '.join(row['reasons'])}")
         elif state == "hit" and _recovered(row):
             store.set_meta(f"paper_killrule_state:{ticker}", "clear")
             log.append(f"✓ {ticker}: back above its kill line — watch re-armed")
@@ -780,12 +937,22 @@ def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
     if fired:
         from fundmgr.notify.send import send_telegram
         texts = get_kill_text(store)
-        lines = [f"<b>🚨 {name} — kill criterion hit</b>"]
-        for row in fired:
+        # A price fall and a fundamental breach call for different actions, so
+        # they get different headlines. "Kill criterion hit" on a −25% with the
+        # business intact reads as "sell", which is the opposite of the policy.
+        red = [r for r in fired if r["fundamentals_hit"]]
+        amber = [r for r in fired if not r["fundamentals_hit"]]
+        lines = [f"<b>🚨 {name} — kill criterion hit</b>" if red
+                 else f"<b>🟡 {name} — max drop reached, review not sell</b>"]
+        for row in red + amber:
             held = "" if row["held"] else " (plan only — not held)"
-            lines.append(f"\n<b>{row['ticker']}</b>{held}")
+            flag = "" if row["fundamentals_hit"] else "  🟡 price only"
+            lines.append(f"\n<b>{row['ticker']}</b>{held}{flag}")
             for reason in row["reasons"]:
                 lines.append(f"  • {reason}")
+            if not row["fundamentals_hit"]:
+                lines.append("  Fundamentals show no breach — re-read the evidence "
+                             "before acting; this may be an add, not an exit.")
             if texts.get(row["ticker"]):
                 lines.append(f"  Thesis kill: {texts[row['ticker']]}")
         lines.append("\nRun fresh analysis before acting.")

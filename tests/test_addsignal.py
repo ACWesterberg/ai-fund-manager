@@ -267,12 +267,12 @@ def test_above_max_weight_is_a_concentration_review(store):
     assert "concentration review" in row["why"]
 
 
-def test_kill_overrides_every_add_signal(store):
+def test_a_fundamental_breach_overrides_every_add_signal(store):
     """ADD and KILL must never coexist. Kill wins."""
     _setup(store, price=85, target=145, review=100, proof=True)
-    # Reviewed at 100, now 85 — −15% against a −10% line.
-    watchplan.set_position_plan(store, "SYSR.ST", max_drawdown_pct="10",
-                                anchor_price_sek=100)
+    store.save_fundamentals("SYSR.ST", {"revenue_growth": 0.02})
+    watchplan.set_position_plan(store, "SYSR.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8}])
     row = _state(store)
     assert row["state"] == addsignal.KILL
     assert "suppressed" in row["why"]
@@ -586,3 +586,53 @@ def test_a_stale_proof_is_visible_on_the_panel(client):
     body = client.get("/live/add-sleeve").text
     assert "stale" in body
     assert "re-read the print" in body
+
+
+# ── Max drop is a review trigger, not a sell ──────────────────────────────────
+#
+# Policy, in the investor's words: "the price decline itself never determines
+# the trade — it determines how urgently the fundamental evidence needs to be
+# re-evaluated." A -25% with the business intact can be an ADD; the same fall
+# with deteriorating figures is a red review. Pooling them made every drawdown
+# suppress the add signals, which is backwards.
+
+def _dropped(store, pct="10"):
+    """A max-drop line breached: reviewed at 100, now 85."""
+    watchplan.set_position_plan(store, "SYSR.ST", max_drawdown_pct=pct,
+                                anchor_price_sek=100)
+
+
+def test_max_drop_with_fundamentals_intact_is_a_valuation_review(store):
+    _setup(store, price=85, target=145, review=100)
+    _dropped(store)
+    row = _state(store)
+    assert row["state"] == addsignal.ADD_WATCH
+    assert row["review_trigger"] is True
+    assert "not a sell" in row["why"]
+
+
+def test_max_drop_with_the_add_criterion_satisfied_still_reaches_strong_add(store):
+    """The third row of the matrix: drop + add criteria met = potential STRONG ADD."""
+    _setup(store, price=85, target=145, review=100, proof=True)
+    _dropped(store)
+    row = _state(store)
+    assert row["state"] == addsignal.STRONG_ADD
+    assert row["review_trigger"] is True
+
+
+def test_max_drop_alongside_a_fundamental_breach_is_a_kill(store):
+    _setup(store, price=85, target=145, review=100, proof=True)
+    _dropped(store)
+    store.save_fundamentals("SYSR.ST", {"revenue_growth": 0.02})
+    watchplan.set_position_plan(store, "SYSR.ST", fundamentals=[
+        {"metric": "revenue_growth", "op": "below", "value": 8}])
+    assert _state(store)["state"] == addsignal.KILL
+
+
+def test_the_rule_row_separates_price_from_fundamentals(store):
+    _setup(store, price=85, target=145, review=100)
+    _dropped(store)
+    row = watchplan.evaluate_kill_rules(store)[0]
+    assert row["drawdown_hit"] is True
+    assert row["fundamentals_hit"] is False
+    assert row["price_reasons"] and not row["fundamental_reasons"]

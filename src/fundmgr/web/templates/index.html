@@ -163,6 +163,25 @@
           <td class="text-slate-400">{{ r.next_earnings or '—' }}</td>
           <td class="text-slate-500" style="max-width:340px">
             {{ r.watch or r.kill or '—' }}
+            {% if r.add_criterion %}
+            <div class="mt-1 text-emerald-400/80" style="font-size:10px">
+              <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">ADD</span>
+              {{ r.add_criterion }}
+            </div>
+            {% if r.add_conditions %}
+            <ul class="mt-0.5" style="font-size:10px">
+              {% for c in r.add_conditions %}
+              <li class="text-slate-500">
+                {% if c.metric %}
+                  ▪ {{ c.metric.replace('_', ' ') }} {{ c.op }} {{ "{:g}".format(c.value) }}{% if c.quarters and c.quarters > 1 %} for {{ c.quarters }} quarters{% endif %}
+                {% else %}
+                  ▪ {{ c.text }} <span class="text-amber-400/70">(needs your judgement)</span>
+                {% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+            {% endif %}
 
             {% if r.conditions %}
             <details class="mt-1">
@@ -227,7 +246,7 @@
           <td class="num">
             <button type="button" class="wp-edit text-slate-600 hover:text-sky-400" title="Edit kill criteria & horizon"
                     data-ticker="{{ r.ticker }}"
-                    data-kill="{{ r.kill }}"
+                    data-kill="{{ r.kill }}" data-add="{{ r.add_criterion }}"
                     data-drop="{{ r.max_drawdown_pct or '' }}"
                     data-below="{{ r.price_below or '' }}"
                     data-above="{{ r.price_above or '' }}"
@@ -274,6 +293,11 @@
         <label class="kpi-label" for="wp-kill">Kill criterion (what would falsify the thesis)</label>
         <input id="wp-kill" name="kill_criterion" class="{{ wcls }}"
                placeholder="e.g. loses the Apple socket, or capex guide cut two quarters running" />
+      </div>
+      <div class="col-span-2 md:col-span-3">
+        <label class="kpi-label" for="wp-add">ADD criterion (what must still be true to add)</label>
+        <input id="wp-add" name="add_criterion" class="{{ wcls }}"
+               placeholder="e.g. organic growth ≥6% and adj. EBIT margin ≥9%, cash generation intact" />
       </div>
       <div>
         <label class="kpi-label" for="wp-drop">Max drop from review</label>
@@ -328,6 +352,7 @@
           document.getElementById('wp-details').open = true;
           form.ticker.value           = btn.dataset.ticker;
           form.kill_criterion.value   = btn.dataset.kill   || '';
+          form.add_criterion.value    = btn.dataset.add    || '';
           form.max_drawdown_pct.value = btn.dataset.drop   || '';
           form.price_below.value      = btn.dataset.below  || '';
           form.price_above.value      = btn.dataset.above  || '';

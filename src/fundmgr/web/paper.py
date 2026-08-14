@@ -105,12 +105,14 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
     targets = json.loads(store.get_meta("paper_target_weights") or "{}")
     notes = json.loads(store.get_meta("paper_position_notes") or "{}")
     kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
+    add_texts = watchplan.get_add_text(store)
     rules = watchplan.get_kill_rules(store)
     horizons = watchplan.get_horizons(store)
     verdicts = _kill_verdicts(store, list(kills))
     # Anything held is worth a row even with no plan on it yet — that's how the
     # first kill criterion gets set. Only a book with nothing at all opts out.
-    if not (capex_cfg or targets or kills or rules or horizons or positions_data):
+    if not (capex_cfg or targets or kills or add_texts or rules or horizons
+            or positions_data):
         return None
 
     capex = None
@@ -169,6 +171,8 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
             "next_earnings": note.get("next_earnings", ""),
             "watch": note.get("watch", ""),
             "kill": kills.get(t, ""),
+            "add_criterion": add_texts.get(t, ""),
+            "add_conditions": (watchplan.get_add_analysis(store, t) or {}).get("conditions") or [],
             "kill_verdict": verdict.get("verdict", ""),
             "kill_unverifiable": verdict.get("verdict") == "insufficient",
             "kill_reason": verdict.get("reason", ""),
@@ -635,6 +639,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         slug: str,
         ticker: str = Form(...),
         kill_criterion: str = Form(""),
+        add_criterion: str = Form(""),
         max_drawdown_pct: str = Form(""),
         price_below: str = Form(""),
         price_above: str = Form(""),
@@ -669,6 +674,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             return _back(f"Bad horizon date '{horizon_date}' — use YYYY-MM-DD.", 0)
 
         previous_criterion = watchplan.get_kill_text(store).get(tkr, "")
+        previous_add = watchplan.get_add_text(store).get(tkr, "")
         currency = meta["currency_map"].get(tkr)
         plan = watchplan.set_position_plan(
             store, tkr,
@@ -693,9 +699,21 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         elif not kill_criterion.strip():
             watchplan.save_analysis(store, tkr, None)
 
+        # The ADD criterion gets the same treatment, with the framing that says
+        # these are conditions which must hold rather than ones that falsify.
+        add_text = watchplan.set_add_text(store, tkr, add_criterion)
+        if add_text and add_text != previous_add:
+            add_analysis = await run_in_threadpool(
+                lambda: watchplan.analyse_criterion(add_text, kind="add"))
+            watchplan.save_add_analysis(store, tkr, add_analysis)
+        elif not add_text:
+            watchplan.save_add_analysis(store, tkr, None)
+
         bits = []
         if plan["kill_criterion"]:
             bits.append("kill criterion")
+        if add_text:
+            bits.append("ADD criterion")
         rules = plan["kill_rules"]
         if rules.get("max_drawdown_pct"):
             # Say what the line is measured from — the whole point of the

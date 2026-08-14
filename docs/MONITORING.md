@@ -48,8 +48,53 @@ fund paper-plan kf-chokepoint-satellite NVDA --clear
 | Condition | Set with | Checked by |
 |-----------|----------|------------|
 | **Kill criterion** (text) | what would falsify the thesis | daily judge (gpt-4o-mini) over an evidence pack |
+| **ADD criterion** (text) | what must still be true to put more money in | the same decomposition, checked against cached figures every run |
 | **Kill rules** (numeric) | max % drop from the review anchor, price floor, price target | prices, every run — no API key needed |
 | **Time horizon** | a date, or N months out | days remaining, every run |
+
+### The ADD criterion
+
+Written in the same box as the kill criterion, one line below it, in the same
+plain English:
+
+> Organic growth ≥6% AND adj. EBIT margin ≥9%, cash generation intact
+
+It is the mirror of a kill criterion — conditions that must **hold**, not ones
+that falsify — and it goes through the same analyser with that framing, because
+reading one as the other inverts every threshold and would open the gate exactly
+when the business is deteriorating. Each condition comes back as a figure check
+or as a judgement no feed settles, and the panel shows which is which under the
+criterion text.
+
+The result feeds the **proof** leg of the add signal, which previously had only
+one route: a manual yes/no you set after reading a report. Now:
+
+| | |
+|---|---|
+| every checkable condition holds, nothing manual outstanding | proof is **automatic** |
+| a figure is below its line | not proof — the panel names the condition that fell short |
+| a metric has nothing cached | **unread**, never a pass |
+| a condition needs judgement ("cash generation intact") | falls back to the dated human confirmation |
+
+So writing a criterion can only tighten the gate, never loosen it. `/proof` and
+the panel's *Proof confirmed* button remain, for the legs no feed will settle.
+
+#### Max drop is a review trigger, not a sell
+
+A −25% with the business intact can be an **add**, not an exit, so the price
+line no longer counts as a kill on its own:
+
+| Situation | State |
+|---|---|
+| max drop hit **+ fundamentals deteriorating** | 🔴 **KILL** — do not average down |
+| max drop hit **+ fundamentals unchanged** | 🟡 **ADD-WATCH** — "valuation review, not a sell" |
+| max drop hit **+ ADD criterion satisfied** | 🟢 **STRONG ADD** candidate, still subject to valuation and weight |
+
+`evaluate_kill_rules` therefore reports `drawdown_hit` and `fundamentals_hit`
+separately, and only the second suppresses add signals. The Telegram alert
+changes headline to match: 🚨 *kill criterion hit* when the figures broke, 🟡
+*max drop reached, review not sell* when only the price did — with the line
+"Fundamentals show no breach — this may be an add, not an exit."
 
 #### What a drawdown line is measured from
 

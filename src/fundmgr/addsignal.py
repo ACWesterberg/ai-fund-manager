@@ -266,7 +266,7 @@ def proof_status(store: Store, ticker: str, plan: dict | None = None) -> dict:
 
 def evaluate(store: Store, ticker: str, *, price: float | None = None,
              weight_pct: float | None = None, killed: bool = False,
-             today: date | None = None) -> dict:
+             review: bool = False, today: date | None = None) -> dict:
     """Full add-signal assessment for one position.
 
     Every gate reports its own pass/fail and why, so the dashboard can explain a
@@ -281,12 +281,23 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
     book = plan.get("book") or DEFAULT_BOOK
     gates = BOOK_GATES.get(book, BOOK_GATES[DEFAULT_BOOK])
 
-    # Proof: human-confirmed at the last report. Almost none of these metrics
-    # (organic growth, ARR, adjusted margins) exist in any price feed — and a
-    # confirmation expires with the report it was made about.
+    # Proof has two routes, and a position may use either or both.
+    #
+    #   1. The ADD criterion, written as text and decomposed the way a kill
+    #      criterion is. Where its conditions are thresholds on metrics we
+    #      cache, they are checked every run — no human step at all.
+    #   2. The dated human confirmation, for everything no feed settles
+    #      (organic growth, ARR, "cash generation intact"), which expires with
+    #      the report it was made about.
+    #
+    # A criterion whose conditions all hold is proof. A criterion with anything
+    # unread, failed or manual outstanding is not, and falls back to asking the
+    # human — so adding a criterion can only ever tighten the gate.
     proof_at = plan.get("proof_confirmed_at")
     proof_state = proof_status(store, ticker, plan)
-    proof = proof_state["status"] == "fresh"
+    confirmed = proof_state["status"] == "fresh"
+    criterion = watchplan.evaluate_add_criterion(store, ticker)
+    proof = bool(criterion and criterion["satisfied"]) or confirmed
 
     # Dislocation from the thesis-confirmed anchor, never from cost.
     review_price = plan.get("review_price")
@@ -317,7 +328,7 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
 
     state, why = _classify(killed, proof, dislocated, valuation_ok, weight_ok,
                            valuation, expected, gates, room, tranche, over_max,
-                           proof_state)
+                           proof_state, criterion, review)
 
     return {
         "ticker": ticker,
@@ -328,9 +339,18 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
         "proof_confirmed_at": proof_at,
         "proof_status": proof_state["status"],
         "proof_reason": proof_state["reason"],
+        "proof_source": ("criterion" if (criterion and criterion["satisfied"])
+                         else ("confirmed" if confirmed else "")),
+        "add_criterion": (criterion or {}).get("criterion", ""),
+        "add_checked": (criterion or {}).get("checked") or [],
+        "add_failed": (criterion or {}).get("failed") or [],
+        "add_unread": (criterion or {}).get("unread") or [],
+        "add_manual": (criterion or {}).get("manual") or [],
+        "add_analysed": bool((criterion or {}).get("analysed")),
         "dislocation_pct": round(dislocation_pct, 1) if dislocation_pct is not None else None,
         "dislocation_gate": gates["dislocation_pct"],
         "dislocated": dislocated,
+        "review_trigger": review,
         "review_price": review_price,
         "review_date": plan.get("review_date"),
         "target_price": plan.get("target_price"),
@@ -351,9 +371,28 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
     }
 
 
+def _criterion_shortfall(criterion: dict) -> str:
+    """Why an ADD criterion is not satisfied, in the investor's own terms."""
+    if criterion["failed"]:
+        first = criterion["failed"][0]
+        return (f"ADD criterion not met: {first['label']} "
+                f"{first['actual']:,.1f}{first['unit']} is not {first['op']} "
+                f"{first['value']:,.1f}{first['unit']}")
+    if criterion["unread"]:
+        names = ", ".join(c["label"] for c in criterion["unread"][:3])
+        return f"ADD criterion unverified — nothing cached for {names}"
+    if criterion["manual"]:
+        n = len(criterion["manual"])
+        return (f"ADD criterion needs {n} judgement"
+                f"{'s' if n > 1 else ''} no feed settles — confirm at the report")
+    if not criterion["analysed"]:
+        return "ADD criterion saved but not yet decomposed into checks"
+    return ""
+
+
 def _classify(killed, proof, dislocated, valuation_ok, weight_ok,
               valuation, expected, gates, room, tranche, over_max,
-              proof_state=None):
+              proof_state=None, criterion=None, review=False):
     """The state machine, with the reason the state was reached."""
     proof_state = proof_state or {"status": "unset"}
     if killed:
@@ -361,6 +400,21 @@ def _classify(killed, proof, dislocated, valuation_ok, weight_ok,
     if over_max:
         return HOLD, "above max weight — concentration review, not an add"
     if not (proof or dislocated):
+        # A max-drop breach with the business intact is the case the policy is
+        # explicit about: never "sell because -25%", but never silence either.
+        # It becomes a valuation review that says so.
+        if review:
+            short = _criterion_shortfall(criterion) if criterion else ""
+            return ADD_WATCH, (
+                "max drop reached with no fundamental breach — valuation review, "
+                "not a sell" + (f" ({short})" if short else ""))
+        # Name the condition that is short, not just "no proof" — the whole
+        # point of writing the criterion down is that it can say which part of
+        # the thesis stopped holding.
+        if criterion:
+            reason = _criterion_shortfall(criterion)
+            if reason:
+                return HOLD, f"{reason}, and there is no price dislocation"
         if proof_state["status"] == "stale":
             return HOLD, (f"proof is stale ({proof_state['reason']}) and there is "
                           f"no price dislocation — re-read the print")
@@ -384,6 +438,12 @@ def _classify(killed, proof, dislocated, valuation_ok, weight_ok,
         return STRONG_ADD, "fundamental proof and price dislocation together"
     if proof:
         return ADD, "fundamental proof confirmed, gates clear"
+    # Same landing state either way, but say which trigger got us here: a
+    # dislocation against the book's gate and a breached max-drop line are
+    # different facts, and "not a sell" is the half that needs stating.
+    if review:
+        return ADD_WATCH, ("max drop reached with no fundamental breach — "
+                           "valuation review, not a sell")
     return ADD_WATCH, "price dislocation without fundamental proof — needs review"
 
 
@@ -410,7 +470,13 @@ def evaluate_all(store: Store, today: date | None = None) -> list[dict]:
                     for p in positions}
     nav = sum(market_value.values()) + store.get_cash()
 
-    killed = {row["ticker"] for row in watchplan.evaluate_kill_rules(store) if row["hit"]}
+    # A price fall is not a kill. The user's own rule: "the price decline never
+    # determines the trade — it determines how urgently the fundamental evidence
+    # needs re-evaluating." So only a fundamental breach suppresses adds; a
+    # drawdown breach becomes a review trigger that runs *through* the gates.
+    rule_rows = watchplan.evaluate_kill_rules(store)
+    killed = {r["ticker"] for r in rule_rows if r["fundamentals_hit"]}
+    review = {r["ticker"] for r in rule_rows if r["drawdown_hit"]}
     texts = watchplan.get_kill_text(store)
     for t in texts:
         raw = store.get_meta(f"paper_killverdict:{t}")
@@ -425,7 +491,8 @@ def evaluate_all(store: Store, today: date | None = None) -> list[dict]:
     for ticker in sorted(plans):
         weight = (market_value.get(ticker, 0.0) / nav * 100) if nav > 0 else None
         out.append(evaluate(store, ticker, price=prices.get(ticker),
-                            weight_pct=weight, killed=ticker in killed, today=today))
+                            weight_pct=weight, killed=ticker in killed,
+                            review=ticker in review, today=today))
     order = {STRONG_ADD: 0, ADD: 1, ADD_WATCH: 2, KILL: 3, HOLD: 4}
     out.sort(key=lambda r: (order.get(r["state"], 9), r["ticker"]))
     return out

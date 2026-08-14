@@ -25,6 +25,7 @@ from fundmgr.reporting.dashboard import format_text_report, generate_html_report
 from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.guardrails.rules import apply_guardrails
+from fundmgr.levels import alertable_hits, merged_levels, record_sent_alerts
 from fundmgr.reporting.actions import format_action_list
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
 from fundmgr.state.store import Store
@@ -40,6 +41,8 @@ def _get_store(cfg=None) -> tuple:
         cfg = load_config()
     store = Store(cfg.db_path)
     return cfg, store
+
+
 
 
 @click.group()
@@ -316,13 +319,16 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
 
-        # Persist stop/take-profit levels per position so check-stops survives multiple runs
+        # Persist stop/take-profit levels per position so check-stops survives
+        # multiple runs.
+        existing_levels = store.get_effective_stops()
         for action in guardrail_result.approved_actions:
-            if action.side == "buy" and (action.stop_loss_pct or action.take_profit_pct):
+            merged = merged_levels(action, existing_levels.get(action.ticker))
+            if merged:
                 store.set_position_stop(
                     action.ticker,
-                    stop_pct=action.stop_loss_pct,
-                    take_profit_pct=action.take_profit_pct,
+                    stop_pct=merged[0],
+                    take_profit_pct=merged[1],
                 )
             elif action.side == "sell" and action.target_weight_pct == 0:
                 store.clear_position_stop(action.ticker)
@@ -818,6 +824,10 @@ def check_stops(quiet: bool):
             parts.append(f"+{tp_pct:.0f}%")
         levels_str = " / ".join(parts) if parts else "n/a"
 
+        # These lists drive auto-sell and the stop review as well as the alert,
+        # so every breach is recorded on every cycle. Rate-limiting happens at
+        # the Telegram step alone — suppressing detection here would mean a
+        # stop-loss whose auto-sell failed never got retried.
         if stop_pct and chg <= -stop_pct:
             status = "🚨 STOP HIT"
             stops_hit.append((p.ticker, chg, stop_pct, live_price))
@@ -902,12 +912,15 @@ def check_stops(quiet: bool):
     # ── Telegram alert ────────────────────────────────────────────────────────
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if (stops_hit or profits_hit or warnings) and bot_token and chat_id:
+    alert_stops   = alertable_hits(stops_hit, "stop", auto_sold, store, today) if bot_token and chat_id else []
+    alert_profits = alertable_hits(profits_hit, "target", auto_sold, store, today) if bot_token and chat_id else []
+
+    if (alert_stops or alert_profits or warnings) and bot_token and chat_id:
         lines = [f"<b>{cfg.display_name}</b>\n📉 Price Alert"]
-        for ticker, chg, stop_pct, price in stops_hit:
+        for ticker, chg, stop_pct, price in alert_stops:
             note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review &amp; sell"
             lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")
-        for ticker, chg, tp_pct, price in profits_hit:
+        for ticker, chg, tp_pct, price in alert_profits:
             note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — consider trimming"
             lines.append(f"🎯 <b>{ticker}</b> {chg:+.1f}% — TARGET HIT (+{tp_pct:.0f}%)  live {price:.2f}{note}")
         for ticker, chg, daily_chg, price, stop_pct in warnings:
@@ -924,7 +937,7 @@ def check_stops(quiet: bool):
         for snip in review_snippets:
             lines.append("")
             lines.append(snip)
-        if (stops_hit or profits_hit) and not auto_sold and not review_snippets:
+        if (alert_stops or alert_profits) and not auto_sold and not review_snippets:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)
         try:
@@ -935,6 +948,10 @@ def check_stops(quiet: bool):
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 data, timeout=10,
             )
+            # Only now is the day's alert spent — a send that never landed must
+            # be retried on the next cycle, not silently swallowed.
+            record_sent_alerts(alert_stops, "stop", store, today)
+            record_sent_alerts(alert_profits, "target", store, today)
             click.echo("  Telegram alert sent.")
         except Exception as e:
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)

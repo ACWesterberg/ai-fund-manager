@@ -219,6 +219,56 @@ Three rules make this safe rather than merely convenient:
   0–1 fractions are its own convention, and applying it to a figure you read off
   a page would be a factor-of-100 trap.
 
+#### Finding the figures instead of typing them
+
+`fund paper-read` locates coverage of a company's report, fetches it, and pulls
+out the metrics this book tracks:
+
+```bash
+fund paper-read my-sleeve SYSR.ST --period 2026-06-30          # show
+fund paper-read my-sleeve SYSR.ST --period 2026-06-30 --apply  # record
+```
+
+```
+─── Found in the coverage (2) ───
+  Organic growth                    6.40%   conf 1.0
+      "Organic growth was 6.4 per cent in the quarter"
+  Adj. EBIT margin                  9.30%   conf 0.9
+      "The adjusted EBIT margin came in at 9.3 per cent"
+```
+
+It reuses what the monitor already had: the earnings calendar knows when a
+report landed, `news_items` finds what was published within ten days of it, and
+`fetch_article` pulls the body. Only the extraction step is new.
+
+Three properties do the real work:
+
+- **A figure not stated is absent, never inferred.** No computing a margin from
+  a revenue line, no currency conversion, no rounding to a neat number. A
+  missing figure leaves the criterion honestly unread, which is a correct
+  answer.
+- **Every value must appear in the source text**, checked here rather than
+  asked for in the prompt — a model told not to invent can still invent. A
+  figure whose number is nowhere in the text it claims to quote is discarded and
+  *shown as discarded*, because dropping it silently would read as "nothing
+  found". Nordic decimal commas and space-separated thousands count as present.
+- **Nothing is stored without `--apply`.** Extraction produces a review table;
+  you confirm. A number that gates money should not enter the book on a model's
+  say-so, and automation here removes the hunting, not the checking.
+
+Only book-defined metrics are looked for. A provider field like `revenue_growth`
+is deliberately excluded from the menu, so a journalist's paraphrase can never
+overwrite a figure that has a real source.
+
+The post-earnings alert runs this too, so the message that asks "did this print
+confirm the thesis?" arrives with the figures already in it.
+
+**Fidelity caveat:** coverage is not the report. A write-up may quote organic
+growth or may not, and it is a journalist's reading either way. Reading the
+company's own *Nyckeltal* table from the report PDF would be better, and is the
+natural next step — the storage and criterion sides are already done, so what
+remains is locating and parsing the PDF.
+
 Custom metrics stay out of `_FUND_FIELDS` deliberately. That table is guarded by
 tests asserting every entry is genuinely fetched from a provider; a figure
 fetched from a PDF by a human is a different kind of thing, and mixing them

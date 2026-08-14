@@ -1793,11 +1793,29 @@ def _proof_prompt(store: Store, slug: str, ticker: str) -> list[str]:
     # The numbers that moved, so the question can be answered from the message
     # rather than from memory.
     try:
-        from fundmgr.evidence import FUND_FIELD_META, fundamentals_trend
+        from fundmgr.evidence import fundamentals_trend
         moved = [r for r in fundamentals_trend(store, ticker)
                  if r.get("direction") in ("up", "down")][:4]
         for row in moved:
             lines.append(f"• {row['label']}: {row['text']}")
+    except Exception:
+        pass
+
+    # The company-defined figures the criterion is actually written on, read out
+    # of what was published. Offered for confirmation, never recorded here — the
+    # alert asks a question, it does not answer it.
+    try:
+        from fundmgr.data.release import read_report
+        found = read_report(store, ticker)
+        for f in found.get("figures", [])[:4]:
+            lines.append(f"• {f['label']}: <b>{f['value']:,.2f}{f['unit']}</b> "
+                         f"— “{f['quote'][:90]}”")
+        if found.get("rejected"):
+            lines.append(f"⚠ {len(found['rejected'])} figure(s) discarded — the "
+                         f"number was not in the source text.")
+        if found.get("figures"):
+            lines.append(f"Record them with <code>fund paper-read {slug} {ticker} "
+                         f"--period &lt;quarter-end&gt; --apply</code> once checked.")
     except Exception:
         pass
 

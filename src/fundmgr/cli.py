@@ -2141,3 +2141,72 @@ def paper_report(slug, ticker, period, pairs):
     for k, v in sorted(written.items()):
         meta = known[k]
         click.echo(f"    {meta['label']:<26} {v:,.2f}{meta.get('unit', '')}")
+
+
+@cli.command("paper-read")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--period", required=True, help="Period end the report covers, YYYY-MM-DD.")
+@click.option("--apply", "apply_", is_flag=True,
+              help="Record the extracted figures (default: show them only).")
+def paper_read(slug, ticker, period, apply_):
+    """Read this book's tracked figures out of coverage of a company's report.
+
+    Finds what was published around the reporting date, fetches it, and pulls
+    out the metrics defined with 'fund paper-metric'. Nothing is stored without
+    --apply: a figure that gates money should not enter the book on a model's
+    say-so.
+
+        fund paper-read my-sleeve SYSR.ST --period 2026-06-30
+        fund paper-read my-sleeve SYSR.ST --period 2026-06-30 --apply
+    """
+    from datetime import datetime
+
+    from fundmgr.data.release import read_report
+    from fundmgr.evidence import record_reported
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+    try:
+        datetime.strptime(period, "%Y-%m-%d")
+    except ValueError:
+        raise click.ClickException(f"Bad period '{period}' — use YYYY-MM-DD.")
+
+    tkr = ticker.upper()
+    click.echo(f"⏳ Looking for {tkr} coverage around {period}…")
+    out = read_report(store, tkr, period)
+
+    for src in out["sources"]:
+        click.echo(f"  · {src['publisher']}: {src['headline'][:70]}")
+    if out.get("notes"):
+        click.echo(f"  note: {out['notes']}")
+
+    if not out["figures"] and not out["rejected"]:
+        click.echo("\n  Nothing extractable found. Enter the figures by hand:\n"
+                   f"    fund paper-report {slug} {tkr} --period {period} --set <key>=<value>")
+        return
+
+    if out["figures"]:
+        click.echo(f"\n─── Found in the coverage ({len(out['figures'])}) ───")
+        for f in out["figures"]:
+            mark = "" if f["quote_verbatim"] else "  ~paraphrased quote"
+            click.echo(f"  {f['label']:<26} {f['value']:>10,.2f}{f['unit']:<4}"
+                       f"  conf {f['confidence']:.1f}{mark}")
+            click.echo(f"      “{f['quote'][:100]}”")
+            if f["period"]:
+                click.echo(f"      period as stated: {f['period']}")
+    if out["rejected"]:
+        click.echo(f"\n─── Discarded ({len(out['rejected'])}) ───")
+        for f in out["rejected"]:
+            click.echo(f"  {f['label']:<26} {f['value']:>10,.2f}  — {f['reason']}")
+
+    if not apply_:
+        click.echo("\n  Check these against the report, then re-run with --apply "
+                   "to record them.")
+        return
+
+    written = record_reported(store, tkr, {f["metric"]: f["value"] for f in out["figures"]},
+                              period)
+    click.echo(f"\n✓ Recorded {len(written)} figure(s) for period ending {period}.")

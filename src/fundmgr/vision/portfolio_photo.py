@@ -75,7 +75,13 @@ Return ONLY a JSON object of this exact shape:
     }
   ],
   "cash_sek": free cash / likvida medel in SEK if visible, else null,
-  "total_value_sek": total portfolio value in SEK if visible, else null,
+  "total_value_sek": total portfolio MARKET value in SEK from the screen's own
+                     total row (Värde / Marknadsvärde) if visible, else null,
+  "total_cost_sek": total portfolio PURCHASE value in SEK from the screen's own
+                    total row (Inköp / Inköpsvärde / Anskaffningsvärde) if
+                    visible, else null. Copy it, never add the rows up yourself
+                    — it is the independent check on whether they were read
+                    correctly, and is worthless if derived from them,
   "account_name": account or portfolio name if visible, else null,
   "notes": "anything ambiguous, cut off, or unreadable — one short sentence"
 }
@@ -86,6 +92,15 @@ Rules:
   tempted to put a position's value in `shares`, the share count is not visible
   — return null for it, and make sure `market_value_sek` and
   `last_price_native` are both filled in so the count can be derived.
+- `cost_value_sek` must be READ from a SEK column, never computed. If the row's
+  price columns are in another currency, multiplying them by the share count
+  gives a number in THAT currency, not SEK — a Verisure row priced in EUR is
+  off by the EUR/SEK rate, roughly eleven times too small. Return null unless
+  you can see a SEK purchase-value column for that row.
+- Never round a figure to a neat number. If a value reads 98 154, return 98 154
+  — not 98 000. A rounded figure is indistinguishable from a guess.
+- Read each row's share count from that row. Rows are narrow and adjacent
+  counts look alike; repeating the row above is a common and costly error.
 - Copy numbers exactly as displayed. Nordic screens use space or dot as the
   thousands separator and comma as the decimal separator: "1 234,50" is 1234.50,
   "12.500" is 12500. Strip currency symbols and % signs.
@@ -295,12 +310,14 @@ def extract_holdings(
         holdings = _resolve_tickers(holdings)
 
     total_value = to_float(data.get("total_value_sek"))
-    warnings += _sanity_check(holdings, total_value)
+    total_cost = to_float(data.get("total_cost_sek"))
+    warnings += _sanity_check(holdings, total_value, total_cost)
 
     return {
         "holdings": holdings,
         "cash_sek": to_float(data.get("cash_sek")),
         "total_value_sek": total_value,
+        "total_cost_sek": total_cost,
         "account_name": (data.get("account_name") or "").strip() or None,
         "notes": (data.get("notes") or "").strip(),
         "warnings": warnings,
@@ -496,11 +513,21 @@ def _normalise_rows(rows: list) -> tuple[list[dict], list[str]]:
     return out, warnings
 
 
-def _sanity_check(holdings: list[dict], total_value_sek: float | None) -> list[str]:
+# How far the rows may drift from the screen's own total before it is reported.
+# Rounding in the broker's display accounts for a few hundred SEK on a book of
+# a million; anything past this is a misread row, not a rounding artefact.
+_TOTAL_TOLERANCE = 0.01
+
+
+def _sanity_check(holdings: list[dict], total_value_sek: float | None,
+                  total_cost_sek: float | None = None) -> list[str]:
     """Whole-portfolio checks for the failure modes a per-row look won't catch.
 
     A column misread the same way on every row leaves each row individually
-    plausible, so the only place it shows up is in the totals.
+    plausible, so the only place it shows up is in the totals. The reconciliation
+    below is the one check worth more than all the others: the broker prints its
+    own total, and comparing it against the sum of what was read is independent
+    of how convincing any single row looks.
     """
     out: list[str] = []
     costed = [h for h in holdings if h["shares"] and h["avg_cost_sek"]]
@@ -515,16 +542,108 @@ def _sanity_check(holdings: list[dict], total_value_sek: float | None) -> list[s
             "and value columns were almost certainly confused. Check the share "
             "counts against the broker before importing.")
 
-    # The implied book should reconcile with the total the screen reported.
-    implied = sum(h["shares"] * h["avg_cost_sek"] for h in costed)
-    if total_value_sek and implied > 0:
-        ratio = implied / total_value_sek
+    # Cost reconciles against the cost total, market value against the market
+    # total. Comparing one against the other is what forced the old tolerance so
+    # wide that a 7.5% shortfall passed as healthy — so that comparison survives
+    # only as a fallback, and only for catastrophes.
+    implied_cost = sum(h["shares"] * h["avg_cost_sek"] for h in costed)
+    valued = [h for h in holdings if h.get("market_value_sek")]
+
+    if total_cost_sek:
+        out += _reconcile(implied_cost, total_cost_sek, "purchase value")
+    elif total_value_sek and implied_cost > 0:
+        # Cost against a market total: they legitimately differ by the book's
+        # gain, so only an order-of-magnitude gap means anything here.
+        ratio = implied_cost / total_value_sek
         if ratio > 1.5 or ratio < 0.5:
             out.append(
-                f"The rows add up to {implied:,.0f} SEK but the screen's total reads "
-                f"{total_value_sek:,.0f} SEK — off by {ratio:.1f}×. Something was "
-                "read from the wrong column.")
+                f"The rows add up to {implied_cost:,.0f} SEK but the screen's total "
+                f"reads {total_value_sek:,.0f} SEK — off by {ratio:.1f}×. Something "
+                "was read from the wrong column.")
+    if valued and total_value_sek:
+        out += _reconcile(sum(h["market_value_sek"] for h in valued),
+                          total_value_sek, "market value")
+    if not total_cost_sek and not total_value_sek:
+        out.append(
+            "No portfolio total was visible, so the rows could not be checked "
+            "against one. Include the broker's total row in the screenshot and "
+            "a misread column is caught before it reaches the book.")
+
+    out += _currency_check(holdings)
+    out += _repeated_share_counts(holdings)
+    out += _suspiciously_round(holdings)
     return out
+
+
+def _reconcile(implied: float, stated: float | None, label: str) -> list[str]:
+    """Rows against the screen's own total for the same quantity."""
+    if not stated or implied <= 0:
+        return []
+    gap = implied - stated
+    if abs(gap) <= abs(stated) * _TOTAL_TOLERANCE:
+        return []
+    return [f"The rows add up to {implied:,.0f} SEK of {label} but the screen's "
+            f"total reads {stated:,.0f} SEK — {gap:+,.0f} SEK "
+            f"({gap / stated * 100:+.1f}%). At least one row was misread; check "
+            f"them against the broker before importing."]
+
+
+def _currency_check(holdings: list[dict]) -> list[str]:
+    """A non-SEK row whose SEK cost equals its native price was never converted.
+
+    The expensive version of this: Verisure priced at 10.47 EUR, 752 shares,
+    booked at 8,000 SEK instead of 86,667 — the model multiplied the native
+    price by the share count and labelled the result SEK. For a foreign row the
+    two differ by the FX rate, so their being equal is proof, not suspicion.
+    """
+    out = []
+    for h in holdings:
+        currency = (h.get("currency") or "SEK").upper()
+        native, avg = h.get("avg_cost_native"), h.get("avg_cost_sek")
+        if currency == "SEK" or not native or not avg:
+            continue
+        if abs(avg - native) <= max(abs(native) * 0.02, 1e-9):
+            out.append(
+                f"{h.get('name') or '?'}: cost basis {avg:,.2f} matches the {currency} price "
+                f"{native:,.2f} — it looks like {currency}, not SEK, so this "
+                f"position is understated by roughly the {currency}/SEK rate. "
+                f"Enter the broker's SEK purchase value ÷ shares.")
+    return out
+
+
+def _repeated_share_counts(holdings: list[dict]) -> list[str]:
+    """The same count on several rows is usually one row copied onto another.
+
+    Rows are narrow and adjacent counts look alike; genuine duplicates happen,
+    which is why this reports rather than corrects.
+    """
+    from collections import Counter
+
+    counts = Counter(h["shares"] for h in holdings if h.get("shares"))
+    repeated = {n: c for n, c in counts.items() if c > 1}
+    if not repeated:
+        return []
+    out = []
+    for n, c in sorted(repeated.items(), key=lambda kv: -kv[1]):
+        names = ", ".join(h.get("name") or "?" for h in holdings if h.get("shares") == n)
+        out.append(f"{c} rows share the same count of {n:g} ({names}) — check "
+                   f"each against the broker; a repeated count is usually one "
+                   f"row read off another.")
+    return out
+
+
+def _suspiciously_round(holdings: list[dict]) -> list[str]:
+    """Values landing on exact thousands are estimates wearing a number's clothes."""
+    values = [(h.get("name") or "?", h["shares"] * h["avg_cost_sek"])
+              for h in holdings if h.get("shares") and h.get("avg_cost_sek")]
+    round_ones = [n for n, v in values if v >= 1000 and abs(v - round(v / 1000) * 1000) < 0.5]
+    if len(round_ones) < 2 or len(round_ones) == len(values):
+        # One round row is coincidence; every row round means a book kept in
+        # round numbers, which is unusual but not evidence of a misread.
+        return []
+    return [f"{len(round_ones)} of {len(values)} rows come to an exact round "
+            f"thousand SEK ({', '.join(round_ones)}) while the rest do not — "
+            f"round figures here are usually estimated rather than read."]
 
 
 # Trading-currency → the Yahoo suffixes that currency's home listings use, best

@@ -571,9 +571,12 @@ def test_sanity_check_flags_a_total_that_does_not_reconcile():
     assert any("read from the wrong column" in w for w in out)
 
 
-def test_sanity_check_needs_a_reported_total_to_reconcile():
+def test_sanity_check_says_so_when_there_is_no_total_to_check_against():
+    """"Could not check" must not look like "checked and fine" — the same
+    distinction the kill judge draws between unread and passing."""
     holdings = [{"shares": 100.0, "avg_cost_sek": 291.5}]
-    assert pp._sanity_check(holdings, None) == []
+    out = pp._sanity_check(holdings, None)
+    assert any("No portfolio total was visible" in w for w in out)
 
 
 def test_sanity_check_ignores_rows_without_both_numbers():
@@ -758,3 +761,95 @@ def test_a_urth_sleeve_does_not_claim_omxspi(client):
     body = client.get("/live/world-sleeve").text
     assert "Portfolio vs URTH" in body
     assert "OMXSPI" not in body
+
+
+# ── Regression: the Montrose import of 2026-08-13 ─────────────────────────────
+#
+# 15 rows, of which the first 7 were read perfectly and the rest degraded:
+# Verisure booked at 8,000 SEK instead of 86,667 (its EUR price multiplied by
+# the share count and labelled SEK), three share counts copied from adjacent
+# rows, and four values rounded to exact thousands. The book came to 879,261
+# against the screen's own 950,138 and nothing complained, because the only
+# reconciliation compared a cost sum against a market total at a 0.5–1.5×
+# tolerance. Each check below is anchored to what that screenshot actually
+# contained.
+
+def _montrose_rows():
+    """The extraction as it came back, with the broker's true figures alongside."""
+    return [
+        # name,            shares,  avg_cost_sek, currency, avg_cost_native
+        ("Evolution",        107.0,  667.0467, "SEK", 667.04),
+        ("AstraZeneca",       65.0, 1555.6923, "SEK", 1555.69),
+        ("BeammWave B",     2193.0,   13.2225, "SEK", 13.22),
+        ("Systemair",       1316.0,   82.4962, "SEK", 82.49),
+        ("Bonesupport",      172.0,  227.8256, "SEK", 227.82),
+        ("Upsales",         1705.0,   27.7994, "SEK", 27.79),
+        ("Vitec B",          451.0,  245.2794, "SEK", 245.27),
+        ("Cheffelo",         272.0,  117.6471, "SEK", 117.79),
+        ("Assa Abloy B",     272.0,  360.2941, "SEK", 360.86),
+        ("Verisure",         752.0,   10.6383, "EUR", 10.47),
+        ("Mildef",           272.0,  224.2647, "SEK", 225.22),
+        ("Nordea",           254.0,  181.1024, "SEK", 182.71),
+        ("Hacksaw",          743.0,   76.7160, "SEK", 76.94),
+        ("Balder B",         506.0,   59.2885, "SEK", 53.11),
+        ("Dynavox",          506.0,   79.0514, "SEK", 77.82),
+    ]
+
+
+def _as_holdings(rows):
+    return [{"name": n, "shares": s, "avg_cost_sek": c, "currency": cur,
+             "avg_cost_native": nat} for n, s, c, cur, nat in rows]
+
+
+def test_the_montrose_shortfall_is_caught_against_the_stated_cost_total():
+    """879,261 read against the screen's own 950,138 — 7.5% short, and the old
+    0.5-1.5x tolerance let it through as healthy."""
+    out = pp._sanity_check(_as_holdings(_montrose_rows()), 946_456, 950_138)
+    reconcile = [w for w in out if "of purchase value" in w]
+    assert len(reconcile) == 1
+    assert "-70,877" in reconcile[0]
+    assert "-7.5%" in reconcile[0]
+
+
+def test_a_foreign_row_priced_in_its_own_currency_is_caught():
+    """Verisure: 752 x 10.47 EUR booked as 8,000 SEK. For a EUR row the SEK cost
+    and the native price differ by the FX rate — equal means unconverted."""
+    out = pp._sanity_check(_as_holdings(_montrose_rows()), None, 950_138)
+    hits = [w for w in out if w.startswith("Verisure")]
+    assert len(hits) == 1
+    assert "looks like EUR, not SEK" in hits[0]
+
+
+def test_a_sek_row_is_not_flagged_by_the_currency_check():
+    """The native price and the SEK cost are *supposed* to match here."""
+    holdings = [{"name": "Evolution", "shares": 107.0, "avg_cost_sek": 667.0467,
+                 "currency": "SEK", "avg_cost_native": 667.04}]
+    assert not [w for w in pp._sanity_check(holdings, None, 71_374) if "looks like" in w]
+
+
+def test_repeated_share_counts_are_reported():
+    """272 on three rows and 506 on two — each copied off a neighbour."""
+    out = pp._sanity_check(_as_holdings(_montrose_rows()), None, 950_138)
+    repeats = [w for w in out if "share the same count" in w]
+    assert any("272" in w and "Cheffelo" in w and "Mildef" in w for w in repeats)
+    assert any("506" in w and "Balder B" in w and "Dynavox" in w for w in repeats)
+
+
+def test_values_rounded_to_exact_thousands_are_reported():
+    out = pp._sanity_check(_as_holdings(_montrose_rows()), None, 950_138)
+    assert any("exact round thousand" in w for w in out)
+
+
+def test_a_clean_book_passes_every_check():
+    """The guards must stay quiet on a correctly-read portfolio, or they are
+    noise and get ignored — which is worse than not having them."""
+    holdings = [
+        {"name": "Evolution", "shares": 107.0, "avg_cost_sek": 667.0467,
+         "currency": "SEK", "avg_cost_native": 667.04},
+        {"name": "AstraZeneca", "shares": 65.0, "avg_cost_sek": 1555.6923,
+         "currency": "SEK", "avg_cost_native": 1555.69},
+        {"name": "Verisure", "shares": 752.0, "avg_cost_sek": 115.2487,
+         "currency": "EUR", "avg_cost_native": 10.47},
+    ]
+    total = sum(h["shares"] * h["avg_cost_sek"] for h in holdings)
+    assert pp._sanity_check(holdings, None, total) == []

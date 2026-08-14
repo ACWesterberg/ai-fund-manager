@@ -11,6 +11,7 @@ Commands:
   /universe      — list enabled tickers
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
+  /target [TICKER] — take-profit review (no ticker = every position at target)
   /setcash AMOUNT — correct the cash balance (SEK)
   /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
   /help          — show this message
@@ -547,6 +548,26 @@ async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
     await _run_cli_bg(update, context, "review-stop", "--no-notify", timeout=REVIEW_TIMEOUT)
 
 
+async def cmd_target(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/target [TICKER] — take-profit review; no ticker = every position at target.
+
+    Returns SELL / TRIM / RAISE / HOLD, and writes back a raised target so the
+    alert re-arms at the new level instead of repeating the old one.
+    """
+    args = context.args or []
+    if args:
+        await update.message.reply_text(f"⏳ Take-profit review for {args[0].upper()} (consensus)… ~1 min")
+        output = _run_cli("review-target", args[0], "--no-notify", timeout=180)
+        await _send(update, output)
+        return
+
+    await update.message.reply_text(
+        "⏳ Reviewing every position at its take-profit target… may take a few "
+        "min. I'll post the result here when it's done."
+    )
+    await _run_cli_bg(update, context, "review-target", "--no-notify", timeout=REVIEW_TIMEOUT)
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -560,6 +581,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/universe — list all enabled tickers\n"
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
+        "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
         "/setcash AMOUNT — correct the cash balance (SEK)\n"
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"
@@ -901,6 +923,7 @@ def main() -> None:
     app.add_handler(CommandHandler("universe", cmd_universe))
     app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
     app.add_handler(CommandHandler("review",   cmd_review))
+    app.add_handler(CommandHandler("target",   cmd_target))
     app.add_handler(CommandHandler("setcash",  cmd_setcash))
     app.add_handler(CommandHandler("plist",    cmd_plist))
     app.add_handler(CommandHandler("ptarget",  cmd_ptarget))

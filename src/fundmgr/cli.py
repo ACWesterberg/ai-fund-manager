@@ -909,6 +909,42 @@ def check_stops(quiet: bool):
                 f"(conf {consensus.confidence:.2f})"
             )
 
+    # ── Take-profit review ────────────────────────────────────────────────────
+    # Symmetric to the stop review above: reaching a target is a decision, not a
+    # notification. The review banks the gain, trims, or raises the target — and
+    # a raise is written straight back, because the whole failure mode here was
+    # a stale target re-alerting with nothing able to move it.
+    reviewed_targets: set[str] = set()
+    if profits_hit and not cfg.auto_fill:
+        from fundmgr.engine.target_review import (
+            apply_new_target,
+            review_position as review_target,
+            format_review_html as format_target_html,
+        )
+        for ticker, _chg, _tp, live in profits_hit:
+            meta_key = f"target_review:{ticker}:{today}"
+            if store.get_meta(meta_key):
+                continue
+            try:
+                result = review_target(ticker, store, cfg, live_price=live)
+            except Exception as e:
+                click.echo(f"  ⚠ target review failed for {ticker}: {e}", err=True)
+                continue
+            if result is None:
+                continue
+            consensus, votes = result
+            store.set_meta(meta_key, today)
+            reviewed_targets.add(ticker)
+            moved = apply_new_target(consensus, store)
+            review_snippets.append(
+                format_target_html(consensus, votes, max(1, cfg.llm.n_samples), moved)
+            )
+            moved_str = f"; target {moved[0]:+.0f}% → {moved[1]:+.0f}%" if moved else ""
+            click.echo(
+                f"  Target review {ticker}: {consensus.recommendation.upper()} "
+                f"(conf {consensus.confidence:.2f}{moved_str})"
+            )
+
     # ── Telegram alert ────────────────────────────────────────────────────────
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -921,7 +957,12 @@ def check_stops(quiet: bool):
             note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review &amp; sell"
             lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")
         for ticker, chg, tp_pct, price in alert_profits:
-            note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — consider trimming"
+            if ticker in auto_sold:
+                note = " — <b>AUTO-SOLD</b>"
+            elif ticker in reviewed_targets:
+                note = ""  # the review below carries the call — don't pre-empt it
+            else:
+                note = " — consider trimming"
             lines.append(f"🎯 <b>{ticker}</b> {chg:+.1f}% — TARGET HIT (+{tp_pct:.0f}%)  live {price:.2f}{note}")
         for ticker, chg, daily_chg, price, stop_pct in warnings:
             if stop_pct:
@@ -1032,6 +1073,77 @@ def review_stop(ticker: str | None, notify: bool):
     # Only push to Telegram directly when no relay is forwarding our stdout.
     if notify and html_blocks:
         body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
+        if send_telegram(body):
+            click.echo("\n  (sent to Telegram)")
+
+
+@cli.command("review-target")
+@click.argument("ticker", required=False)
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+@click.option("--apply/--no-apply", default=True, show_default=True,
+              help="Persist a raised take-profit level. --no-apply reviews without changing anything.")
+def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
+    """Take-profit review (SELL/TRIM/RAISE/HOLD) for a position at its target.
+
+    With a TICKER: review that held position. With no argument: review every
+    holding currently at or above its take-profit level. A RAISE or TRIM writes
+    the new target back unless --no-apply is given.
+    """
+    from fundmgr.engine.client import LLMError
+    from fundmgr.engine.target_review import (
+        apply_new_target, find_target_hits, review_position as review_target,
+        format_review_text as fmt_text, format_review_html as fmt_html,
+    )
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    n = max(1, cfg.llm.n_samples)
+    held = [p.ticker for p in store.get_positions()]
+
+    if ticker:
+        q = ticker.upper()
+        matches = [h for h in held if h == q] or \
+                  [h for h in held if h.split(".")[0] == q] or \
+                  [h for h in held if h.startswith(q + ".")]
+        matches = sorted(set(matches))
+        if not matches:
+            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
+            sys.exit(1)
+        if len(matches) > 1:
+            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+            sys.exit(1)
+        targets = [{"ticker": matches[0], "live": None}]
+    else:
+        click.echo("Scanning holdings for positions at their take-profit target…")
+        hits = find_target_hits(store, cfg)
+        if hits["skipped"]:
+            click.echo("  Could not evaluate: " + ", ".join(
+                f"{s['ticker']} ({s['reason']})" for s in hits["skipped"]))
+        if not hits["hits"]:
+            click.echo("No positions are currently at their take-profit target.")
+            return
+        click.echo(f"  {len(hits['hits'])} at target: {', '.join(h['ticker'] for h in hits['hits'])}")
+        targets = hits["hits"]
+
+    html_blocks: list[str] = []
+    for t in targets:
+        tk = t["ticker"]
+        click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
+        try:
+            result = review_target(tk, store, cfg, live_price=t.get("live"))
+        except LLMError as e:
+            click.echo(f"  Review failed for {tk}: {e}", err=True)
+            continue
+        if result is None:
+            continue
+        consensus, votes = result
+        moved = apply_new_target(consensus, store) if apply else None
+        click.echo(fmt_text(consensus, votes, n, moved))
+        html_blocks.append(fmt_html(consensus, votes, n, moved))
+
+    if notify and html_blocks:
+        body = "<b>🎯 Take-Profit Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
 

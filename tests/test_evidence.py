@@ -800,3 +800,84 @@ def test_fundamentals_check_survives_a_statement_failure(monkeypatch):
     result = _run_check(monkeypatch, {k: 0.1 for k in evidence.FUND_FIELD_META})
     assert result.exit_code == 0
     assert "statement metrics unavailable" in result.output
+
+
+# ── Book-local metrics: the figures no provider carries ──────────────────────
+#
+# Organic growth, ARR, adjusted EBITA, cash conversion, backlog. These are
+# company-defined measures rather than accounting standards, which is exactly
+# why no standardised feed has them — the figure has to come from the company's
+# own report, entered by hand and stamped with the period it describes.
+
+def test_a_custom_metric_joins_the_menu(store):
+    evidence.define_custom_metric(store, "organic_growth", "Organic growth", "%")
+    menu = evidence.field_meta(store)
+    assert menu["organic_growth"]["label"] == "Organic growth"
+    assert menu["organic_growth"]["custom"] is True
+    assert menu["organic_growth"]["is_fraction"] is False   # entered as printed
+    assert "revenue_growth" in menu                          # built-ins still there
+
+
+def test_the_built_in_menu_is_untouched_without_a_store():
+    assert evidence.field_meta() == evidence.FUND_FIELD_META
+    assert "custom" not in evidence.FUND_FIELD_META["revenue_growth"]
+
+
+def test_a_custom_metric_cannot_shadow_a_provider_field(store):
+    """A rule written against revenue_growth must not change meaning because
+    someone defined a metric with the same name."""
+    with pytest.raises(ValueError, match="already a built-in"):
+        evidence.define_custom_metric(store, "revenue_growth", "Mine", "%")
+
+
+def test_metric_keys_are_normalised(store):
+    evidence.define_custom_metric(store, "  Adj. EBIT Margin ", unit="%")
+    assert "adj_ebit_margin" in evidence.custom_metrics(store)
+
+
+def test_a_bad_unit_is_refused(store):
+    with pytest.raises(ValueError, match="Unit must be"):
+        evidence.define_custom_metric(store, "backlog", unit="furlongs")
+
+
+def test_forgetting_a_metric(store):
+    evidence.define_custom_metric(store, "arr", "ARR", "SEK")
+    assert evidence.forget_custom_metric(store, "arr") is True
+    assert evidence.forget_custom_metric(store, "arr") is False
+    assert "arr" not in evidence.field_meta(store)
+
+
+def test_a_reported_figure_reads_back_like_any_other_metric(store):
+    evidence.define_custom_metric(store, "organic_growth", "Organic growth", "%")
+    evidence.record_reported(store, "SYSR.ST", {"organic_growth": 6.4}, "2026-06-30")
+    assert evidence.current_metric(store, "SYSR.ST", "organic_growth") == 6.4
+
+
+def test_a_reported_figure_occupies_its_own_reporting_period(store):
+    """Two reports are two quarters; one report entered twice is still one."""
+    evidence.define_custom_metric(store, "organic_growth", "Organic growth", "%")
+    evidence.record_reported(store, "X", {"organic_growth": 4.1}, "2026-03-31")
+    evidence.record_reported(store, "X", {"organic_growth": 6.4}, "2026-06-30")
+    evidence.record_reported(store, "X", {"organic_growth": 6.5}, "2026-06-30")  # restated
+
+    history = evidence.metric_history(store, "X", "organic_growth")
+    assert [(r["period"], r["value"]) for r in history] == [
+        ("2026-06-30", 6.5), ("2026-03-31", 4.1)]
+
+    run = evidence.sustained_breach(store, "X", "organic_growth", "above", 4, 2)
+    assert run["hit"] is True and run["streak"] == 2
+
+
+def test_a_reported_figure_does_not_disturb_provider_fields(store):
+    evidence.define_custom_metric(store, "organic_growth", "Organic growth", "%")
+    store.save_fundamentals("X", {"revenue_growth": 0.12, "pe_ratio": 20.0})
+    evidence.record_reported(store, "X", {"organic_growth": 6.4}, "2026-06-30")
+    cached = store.get_fundamentals("X")
+    assert cached["revenue_growth"] == 0.12 and cached["pe_ratio"] == 20.0
+    assert cached["organic_growth"] == 6.4
+
+
+def test_an_undefined_metric_is_not_recorded(store):
+    """Silently accepting an unknown key would create a figure no criterion can
+    ever name, and no error to say why."""
+    assert evidence.record_reported(store, "X", {"made_up": 1.0}, "2026-06-30") == {}

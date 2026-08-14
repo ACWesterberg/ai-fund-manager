@@ -471,7 +471,8 @@ def test_saving_an_add_criterion_analyses_it_with_the_add_framing(client, monkey
     import fundmgr.watchplan as wp
     real = wp.analyse_criterion
     monkeypatch.setattr(wp, "analyse_criterion",
-                        lambda c, model=None, *, kind="kill": seen.update(kind=kind) or real(c, model, kind=kind))
+                        lambda c, model=None, *, kind="kill", store=None:
+                        seen.update(kind=kind) or real(c, model, kind=kind, store=store))
     client.post("/live/acquirer-sleeve/watchplan",
                 data={"ticker": "VIT-B.ST",
                       "add_criterion": "Recurring revenue growth at least 10%"},

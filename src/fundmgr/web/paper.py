@@ -149,7 +149,7 @@ def _watch_status(store, positions_data: list[dict]) -> dict | None:
         verdict = verdicts.get(t) or {}
         analysis = watchplan.get_analysis(store, t)
         applied = {(f["metric"], f["op"]) for f in (rule.get("fundamentals") or [])}
-        pending = [s for s in watchplan.suggested_rules(analysis)
+        pending = [s for s in watchplan.suggested_rules(analysis, store)
                    if (s["metric"], s["op"]) not in applied]
         left = watchplan.days_left(horizon.get("review_date"))
         # Live P&L against the drawdown line, so the panel shows how close a
@@ -693,8 +693,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         # Read the criterion back at save time, so how it will be judged is
         # visible now rather than discovered from a verdict tomorrow.
         if kill_criterion.strip() and kill_criterion.strip() != previous_criterion:
-            analysis = await run_in_threadpool(watchplan.analyse_criterion,
-                                               kill_criterion.strip())
+            analysis = await run_in_threadpool(
+                lambda: watchplan.analyse_criterion(kill_criterion.strip(), store=store))
             watchplan.save_analysis(store, tkr, analysis)
         elif not kill_criterion.strip():
             watchplan.save_analysis(store, tkr, None)
@@ -704,7 +704,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         add_text = watchplan.set_add_text(store, tkr, add_criterion)
         if add_text and add_text != previous_add:
             add_analysis = await run_in_threadpool(
-                lambda: watchplan.analyse_criterion(add_text, kind="add"))
+                lambda: watchplan.analyse_criterion(add_text, kind="add", store=store))
             watchplan.save_add_analysis(store, tkr, add_analysis)
         elif not add_text:
             watchplan.save_add_analysis(store, tkr, None)
@@ -748,7 +748,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             return _not_found()
 
         tkr = (ticker or "").strip().upper()
-        suggestions = watchplan.suggested_rules(watchplan.get_analysis(store, tkr))
+        suggestions = watchplan.suggested_rules(watchplan.get_analysis(store, tkr), store)
         if not suggestions:
             msg, ok = f"No checkable thresholds found in {tkr}'s criterion.", 0
         else:

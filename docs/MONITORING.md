@@ -181,7 +181,50 @@ is not automatically the company's figure:
 Set a leverage gate more than ~3pp away from the current ratio, or it will trip
 on the debt definition rather than on the business.
 
-Two rules keep this list honest, both enforced in `tests/test_evidence.py`:
+#### The figures no provider carries
+
+Organic growth, ARR, adjusted EBITA, cash conversion, order backlog — none of
+these are in Yahoo, EODHD or any other standardised feed, and no better feed
+will fix that. They are **company-defined measures, not accounting standards**:
+each company sets its own definition, which is precisely why nothing normalises
+them and why the number has to come from the company's own report.
+
+So the book keeps its own metrics alongside the provider's:
+
+```bash
+fund paper-metric my-sleeve organic_growth  --label "Organic growth"   --unit %
+fund paper-metric my-sleeve adj_ebit_margin --label "Adj. EBIT margin" --unit %
+fund paper-metric my-sleeve                                  # list what is defined
+
+fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \
+    --set organic_growth=6.4 --set adj_ebit_margin=9.3
+```
+
+Once defined, a custom metric is offered to the criterion analyser like any
+other, so *"organic growth ≥6% AND adj. EBIT margin ≥9%"* becomes two real
+checks rather than two manual legs. The figures land in the same cache the
+provider's do, so the kill rules, the ADD criterion, the snapshots and the
+`quarters` machinery all read them without knowing the difference.
+
+Three rules make this safe rather than merely convenient:
+
+- **`--period` is the quarter the figures describe**, never the day you typed
+  them. That is what lets a late entry still count as its own quarter, and what
+  stops one report's numbers counting as two quarters of evidence. A restated
+  figure replaces its period rather than adding one.
+- **A custom key can never shadow a built-in one.** A rule written against
+  `revenue_growth` must not change meaning because a metric was defined with
+  that name, so the provider's definition wins and the attempt is refused.
+- **Values are entered as printed** — 6.4 for 6.4%, not 0.064. The provider's
+  0–1 fractions are its own convention, and applying it to a figure you read off
+  a page would be a factor-of-100 trap.
+
+Custom metrics stay out of `_FUND_FIELDS` deliberately. That table is guarded by
+tests asserting every entry is genuinely fetched from a provider; a figure
+fetched from a PDF by a human is a different kind of thing, and mixing them
+would either break those guards or dilute them into meaninglessness.
+
+Two rules keep the built-in list honest, both enforced in `tests/test_evidence.py`:
 every metric offered must exist in financedata's `_FIELD_MAP`, and a mapped key
 that Yahoo returns null for does **not** belong here — `price_to_sales` is
 mapped but omitted for exactly that reason. Verify with:

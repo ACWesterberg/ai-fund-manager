@@ -133,8 +133,9 @@ def evaluate_add_criterion(store: Store, ticker: str) -> dict | None:
     `satisfied` therefore means: at least one condition was actually checked,
     none failed, none unread, and nothing manual is outstanding.
     """
-    from fundmgr.evidence import FUND_FIELD_META, current_metric, sustained_breach
+    from fundmgr.evidence import current_metric, field_meta, sustained_breach
 
+    known = field_meta(store)
     criterion = get_add_text(store).get(ticker.upper(), "")
     if not criterion:
         return None
@@ -147,8 +148,9 @@ def evaluate_add_criterion(store: Store, ticker: str) -> dict | None:
             manual.append(cond)
             continue
         metric, op, value = cond["metric"], cond["op"], cond["value"]
-        label = FUND_FIELD_META.get(metric, {}).get("label", metric)
-        unit = "%" if FUND_FIELD_META.get(metric, {}).get("is_fraction") else ""
+        meta = known.get(metric, {})
+        label = meta.get("label", metric)
+        unit = "%" if meta.get("is_fraction") else meta.get("unit", "")
         actual = current_metric(store, ticker, metric)
         quarters = int(cond.get("quarters") or 1)
 
@@ -354,7 +356,7 @@ def set_position_plan(
             else:
                 rule[field] = parsed
         if fundamentals is not None:
-            cleaned = _clean_fundamental_rules(fundamentals)
+            cleaned = _clean_fundamental_rules(fundamentals, store)
             if cleaned:
                 rule["fundamentals"] = cleaned
             else:
@@ -427,14 +429,15 @@ def set_position_plan(
     return plan_for(store, ticker)
 
 
-def _clean_fundamental_rules(rules: list[dict]) -> list[dict]:
+def _clean_fundamental_rules(rules: list[dict], store: Store | None = None) -> list[dict]:
     """Keep only well-formed {metric, op, value, quarters} entries.
 
     `quarters` is how many consecutive *reported periods* must breach before the
     rule fires — 1 (the default) is the old behaviour, a single reading.
     """
-    from fundmgr.evidence import FUND_FIELD_META
+    from fundmgr.evidence import field_meta
 
+    known = field_meta(store)
     out, seen = [], set()
     for entry in rules or []:
         if not isinstance(entry, dict):
@@ -442,7 +445,7 @@ def _clean_fundamental_rules(rules: list[dict]) -> list[dict]:
         metric = str(entry.get("metric") or "").strip()
         op = str(entry.get("op") or "").strip().lower()
         value = _signed_num(entry.get("value"))
-        if metric not in FUND_FIELD_META or op not in ("below", "above") or value is None:
+        if metric not in known or op not in ("below", "above") or value is None:
             continue
         key = (metric, op)
         if key in seen:
@@ -573,7 +576,7 @@ Reply with a JSON object only:
 
 
 def analyse_criterion(criterion: str, model: str | None = None, *,
-                      kind: str = "kill") -> dict | None:
+                      kind: str = "kill", store: Store | None = None) -> dict | None:
     """Decompose a criterion into its conditions and how each can be checked.
 
     `kind` is "kill" (conditions that falsify the thesis) or "add" (conditions
@@ -589,10 +592,16 @@ def analyse_criterion(criterion: str, model: str | None = None, *,
     if not criterion or not os.getenv("OPENAI_API_KEY"):
         return None
 
-    from fundmgr.evidence import FUND_FIELD_META
+    from fundmgr.evidence import field_meta
 
-    catalogue = "\n".join(f"  {key} — {meta['label']}"
-                          for key, meta in FUND_FIELD_META.items())
+    # The menu includes this book's own metrics, so a criterion may name
+    # `organic_growth` — a figure no provider carries and the investor supplies
+    # from the report — exactly as it names revenue_growth.
+    known = field_meta(store)
+    catalogue = "\n".join(
+        f"  {key} — {meta['label']}"
+        + ("  (you supply this from the report)" if meta.get("custom") else "")
+        for key, meta in known.items())
     try:
         from openai import OpenAI
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -618,13 +627,16 @@ def analyse_criterion(criterion: str, model: str | None = None, *,
     except Exception:
         return None
 
-    return _parse_analysis(raw, criterion)
+    return _parse_analysis(raw, criterion, known)
 
 
-def _parse_analysis(raw: str, criterion: str) -> dict | None:
+def _parse_analysis(raw: str, criterion: str,
+                    known: dict | None = None) -> dict | None:
     """Validate the analyser's reply, dropping anything malformed."""
-    from fundmgr.evidence import FUND_FIELD_META
+    from fundmgr.evidence import field_meta
     from fundmgr.paper import extract_json_object
+
+    known = field_meta() if known is None else known
 
     data = None
     for candidate in (raw, extract_json_object(raw or "")):
@@ -656,7 +668,7 @@ def _parse_analysis(raw: str, criterion: str) -> dict | None:
         # A fundamentals condition is only trustworthy if every part of the
         # comparison survived validation — otherwise it degrades to "news".
         if checkable == "fundamentals" and not (
-                metric in FUND_FIELD_META and op in ("below", "above") and value is not None):
+                metric in known and op in ("below", "above") and value is not None):
             checkable = "news" if metric else "manual"
             metric, op, value = None, None, None
 
@@ -704,11 +716,13 @@ def get_analysis(store: Store, ticker: str) -> dict | None:
     return data
 
 
-def suggested_rules(analysis: dict | None) -> list[dict]:
+def suggested_rules(analysis: dict | None, store: Store | None = None) -> list[dict]:
     """The fundamentals conditions an analysis found, ready to become rules."""
     if not analysis:
         return []
-    from fundmgr.evidence import FUND_FIELD_META
+    from fundmgr.evidence import field_meta
+
+    FUND_FIELD_META = field_meta(store)
     out = []
     for cond in analysis["conditions"]:
         if cond["checkable"] != "fundamentals":
@@ -802,12 +816,14 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
 
         # Fundamentals lines — the thresholds lifted out of the text criterion.
         # A metric with nothing cached is reported as unread, never as passing.
-        from fundmgr.evidence import FUND_FIELD_META, current_metric, sustained_breach
+        from fundmgr.evidence import current_metric, field_meta, sustained_breach
+        known = field_meta(store)
         fundamental_rows = []
         for f_rule in rule.get("fundamentals") or []:
-            label = FUND_FIELD_META.get(f_rule["metric"], {}).get("label", f_rule["metric"])
+            meta = known.get(f_rule["metric"], {})
+            label = meta.get("label", f_rule["metric"])
             actual = current_metric(store, ticker, f_rule["metric"])
-            unit = "%" if FUND_FIELD_META.get(f_rule["metric"], {}).get("is_fraction") else ""
+            unit = "%" if meta.get("is_fraction") else meta.get("unit", "")
             quarters = int(f_rule.get("quarters") or 1)
             breached_now = actual is not None and (
                 actual <= f_rule["value"] if f_rule["op"] == "below"

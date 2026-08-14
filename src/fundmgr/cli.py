@@ -2028,3 +2028,116 @@ def paper_status(slug: str):
 
 if __name__ == "__main__":
     cli()
+
+
+@cli.command("paper-metric")
+@click.argument("slug")
+@click.argument("key", required=False)
+@click.option("--label", default=None, help="How it reads on the dashboard.")
+@click.option("--unit", default="", type=click.Choice(["%", "x", "SEK", ""]),
+              help="Unit the figure is printed in.")
+@click.option("--note", default="", help="The company's definition, in your words.")
+@click.option("--forget", is_flag=True, help="Remove this metric from the book.")
+def paper_metric(slug, key, label, unit, note, forget):
+    """Define a metric this book can write criteria against.
+
+    For the figures no provider carries because they are company-defined rather
+    than accounting standards — organic growth, ARR, adjusted EBITA, cash
+    conversion, order backlog. Once defined, a criterion may name it and
+    `paper-report` supplies the numbers from the company's own report.
+
+        fund paper-metric my-sleeve organic_growth --label "Organic growth" --unit %
+        fund paper-metric my-sleeve                      # list what is defined
+    """
+    from fundmgr.evidence import custom_metrics, define_custom_metric, forget_custom_metric
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    if key and forget:
+        if forget_custom_metric(store, key):
+            click.echo(f"✓ Removed '{key}'. Criteria naming it will report it as unknown.")
+        else:
+            click.echo(f"No custom metric '{key}' in this book.")
+        return
+    if key:
+        try:
+            define_custom_metric(store, key, label or "", unit, note)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+
+    defined = custom_metrics(store)
+    if not defined:
+        click.echo("No custom metrics yet. Add one:\n"
+                   "  fund paper-metric <slug> organic_growth --label 'Organic growth' --unit %")
+        return
+    click.echo(f"\n─── Custom metrics for {slug} ───")
+    for k, meta in sorted(defined.items()):
+        click.echo(f"  {k:<24} {meta.get('label', ''):<24} {meta.get('unit', '') or '—'}")
+        if meta.get("note"):
+            click.echo(f"    {meta['note']}")
+    click.echo("\n  Enter figures with: fund paper-report <slug> <TICKER> "
+               "--period 2026-06-30 --set organic_growth=6.4\n")
+
+
+@cli.command("paper-report")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--period", required=True,
+              help="Period end the figures describe, YYYY-MM-DD (not today's date).")
+@click.option("--set", "pairs", multiple=True, metavar="KEY=VALUE",
+              help="A figure from the report. Repeatable.")
+def paper_report(slug, ticker, period, pairs):
+    """Record figures read off a company's own quarterly report.
+
+    They land in the same cache a provider's numbers do, so criteria, kill
+    rules and the quarters machinery read them identically.
+
+        fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \\
+            --set organic_growth=6.4 --set adj_ebit_margin=9.3
+
+    The period is the quarter the figures describe, not the day you typed them:
+    that is what lets a late entry still count as its own quarter, and what stops
+    one report's numbers counting as two quarters of evidence.
+    """
+    from datetime import datetime
+
+    from fundmgr.evidence import field_meta, record_reported
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+    try:
+        datetime.strptime(period, "%Y-%m-%d")
+    except ValueError:
+        raise click.ClickException(f"Bad period '{period}' — use YYYY-MM-DD.")
+
+    known = field_meta(store)
+    values, unknown = {}, []
+    for pair in pairs:
+        if "=" not in pair:
+            raise click.ClickException(f"Expected KEY=VALUE, got '{pair}'.")
+        k, v = pair.split("=", 1)
+        k = k.strip()
+        if k not in known:
+            unknown.append(k)
+            continue
+        try:
+            values[k] = float(v.strip().replace(",", "."))
+        except ValueError:
+            raise click.ClickException(f"'{v}' is not a number (for {k}).")
+    if unknown:
+        raise click.ClickException(
+            f"Unknown metric(s): {', '.join(unknown)}. Define them first with "
+            f"'fund paper-metric {slug} <key>' — see 'fund paper-metric {slug}'.")
+    if not values:
+        raise click.ClickException("Nothing to record — pass at least one --set KEY=VALUE.")
+
+    written = record_reported(store, ticker, values, period)
+    click.echo(f"✓ {ticker.upper()} — period ending {period}:")
+    for k, v in sorted(written.items()):
+        meta = known[k]
+        click.echo(f"    {meta['label']:<26} {v:,.2f}{meta.get('unit', '')}")

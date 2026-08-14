@@ -108,13 +108,136 @@ FUND_FIELD_META: dict[str, dict] = {
 }
 
 
+# Book-local metrics the investor defines, for the figures no feed carries:
+# organic growth, ARR, adjusted EBITA, cash conversion, order backlog. These are
+# company-defined measures, not accounting standards — each company sets its own
+# definition, which is exactly why no standardised provider has them and why the
+# figure has to come from the company's own report.
+#
+# Kept separate from _FUND_FIELDS on purpose. That table is guarded by tests
+# asserting every entry is actually fetched from a provider; a user-defined
+# metric is fetched from a quarterly report by a human, and mixing the two would
+# either break those guards or dilute them into meaninglessness.
+CUSTOM_METRICS_KEY = "paper_custom_metrics"
+
+# Values in the built-in table arrive as the provider sends them (0–1 fractions
+# for percentages). A figure read off a report is entered as it is printed —
+# "6.4%" is 6.4 — so custom metrics are never fractions.
+_CUSTOM_UNITS = ("%", "x", "SEK", "")
+
+
+def custom_metrics(store: Store) -> dict[str, dict]:
+    """{key: {label, unit, note}} for this book's user-defined metrics."""
+    import json
+
+    try:
+        data = json.loads(store.get_meta(CUSTOM_METRICS_KEY) or "{}")
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def field_meta(store: Store | None = None) -> dict[str, dict]:
+    """The metric menu: built-in fields plus this book's custom ones.
+
+    Everything that offers, validates or renders a metric goes through here, so
+    a criterion can name `organic_growth` and have it mean something. A custom
+    key never shadows a built-in one — the provider's definition wins, because
+    a rule written against it would otherwise silently change meaning.
+    """
+    if store is None:
+        return dict(FUND_FIELD_META)
+    merged = dict(FUND_FIELD_META)
+    for key, meta in custom_metrics(store).items():
+        if key in FUND_FIELD_META:
+            continue
+        merged[key] = {
+            "label": meta.get("label") or key.replace("_", " ").title(),
+            "is_fraction": False,
+            "custom": True,
+            "unit": meta.get("unit", ""),
+            "note": meta.get("note", ""),
+        }
+    return merged
+
+
+def define_custom_metric(store: Store, key: str, label: str = "",
+                         unit: str = "", note: str = "") -> dict:
+    """Register a metric this book can write criteria against."""
+    import json
+    import re
+
+    # "Adj. EBIT Margin" → adj_ebit_margin. Runs collapse, or punctuation
+    # followed by a space yields a double underscore nobody would type again.
+    key = re.sub(r"_+", "_",
+                 re.sub(r"[^a-z0-9_]", "_", (key or "").strip().lower())).strip("_")
+    if not key:
+        raise ValueError("A metric needs a name.")
+    if key in FUND_FIELD_META:
+        raise ValueError(f"'{key}' is already a built-in metric.")
+    if unit not in _CUSTOM_UNITS:
+        raise ValueError(f"Unit must be one of {_CUSTOM_UNITS!r}.")
+
+    metrics = custom_metrics(store)
+    metrics[key] = {"label": (label or key.replace("_", " ").capitalize()).strip(),
+                    "unit": unit, "note": (note or "").strip()}
+    store.set_meta(CUSTOM_METRICS_KEY, json.dumps(metrics))
+    return {key: metrics[key]}
+
+
+def forget_custom_metric(store: Store, key: str) -> bool:
+    import json
+
+    metrics = custom_metrics(store)
+    if metrics.pop((key or "").strip().lower(), None) is None:
+        return False
+    store.set_meta(CUSTOM_METRICS_KEY, json.dumps(metrics))
+    return True
+
+
+def record_reported(store: Store, ticker: str, values: dict[str, float],
+                    period_end: str = "") -> dict:
+    """Write figures read off a company's own report into the metrics cache.
+
+    These land in the same place a provider's numbers do, so every consumer —
+    criterion analyser, kill rules, ADD criterion, snapshots, the `quarters`
+    machinery — reads them without knowing the difference.
+
+    `period_end` is the reporting period the figures describe (YYYY-MM-DD), not
+    the day they were typed in. Getting that right is what lets a figure entered
+    late still count as its own quarter, and what stops one report's numbers
+    being counted as two quarters of evidence.
+    """
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("Ticker is required.")
+    known = field_meta(store)
+    clean = {k: _num(v) for k, v in (values or {}).items()
+             if k in known and _num(v) is not None}
+    if not clean:
+        return {}
+
+    existing = store.get_fundamentals(ticker) or {}
+    existing.update(clean)
+    if period_end:
+        existing["fiscal_period_end"] = period_end
+    store.save_fundamentals(ticker, existing)
+    # Snapshot straight away so the figure occupies its reporting period rather
+    # than waiting for the nightly track — a criterion asking for two quarters
+    # should be able to see this one the moment it is entered.
+    snapshot_fundamentals(store, [ticker], today=period_end or None)
+    return clean
+
+
 def current_metric(store: Store, ticker: str, metric: str) -> float | None:
     """Current value of one fundamentals metric, in the unit a rule compares in.
 
     Fractions from the provider (0.071) are returned as percent (7.1) so a rule
     written as "below 8" means 8%, the way it reads on the screen.
     """
-    meta = FUND_FIELD_META.get(metric)
+    meta = field_meta(store).get(metric)
     if meta is None:
         return None
     value = _num((store.get_fundamentals(ticker) or {}).get(metric))
@@ -271,7 +394,7 @@ def snapshot_fundamentals(store: Store, tickers: list[str],
         data = store.get_fundamentals(ticker)
         if not data:
             continue
-        current = {key: _num(data.get(key)) for key, _label, _frac in _FUND_FIELDS}
+        current = {key: _num(data.get(key)) for key in field_meta(store)}
         current = {k: v for k, v in current.items() if v is not None}
         if not current:
             continue
@@ -349,7 +472,7 @@ def metric_history(store: Store, ticker: str, metric: str) -> list[dict]:
     """
     import json
 
-    meta = FUND_FIELD_META.get(metric)
+    meta = field_meta(store).get(metric)
     if meta is None:
         return []
     try:

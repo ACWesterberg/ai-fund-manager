@@ -75,6 +75,54 @@ class DecisionRun(BaseModel):
     )
 
 
+class TargetReview(BaseModel):
+    """Reassessment of a position that has reached its take-profit level.
+
+    A target hit is a decision, not a notification: either the gain is banked,
+    or the reason for holding on is a higher target that says so explicitly.
+    """
+    ticker: str = Field(description="The position under review")
+    recommendation: Literal["sell", "trim", "raise", "hold"] = Field(
+        description=(
+            "sell = take the profit, exit the whole position; "
+            "trim = bank part of the gain and let the rest run (set trim_pct and "
+            "new_take_profit_pct); "
+            "raise = conviction has grown, keep it all and set a higher "
+            "new_take_profit_pct; "
+            "hold = keep as-is at the current target (use sparingly — it leaves "
+            "the target breached and re-alerting)."
+        ),
+    )
+    confidence: float = Field(
+        ge=0, le=1, description="Conviction in this recommendation, 0.0-1.0."
+    )
+    trim_pct: float | None = Field(
+        default=None, ge=0, le=100,
+        description="If recommendation=trim, what % of the current position to sell.",
+    )
+    new_take_profit_pct: float | None = Field(
+        default=None, ge=0, le=300,
+        description=(
+            "Required for 'raise' and 'trim': the new take-profit level, as % gain "
+            "from the original entry price. Must exceed the current level — this is "
+            "the target the position will be measured against from now on."
+        ),
+    )
+    what_changed: str = Field(
+        max_length=400,
+        description="What has materially changed (or not) since the most recent decision on this name.",
+    )
+    rationale: str = Field(
+        max_length=600,
+        description="1-4 sentences: why bank the gain now, or what justifies a higher target.",
+    )
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper(cls, v: str) -> str:
+        return v.upper()
+
+
 class StopReview(BaseModel):
     """Focused reassessment of a single position after its stop-loss is hit."""
     ticker: str = Field(description="The position under review")

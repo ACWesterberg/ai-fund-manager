@@ -147,6 +147,17 @@ CREATE TABLE IF NOT EXISTS daily_price_alerts (
     PRIMARY KEY (ticker, alert_date)
 );
 
+-- One row per ticker per day per alert kind ('stop', 'target'). Separate from
+-- daily_price_alerts because that table's primary key is (ticker, alert_date),
+-- which cannot hold two kinds for the same ticker on the same day — a stop
+-- alert would silently suppress that day's target alert, and vice versa.
+CREATE TABLE IF NOT EXISTS position_alerts (
+    ticker      TEXT NOT NULL,
+    alert_date  TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    PRIMARY KEY (ticker, alert_date, kind)
+);
+
 -- Small key-value store for fund-level flags (e.g. one-shot reminders).
 CREATE TABLE IF NOT EXISTS app_meta (
     key     TEXT PRIMARY KEY,
@@ -413,6 +424,22 @@ class Store:
             conn.execute(
                 "INSERT OR IGNORE INTO daily_price_alerts (ticker, alert_date) VALUES (?, ?)",
                 (ticker, date),
+            )
+
+    def has_sent_position_alert(self, ticker: str, date: str, kind: str) -> bool:
+        """True if a `kind` alert ('stop' / 'target') already went out today."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM position_alerts WHERE ticker = ? AND alert_date = ? AND kind = ?",
+                (ticker, date, kind),
+            ).fetchone()
+            return row is not None
+
+    def record_position_alert(self, ticker: str, date: str, kind: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO position_alerts (ticker, alert_date, kind) VALUES (?, ?, ?)",
+                (ticker, date, kind),
             )
 
     def total_fees_paid(self) -> float:
@@ -1182,6 +1209,7 @@ class Store:
         "position_stops",
         "news_triggers",
         "daily_price_alerts",
+        "position_alerts",
         "app_meta",
     )
     _CACHE_TABLES = (

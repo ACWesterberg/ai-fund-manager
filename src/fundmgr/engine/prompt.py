@@ -15,7 +15,11 @@ def _load_mandate(path: Path) -> str:
     return path.read_text().strip()
 
 
-def _portfolio_block(snap: PortfolioSnapshot, benchmark_return: float | None) -> str:
+def _portfolio_block(
+    snap: PortfolioSnapshot,
+    benchmark_return: float | None,
+    stop_levels: dict[str, dict] | None = None,
+) -> str:
     lines = ["## Current Portfolio State"]
     lines.append(f"NAV: {snap.nav_sek:,.0f} SEK  |  Cash: {snap.cash_sek:,.0f} SEK ({snap.cash_pct:.1f}%)")
 
@@ -24,16 +28,31 @@ def _portfolio_block(snap: PortfolioSnapshot, benchmark_return: float | None) ->
     lines.append("")
 
     if snap.positions:
+        levels = stop_levels or {}
         lines.append("Open positions:")
         for p in sorted(snap.positions, key=lambda x: x.market_value_sek, reverse=True):
             w = snap.weight_pct(p.ticker)
             pnl = p.unrealised_pnl_pct
-            lines.append(
+            row = (
                 f"  {p.ticker:<16} {p.shares:>8.0f} shares  "
                 f"avg {p.avg_cost_sek:>8.2f}  "
                 f"now {p.current_price_sek:>8.2f}  "
                 f"({pnl:+.1f}%)  weight {w:.1f}%"
             )
+            # The standing levels, and whether price has already run through
+            # them. Without this the model cannot tell that a winner it wants
+            # to hold is sitting above a target that will keep alerting.
+            lvl = levels.get(p.ticker) or {}
+            stop_pct, tp_pct = lvl.get("stop_pct"), lvl.get("take_profit_pct")
+            parts = []
+            if stop_pct:
+                parts.append(f"stop -{stop_pct:.0f}%")
+            if tp_pct:
+                flag = "  ← PAST TARGET" if pnl >= tp_pct else ""
+                parts.append(f"target +{tp_pct:.0f}%{flag}")
+            if parts:
+                row += "  [" + ", ".join(parts) + "]"
+            lines.append(row)
     else:
         lines.append("No open positions — fully in cash.")
 
@@ -230,7 +249,7 @@ def build_prompt(
 
     # Discrete blocks — captured once, used both for the flat prompt and the
     # fielded snapshot so the two can never drift.
-    portfolio_state = _portfolio_block(snap, bench_return)
+    portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops())
     risk_limits     = _risk_limits_block(cfg, snap, features)
     learnings_block = _learnings_block(learnings)
     universe        = _features_block(features, current_tickers)
@@ -268,6 +287,10 @@ def build_prompt(
     sections.append(
         f"## Your Task\n"
         f"Review the above and return a DecisionRun JSON with your buy/sell/hold decisions. "
+        f"When you hold a position marked PAST TARGET, set take_profit_pct to the new level "
+        f"that reflects your current view — holding a winner without re-targeting leaves the "
+        f"old target standing, which keeps signalling a trim you did not recommend. "
+        f"Trim or sell instead if the target was right and the upside is spent. "
         f"Run ID must be: {run_id}"
     )
 

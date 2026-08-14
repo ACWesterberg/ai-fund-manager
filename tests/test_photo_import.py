@@ -853,3 +853,74 @@ def test_a_clean_book_passes_every_check():
     ]
     total = sum(h["shares"] * h["avg_cost_sek"] for h in holdings)
     assert pp._sanity_check(holdings, None, total) == []
+
+
+# ── Regression: a Swedish holding resolved to a bare symbol ───────────────────
+#
+# The same Montrose import resolved Bonesupport to `BONEX` and Dynavox to
+# `DYVOX` — no .ST — and flagged neither. DYVOX then tracked an unrelated
+# instrument at 169.77 against Dynavox's real 77.00, a fictitious +118% that
+# added ~47,000 SEK to NAV; BONEX resolved to nothing and showed no price.
+
+def test_a_sek_row_resolved_to_a_bare_symbol_is_flagged():
+    holdings = [{"name": "Dynavox Group", "ticker": "DYVOX", "currency": "SEK",
+                 "shares": 506.0, "avg_cost_sek": 77.82}]
+    out = pp._sanity_check(holdings, None, 39_381)
+    assert any("resolved to DYVOX" in w and "no suffix" in w for w in out)
+    assert any(".ST" in w for w in out)
+
+
+def test_a_sek_row_resolved_to_a_foreign_listing_is_flagged():
+    """AstraZeneca went to AZN.L on an earlier import of this same book."""
+    holdings = [{"name": "AstraZeneca", "ticker": "AZN.L", "currency": "SEK",
+                 "shares": 65.0, "avg_cost_sek": 1555.69}]
+    out = pp._sanity_check(holdings, None, 101_120)
+    assert any("resolved to AZN.L" in w and "'.L'" in w for w in out)
+
+
+def test_the_right_market_is_not_flagged():
+    holdings = [{"name": "Evolution", "ticker": "EVO.ST", "currency": "SEK",
+                 "shares": 107.0, "avg_cost_sek": 667.04}]
+    assert not [w for w in pp._sanity_check(holdings, None, 71_373) if "resolved to" in w]
+
+
+def test_a_us_holding_is_correctly_bare_and_stays_unflagged():
+    """The check must not fire on a genuinely mixed book — the chokepoint sleeve
+    holds NVDA and TSM alongside Swedish names, and US listings carry no suffix."""
+    holdings = [
+        {"name": "NVIDIA", "ticker": "NVDA", "currency": "USD",
+         "shares": 10.0, "avg_cost_sek": 1500.0},
+        {"name": "Vitec B", "ticker": "VIT-B.ST", "currency": "SEK",
+         "shares": 451.0, "avg_cost_sek": 245.27},
+    ]
+    assert not [w for w in pp._sanity_check(holdings, None, 125_618) if "resolved to" in w]
+
+
+def test_an_unresolved_row_is_left_to_the_amber_box():
+    """No ticker yet is already surfaced by the review table; not this check's job."""
+    holdings = [{"name": "Mystery AB", "ticker": None, "currency": "SEK",
+                 "shares": 100.0, "avg_cost_sek": 50.0}]
+    assert not [w for w in pp._sanity_check(holdings, None, 5_000) if "resolved to" in w]
+
+
+def test_a_currency_with_no_home_suffix_is_not_guessed_at():
+    holdings = [{"name": "Something", "ticker": "SMTH", "currency": "JPY",
+                 "shares": 100.0, "avg_cost_sek": 50.0}]
+    assert not [w for w in pp._sanity_check(holdings, None, 5_000) if "resolved to" in w]
+
+
+def test_a_eur_line_on_stockholm_is_not_a_mismatch():
+    """Verisure is priced in EUR on a Nasdaq Stockholm listing, so VSURE.ST is
+    right. The first version of this check flagged it — telling the investor to
+    correct a correct symbol, which is worse than staying quiet."""
+    holdings = [{"name": "Verisure", "ticker": "VSURE.ST", "currency": "EUR",
+                 "shares": 752.0, "avg_cost_sek": 115.24, "avg_cost_native": 10.47}]
+    assert not [w for w in pp._sanity_check(holdings, None, 86_660) if "resolved to" in w]
+
+
+def test_validation_is_wider_than_the_search_preference():
+    """Search prefers a currency's home venue; validation must accept the Nordic
+    cross-listings too, or it manufactures false positives."""
+    assert pp._CURRENCY_SUFFIXES["SEK"] == pp._ACCEPTABLE_SUFFIXES["SEK"]
+    assert ".ST" in pp._ACCEPTABLE_SUFFIXES["EUR"]
+    assert ".ST" not in pp._CURRENCY_SUFFIXES["EUR"]      # still not searched first

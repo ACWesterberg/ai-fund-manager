@@ -570,8 +570,48 @@ def _sanity_check(holdings: list[dict], total_value_sek: float | None,
             "a misread column is caught before it reaches the book.")
 
     out += _currency_check(holdings)
+    out += _market_mismatches(holdings)
     out += _repeated_share_counts(holdings)
     out += _suspiciously_round(holdings)
+    return out
+
+
+def _market_mismatches(holdings: list[dict]) -> list[str]:
+    """A resolved symbol should sit on the market its prices are quoted in.
+
+    Bonesupport and Dynavox both resolved to bare `BONEX` and `DYVOX` in a book
+    of Swedish holdings. Neither came back amber, so they looked as settled as
+    the rest — one then tracked an unrelated instrument at 2.2x the real price
+    and inflated NAV by ~47,000 SEK, the other resolved to nothing at all.
+
+    The row's own currency is what makes this precise rather than statistical: a
+    SEK row belongs on .ST, and a mixed book with genuine US holdings is not
+    flagged, because those rows say USD and US listings are correctly bare.
+    Currencies with no home-suffix entry (USD and anything unmapped) are skipped
+    rather than guessed at.
+
+    Validation is deliberately wider than the search preference: Nasdaq Nordic
+    quotes EUR-denominated lines on Stockholm, so Verisure priced in EUR really
+    does live at VSURE.ST. The first draft of this check flagged it — telling
+    the investor to correct a symbol that was already right, which is worse than
+    staying quiet.
+    """
+    out = []
+    for h in holdings:
+        ticker, currency = h.get("ticker"), (h.get("currency") or "").upper()
+        expected = _ACCEPTABLE_SUFFIXES.get(currency)
+        if not ticker or not expected:
+            continue
+        suffix = f".{ticker.rsplit('.', 1)[1]}" if "." in ticker else ""
+        if suffix in expected:
+            continue
+        where = f"'{suffix}'" if suffix else "no suffix (a US-style symbol)"
+        out.append(
+            f"{h.get('name') or ticker}: priced in {currency} but resolved to "
+            f"{ticker} — {where}, where {currency} listings use "
+            f"{' or '.join(expected)}. That symbol is probably a different "
+            f"instrument; its prices and every figure derived from them would be "
+            f"wrong. Correct it here and it is remembered for future imports.")
     return out
 
 
@@ -658,6 +698,16 @@ _CURRENCY_SUFFIXES: dict[str, tuple[str, ...]] = {
     "GBX": (".L",),
     "CHF": (".SW",),
     "CAD": (".TO", ".V"),
+}
+
+# Which suffixes are *acceptable* for a row in a given currency, as opposed to
+# preferred when searching. Wider on purpose: the Nasdaq Nordic venues quote
+# EUR-denominated lines alongside their local currency, so a EUR row on .ST is
+# ordinary rather than suspect. A SEK row on .L is not — hence no widening
+# there. Used only by `_market_mismatches`; search preference stays above.
+_ACCEPTABLE_SUFFIXES: dict[str, tuple[str, ...]] = {
+    **_CURRENCY_SUFFIXES,
+    "EUR": _CURRENCY_SUFFIXES["EUR"] + (".ST", ".OL", ".CO"),
 }
 
 

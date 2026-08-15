@@ -2074,6 +2074,15 @@ def paper_retag(slug: str, old: str, new: str | None):
 
     click.echo(f"✓ Retagged {res['shares']:g} × {res['old']} → {res['new']} "
                f"(cash unchanged).")
+    if res.get("moved"):
+        click.echo(f"  Plan carried over: {', '.join(res['moved'])}.")
+    if res.get("dropped"):
+        click.echo(f"  Forgot {', '.join(sorted(set(res['dropped'])))} — that data "
+                   f"described the wrong instrument.")
+    if any("kill rules" in m or "add plan" in m for m in res.get("moved", [])):
+        click.echo("  Price anchors were cleared: the drawdown line and review "
+                   "price were set from the wrong instrument. Re-anchor after a "
+                   "fresh look.")
     try:
         bench_rows = store.get_benchmark()
         nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()

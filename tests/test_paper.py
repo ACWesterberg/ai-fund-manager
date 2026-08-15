@@ -1087,3 +1087,102 @@ def test_paper_book_has_no_watch_panel(client):
     assert "PAPER PORTFOLIO" in r.text
     assert "Not real money" in r.text
     assert "Watch status" not in r.text
+
+
+# ── Retag carries the plan, and forgets the wrong instrument's data ───────────
+#
+# Retagging DYVOX → DYVOX.ST moved the shares and left the kill criterion, max
+# drop, horizon and target weight behind on DYVOX. The dashboard then showed a
+# plan row watching nothing and a holding nobody watched — worse than the
+# original mis-tag, because both halves looked fine on their own.
+
+def _retag_book(tmp_path, monkeypatch):
+    from fundmgr import addsignal, watchplan
+    from fundmgr.state.models import Transaction
+    from fundmgr.state.store import Store
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+
+    store = Store(tmp_path / "retag.db")
+    store.initialise(100_000)
+    store.apply_fill(Transaction(ticker="DYVOX", side="buy", shares=506,
+                                 price_sek=77.82, fee_sek=0.0, source="fill"))
+    store.save_prices("DYVOX", [{"date": "2026-08-13", "open": 169.77, "high": 169.77,
+                                 "low": 169.77, "close": 169.77, "volume": 1}])
+    watchplan.set_position_plan(
+        store, "DYVOX", kill_criterion="CC growth <10% for 2 quarters",
+        max_drawdown_pct="25", horizon_months="18", anchor_price_sek=169.77)
+    watchplan.set_add_text(store, "DYVOX", "CC growth at least 15%")
+    addsignal.set_plan(store, "DYVOX", book="A/B", max_weight_pct=6,
+                       tranche_pct=1, review_price=169.77)
+    store.set_meta("paper_target_weights", json.dumps({"DYVOX": 4.0}))
+    store.save_fundamentals("DYVOX", {"revenue_growth": 0.42})   # wrong company's
+    store.set_meta("paper_killverdict:DYVOX", json.dumps({"verdict": "no"}))
+    return store
+
+
+def test_retag_carries_the_whole_plan(tmp_path, monkeypatch):
+    from fundmgr import addsignal, watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert watchplan.get_kill_text(store).get("DYVOX.ST", "").startswith("CC growth")
+    assert watchplan.get_add_text(store).get("DYVOX.ST", "").startswith("CC growth")
+    assert watchplan.get_kill_rules(store)["DYVOX.ST"]["max_drawdown_pct"] == 25.0
+    assert watchplan.get_horizons(store)["DYVOX.ST"]["review_date"]
+    assert addsignal.get_plan(store, "DYVOX.ST")["book"] == "A/B"
+    assert json.loads(store.get_meta("paper_target_weights"))["DYVOX.ST"] == 4.0
+
+
+def test_retag_leaves_nothing_behind_on_the_old_symbol(tmp_path, monkeypatch):
+    """A leftover plan row is a watch on a ticker nobody holds."""
+    from fundmgr import addsignal, watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert "DYVOX" not in watchplan.get_kill_text(store)
+    assert "DYVOX" not in watchplan.get_kill_rules(store)
+    assert "DYVOX" not in watchplan.get_horizons(store)
+    assert addsignal.get_plan(store, "DYVOX") == {}
+    assert "DYVOX" not in json.loads(store.get_meta("paper_target_weights"))
+    assert watchplan.plan_tickers(store) == {"DYVOX.ST"}
+
+
+def test_retag_forgets_the_wrong_instruments_market_data(tmp_path, monkeypatch):
+    """DYVOX's prices and fundamentals were a different company's. Carrying them
+    over would import one company's numbers into another's criteria."""
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert store.get_prices("DYVOX") == []
+    assert store.get_fundamentals("DYVOX") in (None, {})
+    assert store.get_fundamentals("DYVOX.ST") in (None, {})   # not inherited
+    assert not store.get_meta("paper_killverdict:DYVOX")
+
+
+def test_retag_clears_price_anchors_set_from_the_wrong_instrument(tmp_path, monkeypatch):
+    """The anchor was 169.77 — a price this company never traded at. Keeping it
+    would measure a -25% drawdown from a number that never applied."""
+    from fundmgr import addsignal, watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert "anchor_price_sek" not in watchplan.get_kill_rules(store)["DYVOX.ST"]
+    assert "review_price" not in addsignal.get_plan(store, "DYVOX.ST")
+
+
+def test_retag_does_not_overwrite_a_plan_already_at_the_new_symbol(tmp_path, monkeypatch):
+    """If the correct symbol already carries a criterion, it was set on purpose."""
+    from fundmgr import watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    watchplan.set_position_plan(store, "DYVOX.ST", kill_criterion="the real one")
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert watchplan.get_kill_text(store)["DYVOX.ST"] == "the real one"
+    assert "DYVOX" not in watchplan.get_kill_text(store)
+
+
+def test_retag_moves_the_currency_off_the_old_symbol(tmp_path, monkeypatch):
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+    cmap = json.loads(store.get_meta("paper_currency_map"))
+    assert cmap.get("DYVOX.ST") == "SEK" and "DYVOX" not in cmap

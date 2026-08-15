@@ -1155,10 +1155,86 @@ def retag_position(store: Store, old_ticker: str, new_ticker: str) -> dict:
         conn.execute("UPDATE transactions SET ticker=? WHERE ticker=?", (new, old))
 
     cmap = json.loads(store.get_meta("paper_currency_map") or "{}")
-    if new not in cmap:
-        cmap[new] = detect_currency(new)
-        store.set_meta("paper_currency_map", json.dumps(cmap))
-    return {"old": old, "new": new, "shares": old_shares}
+    cmap.pop(old, None)
+    cmap[new] = detect_currency(new)
+    store.set_meta("paper_currency_map", json.dumps(cmap))
+
+    moved = _retag_plan(store, old, new)
+    dropped = _drop_instrument_data(store, old)
+    return {"old": old, "new": new, "shares": old_shares,
+            "moved": moved, "dropped": dropped}
+
+
+# Plan state is keyed by ticker and describes the *company* — the criteria, the
+# horizon, the intended weight. A retag has to carry it, or the position keeps
+# the shares and loses the monitoring, which is worse than the mis-tag: the
+# dashboard then shows a plan row watching nothing and a holding nobody watches.
+_PLAN_MAPS = (
+    "paper_kill_criteria", "paper_add_criteria", "paper_kill_rules",
+    "paper_horizons", "paper_add_plan", "paper_target_weights",
+    "paper_position_notes",
+)
+_PLAN_PREFIXES = ("paper_killanalysis:", "paper_addanalysis:", "paper_horizon_stage:")
+
+# Observed data, by contrast, is about the *instrument that was wrong*. Its
+# prices, fundamentals, snapshots and news verdicts belong to a different
+# company, so carrying them across would import one company's numbers into
+# another's criteria — the exact error the retag is fixing.
+_INSTRUMENT_PREFIXES = ("paper_killverdict:", "paper_fundsnap:", "paper_killwatch:",
+                        "paper_killgap:", "paper_addstate:", "paper_drift_state:",
+                        "paper_killrule_state:")
+
+# Prices set these anchors, so they were taken from the wrong instrument too.
+# Dropping them re-arms the line at the next review rather than measuring a
+# drawdown from a number that never applied to this company.
+_PRICE_ANCHORS = {"paper_kill_rules": ("anchor_price_sek", "anchor_date"),
+                  "paper_add_plan": ("review_price", "review_date")}
+
+
+def _retag_plan(store: Store, old: str, new: str) -> list[str]:
+    """Move every plan entry from `old` to `new`. Returns what moved."""
+    moved: list[str] = []
+    for key in _PLAN_MAPS:
+        try:
+            data = json.loads(store.get_meta(key) or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict) or old not in data:
+            continue
+        entry = data.pop(old)
+        # An entry already at the new symbol was set deliberately; keep it.
+        if new not in data:
+            if isinstance(entry, dict):
+                for field in _PRICE_ANCHORS.get(key, ()):
+                    entry.pop(field, None)
+            data[new] = entry
+            moved.append(key.replace("paper_", "").replace("_", " "))
+        store.set_meta(key, json.dumps(data))
+
+    for prefix in _PLAN_PREFIXES:
+        value = store.get_meta(f"{prefix}{old}")
+        if not value:
+            continue
+        if not store.get_meta(f"{prefix}{new}"):
+            store.set_meta(f"{prefix}{new}", value)
+        store.set_meta(f"{prefix}{old}", "")
+    return moved
+
+
+def _drop_instrument_data(store: Store, old: str) -> list[str]:
+    """Forget what was observed about the wrong instrument."""
+    dropped: list[str] = []
+    for prefix in _INSTRUMENT_PREFIXES:
+        if store.get_meta(f"{prefix}{old}"):
+            store.set_meta(f"{prefix}{old}", "")
+            dropped.append(prefix.rstrip(":").replace("paper_", ""))
+    with store._conn() as conn:
+        for table, label in (("price_cache", "prices"),
+                             ("fundamentals_cache", "fundamentals")):
+            cur = conn.execute(f"DELETE FROM {table} WHERE ticker=?", (old,))
+            if cur.rowcount:
+                dropped.append(label)
+    return dropped
 
 
 def set_cost_basis(store: Store, ticker: str, new_avg_sek: float) -> dict:

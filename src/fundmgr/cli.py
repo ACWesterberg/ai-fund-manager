@@ -48,7 +48,16 @@ def _get_store(cfg=None) -> tuple:
 @click.group()
 def cli():
     """AI Fund Manager — weekly LLM-driven portfolio decisions for Nordic equities."""
-    pass
+    # Every subcommand gets the environment, not just those that happen to load
+    # a config. `paper-track` does not — it opens each book's store directly —
+    # so under cron it ran for months with no OPENAI_API_KEY and skipped every
+    # text-criterion watch, reporting the skip in a log nobody reads. The web
+    # and bot processes were unaffected (systemd hands them the same file),
+    # which is why the gap was invisible from the dashboard.
+    from dotenv import load_dotenv
+
+    from fundmgr.config import ROOT
+    load_dotenv(ROOT / ".env")
 
 
 @cli.command()

@@ -1,5 +1,6 @@
 """Paper portfolios: parsing pasted picks, creation at live prices, tracking, web routes."""
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1209,3 +1210,21 @@ def test_retag_still_refuses_a_ticker_with_nothing_at_all(tmp_path, monkeypatch)
     store = _retag_book(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="no position and no plan"):
         paper.retag_position(store, "NOTHING", "NOTHING.ST")
+
+
+def test_every_cli_command_gets_the_environment(monkeypatch, tmp_path):
+    """`paper-track` never calls load_config, so it never loaded .env — under
+    cron that meant no OPENAI_API_KEY and every text-criterion watch silently
+    skipped. The group callback loads it for all subcommands."""
+    from click.testing import CliRunner
+
+    import fundmgr.config as config
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-from-dotenv\n")
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    from fundmgr.cli import cli
+    # Any subcommand will do; paper-list touches no config and no network.
+    CliRunner().invoke(cli, ["paper-list"])
+    assert os.environ.get("OPENAI_API_KEY") == "sk-from-dotenv"

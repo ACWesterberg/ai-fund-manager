@@ -164,8 +164,13 @@ def field_meta(store: Store | None = None) -> dict[str, dict]:
 
 
 def define_custom_metric(store: Store, key: str, label: str = "",
-                         unit: str = "", note: str = "") -> dict:
-    """Register a metric this book can write criteria against."""
+                         unit: str = "", note: str = "", edgar: str = "") -> dict:
+    """Register a metric this book can write criteria against.
+
+    `edgar` names a us-gaap concept, which lets `fund paper-edgar` fill this
+    metric from the company's own filings for US filers. Everything else is
+    supplied by hand or by the release reader.
+    """
     import json
     import re
 
@@ -183,6 +188,8 @@ def define_custom_metric(store: Store, key: str, label: str = "",
     metrics = custom_metrics(store)
     metrics[key] = {"label": (label or key.replace("_", " ").capitalize()).strip(),
                     "unit": unit, "note": (note or "").strip()}
+    if (edgar or "").strip():
+        metrics[key]["edgar"] = edgar.strip()
     store.set_meta(CUSTOM_METRICS_KEY, json.dumps(metrics))
     return {key: metrics[key]}
 

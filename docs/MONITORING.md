@@ -269,6 +269,42 @@ company's own *Nyckeltal* table from the report PDF would be better, and is the
 natural next step — the storage and criterion sides are already done, so what
 remains is locating and parsing the PDF.
 
+#### SEC EDGAR, for the US filers
+
+A US company's XBRL facts are free, keyless and stamped with the fiscal period
+they cover — the shape this codebase already stores. Map a metric to a us-gaap
+concept and pull every quarter the company has filed:
+
+```bash
+fund paper-metric kf segment_revenue --unit SEK --edgar Revenues
+fund paper-edgar  kf NVDA            # show
+fund paper-edgar  kf NVDA --apply    # record
+```
+
+`FUND_SEC_USER_AGENT="Your Name you@example.com"` is required — the SEC refuses
+requests without a caller identity, and the command says so rather than
+returning an empty result that looks like "no data".
+
+It is wired to **custom metrics only**, never to a built-in field. Two providers
+behind one key would give a series that changes definition halfway through,
+which is worse than one that is merely incomplete: a "two consecutive quarters"
+rule would compare one source's number against another's.
+
+Three parsing rules, each because the alternative fails quietly:
+
+- **Only quarterly durations count.** One concept's fact list mixes three-month,
+  nine-month and full-year facts under the same name. Reading a year-to-date
+  revenue as a quarter shows growth that never happened.
+- **A later filing supersedes an earlier one** for the same period. A
+  restatement is the company correcting itself, and the correction is the figure
+  to hold.
+- **Values are keyed by the period they cover**, so a criterion asking for two
+  consecutive quarters works on filings the moment they are pulled.
+
+Coverage is US filers only. A foreign private issuer files a 20-F annually, and
+Nordic small caps are not in EDGAR at all — those go through `paper-read` or by
+hand.
+
 Custom metrics stay out of `_FUND_FIELDS` deliberately. That table is guarded by
 tests asserting every entry is genuinely fetched from a provider; a figure
 fetched from a PDF by a human is a different kind of thing, and mixing them

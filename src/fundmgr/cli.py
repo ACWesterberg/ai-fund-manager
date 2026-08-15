@@ -2203,8 +2203,10 @@ if __name__ == "__main__":
 @click.option("--unit", default="", type=click.Choice(["%", "x", "SEK", ""]),
               help="Unit the figure is printed in.")
 @click.option("--note", default="", help="The company's definition, in your words.")
+@click.option("--edgar", default="", metavar="CONCEPT",
+              help="us-gaap concept to fill this from SEC filings (US filers only).")
 @click.option("--forget", is_flag=True, help="Remove this metric from the book.")
-def paper_metric(slug, key, label, unit, note, forget):
+def paper_metric(slug, key, label, unit, note, edgar, forget):
     """Define a metric this book can write criteria against.
 
     For the figures no provider carries because they are company-defined rather
@@ -2230,7 +2232,7 @@ def paper_metric(slug, key, label, unit, note, forget):
         return
     if key:
         try:
-            define_custom_metric(store, key, label or "", unit, note)
+            define_custom_metric(store, key, label or "", unit, note, edgar)
         except ValueError as e:
             raise click.ClickException(str(e))
 
@@ -2241,7 +2243,9 @@ def paper_metric(slug, key, label, unit, note, forget):
         return
     click.echo(f"\n─── Custom metrics for {slug} ───")
     for k, meta in sorted(defined.items()):
-        click.echo(f"  {k:<24} {meta.get('label', ''):<24} {meta.get('unit', '') or '—'}")
+        src = f"  ← SEC {meta['edgar']}" if meta.get("edgar") else ""
+        click.echo(f"  {k:<24} {meta.get('label', ''):<24} "
+                   f"{meta.get('unit', '') or '—'}{src}")
         if meta.get("note"):
             click.echo(f"    {meta['note']}")
     click.echo("\n  Enter figures with: fund paper-report <slug> <TICKER> "
@@ -2376,3 +2380,64 @@ def paper_read(slug, ticker, period, apply_):
     written = record_reported(store, tkr, {f["metric"]: f["value"] for f in out["figures"]},
                               period)
     click.echo(f"\n✓ Recorded {len(written)} figure(s) for period ending {period}.")
+
+
+@cli.command("paper-edgar")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--quarters", default=4, help="How many recent quarters to show.")
+@click.option("--apply", "apply_", is_flag=True, help="Record the figures.")
+def paper_edgar(slug, ticker, quarters, apply_):
+    """Fill EDGAR-mapped metrics from a US filer's own XBRL facts.
+
+    Map a metric to a us-gaap concept first, then pull every quarter the
+    company has filed:
+
+        fund paper-metric kf datacenter_revenue --unit SEK --edgar Revenues
+        fund paper-edgar  kf NVDA
+        fund paper-edgar  kf NVDA --apply
+
+    Values are stored against the period they cover, so the `quarters` part of
+    a criterion works on them straight away. US filers only — a foreign issuer
+    is simply absent from EDGAR, which the command says rather than guessing.
+    """
+    from fundmgr.data.edgar import EdgarError, read_ticker
+    from fundmgr.evidence import field_meta, record_reported
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    tkr = ticker.upper()
+    try:
+        series = read_ticker(store, tkr)
+    except EdgarError as e:
+        raise click.ClickException(str(e))
+    except Exception as e:
+        raise click.ClickException(f"EDGAR request failed: {e}")
+
+    if not series:
+        click.echo(f"Nothing to fill for {tkr}. Either this book maps no metric to a "
+                   f"us-gaap concept (see 'fund paper-metric {slug}'), or {tkr} does "
+                   f"not file with the SEC — only US filers do.")
+        return
+
+    known = field_meta(store)
+    for metric, values in sorted(series.items()):
+        meta = known.get(metric, {})
+        click.echo(f"\n─── {meta.get('label', metric)} ───")
+        for period in sorted(values, reverse=True)[:quarters]:
+            click.echo(f"    {period}   {values[period]:>18,.0f}{meta.get('unit', '')}")
+
+    if not apply_:
+        click.echo("\n  Check these against the filing, then re-run with --apply.")
+        return
+
+    # One call per period so each figure lands in the quarter it describes.
+    periods = sorted({p for values in series.values() for p in values})
+    written = 0
+    for period in periods:
+        batch = {m: v[period] for m, v in series.items() if period in v}
+        written += len(record_reported(store, tkr, batch, period))
+    click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s).")

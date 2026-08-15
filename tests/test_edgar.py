@@ -1,0 +1,177 @@
+"""SEC EDGAR as a source for figures no market feed carries.
+
+The parsing is what these cover, because the fetching is three lines and the
+parsing is where a plausible-but-wrong number comes from: a concept's fact list
+mixes quarterly, year-to-date and annual durations under one name, and reading
+the wrong one produces growth that never happened.
+"""
+import pytest
+
+from fundmgr import evidence
+from fundmgr.data import edgar
+from fundmgr.state.store import Store
+
+# Shaped like the real payload: quarterly facts, a nine-month year-to-date fact
+# and a full-year fact under the same concept, plus a restatement.
+FACTS = {
+    "cik": 1045810,
+    "entityName": "NVIDIA CORP",
+    "facts": {"us-gaap": {"Revenues": {"label": "Revenues", "units": {"USD": [
+        {"start": "2025-08-01", "end": "2025-10-31", "val": 35_000, "form": "10-Q",
+         "filed": "2025-11-20"},
+        {"start": "2025-11-01", "end": "2026-01-31", "val": 39_000, "form": "10-K",
+         "filed": "2026-02-26"},
+        {"start": "2026-02-01", "end": "2026-04-30", "val": 44_000, "form": "10-Q",
+         "filed": "2026-05-28"},
+        # Same quarter, restated in a later filing — the correction wins.
+        {"start": "2026-02-01", "end": "2026-04-30", "val": 44_500, "form": "10-Q/A",
+         "filed": "2026-08-14"},
+        # Nine-month year-to-date: same concept, must never read as a quarter.
+        {"start": "2025-08-01", "end": "2026-04-30", "val": 118_000, "form": "10-Q",
+         "filed": "2026-05-28"},
+        # Full year.
+        {"start": "2025-02-01", "end": "2026-01-31", "val": 130_000, "form": "10-K",
+         "filed": "2026-02-26"},
+        # An instant (balance-sheet style) — no duration at all.
+        {"end": "2026-04-30", "val": 9_999, "form": "10-Q", "filed": "2026-05-28"},
+    ]}}}},
+}
+
+TICKER_MAP = {"0": {"cik_str": 1045810, "ticker": "NVDA", "title": "NVIDIA CORP"},
+              "1": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = Store(tmp_path / "book.db")
+    s.initialise(100_000)
+    return s
+
+
+# ── Picking the right facts ───────────────────────────────────────────────────
+
+def test_only_quarterly_durations_are_kept():
+    """Nine-month and full-year facts share the concept. Reading 118,000 as a
+    quarter would show growth that never happened."""
+    series = edgar.quarterly_series(FACTS, "Revenues")
+    assert set(series) == {"2025-10-31", "2026-01-31", "2026-04-30"}
+    assert 118_000 not in series.values()
+    assert 130_000 not in series.values()
+
+
+def test_an_instant_fact_is_not_a_quarter():
+    assert 9_999 not in edgar.quarterly_series(FACTS, "Revenues").values()
+
+
+def test_a_restatement_supersedes_the_original():
+    """A later filing for the same period is the company correcting itself."""
+    assert edgar.quarterly_series(FACTS, "Revenues")["2026-04-30"] == 44_500
+
+
+def test_values_are_keyed_by_the_period_they_cover():
+    """Not the date fetched — that is what makes the quarters machinery work."""
+    series = edgar.quarterly_series(FACTS, "Revenues")
+    assert series["2025-10-31"] == 35_000
+    assert series["2026-01-31"] == 39_000
+
+
+def test_an_unknown_concept_is_empty_not_an_error():
+    assert edgar.quarterly_series(FACTS, "NoSuchConcept") == {}
+    assert edgar.quarterly_series({}, "Revenues") == {}
+
+
+def test_the_unit_with_the_most_facts_wins():
+    """A filer reporting in another currency must still work."""
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {
+        "USD": [{"start": "2026-02-01", "end": "2026-04-30", "val": 1, "filed": "x"}],
+        "SEK": [{"start": "2026-02-01", "end": "2026-04-30", "val": 11, "filed": "x"},
+                {"start": "2025-11-01", "end": "2026-01-31", "val": 10, "filed": "x"}],
+    }}}}}
+    assert edgar.quarterly_series(facts, "Revenues")["2026-04-30"] == 11
+
+
+def test_malformed_facts_are_skipped_not_fatal():
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        "not a dict",
+        {"start": "bad-date", "end": "2026-04-30", "val": 1, "filed": "x"},
+        {"start": "2026-02-01", "end": "2026-04-30", "val": "not a number", "filed": "x"},
+        {"start": "2026-02-01", "end": "2026-04-30", "val": 42, "filed": "x"},
+    ]}}}}}
+    assert edgar.quarterly_series(facts, "Revenues") == {"2026-04-30": 42.0}
+
+
+# ── Ticker → CIK ──────────────────────────────────────────────────────────────
+
+def test_ticker_map_parses_the_sec_shape():
+    assert edgar._parse_ticker_map(TICKER_MAP) == {"NVDA": 1045810, "AAPL": 320193}
+
+
+def test_a_suffixed_ticker_is_not_looked_up(monkeypatch):
+    """VOLV-B.ST is a Stockholm listing; EDGAR knows plain US symbols, and
+    asking would be a wasted request with a misleading answer."""
+    monkeypatch.setattr(edgar, "_ticker_cik", {"NVDA": 1045810})
+    assert edgar.cik_for("VOLV-B.ST") is None
+    assert edgar.cik_for("nvda") == 1045810
+
+
+def test_an_unlisted_ticker_has_no_cik(monkeypatch):
+    monkeypatch.setattr(edgar, "_ticker_cik", {"NVDA": 1045810})
+    assert edgar.cik_for("NOSUCH") is None
+
+
+# ── Only mapped custom metrics are filled ─────────────────────────────────────
+
+def test_nothing_is_read_without_a_mapping(store):
+    evidence.define_custom_metric(store, "organic_growth", "Organic growth", "%")
+    assert edgar.read_ticker(store, "NVDA", FACTS) == {}
+
+
+def test_a_mapped_metric_is_filled_from_the_filings(store):
+    evidence.define_custom_metric(store, "segment_revenue", "Segment revenue",
+                                  "SEK", edgar="Revenues")
+    out = edgar.read_ticker(store, "NVDA", FACTS)
+    assert set(out) == {"segment_revenue"}
+    assert out["segment_revenue"]["2026-04-30"] == 44_500
+
+
+def test_a_built_in_field_cannot_be_filled_from_edgar(store):
+    """Two providers behind one key would give a series that changes definition
+    halfway — worse than one that is merely incomplete."""
+    with pytest.raises(ValueError, match="already a built-in"):
+        evidence.define_custom_metric(store, "revenue_growth", edgar="Revenues")
+
+
+def test_a_company_that_does_not_file_yields_nothing(store):
+    evidence.define_custom_metric(store, "segment_revenue", unit="SEK", edgar="Revenues")
+    assert edgar.read_ticker(store, "BALD-B.ST", {}) == {}
+
+
+# ── The SEC's User-Agent requirement is stated, not swallowed ─────────────────
+
+def test_a_missing_user_agent_says_so(monkeypatch):
+    monkeypatch.delenv("FUND_SEC_USER_AGENT", raising=False)
+    with pytest.raises(edgar.EdgarError, match="FUND_SEC_USER_AGENT"):
+        edgar._user_agent()
+
+
+def test_a_configured_user_agent_is_used(monkeypatch):
+    monkeypatch.setenv("FUND_SEC_USER_AGENT", "Test test@example.com")
+    assert edgar._user_agent() == "Test test@example.com"
+
+
+# ── End to end into the book ──────────────────────────────────────────────────
+
+def test_filled_quarters_feed_a_multi_quarter_criterion(store):
+    """The point of keying by period: a 'two consecutive quarters' rule works
+    on filings the moment they are pulled, with no waiting."""
+    evidence.define_custom_metric(store, "segment_revenue", "Segment revenue",
+                                  "SEK", edgar="Revenues")
+    series = edgar.read_ticker(store, "NVDA", FACTS)["segment_revenue"]
+    for period, value in series.items():
+        evidence.record_reported(store, "NVDA", {"segment_revenue": value}, period)
+
+    history = evidence.metric_history(store, "NVDA", "segment_revenue")
+    assert [r["period"] for r in history] == ["2026-04-30", "2026-01-31", "2025-10-31"]
+
+    run = evidence.sustained_breach(store, "NVDA", "segment_revenue", "above", 30_000, 3)
+    assert run["hit"] is True and run["periods_seen"] == 3

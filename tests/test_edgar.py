@@ -200,3 +200,25 @@ def test_a_nonsense_unit_is_still_refused(store):
     for bad in ("dollars", "US$", "furlongs", "usd"):
         with pytest.raises(ValueError, match="Unit must be"):
             evidence.define_custom_metric(store, "x_metric", unit=bad)
+
+
+def test_the_cli_accepts_every_unit_the_registry_does(tmp_path, monkeypatch):
+    """One rule, one validator. A second copy in the click option is how the
+    error message came to recommend a command the CLI then rejected."""
+    from click.testing import CliRunner
+
+    from fundmgr import paper
+    book = Store(tmp_path / "unit.db")
+    book.initialise(1000)
+    monkeypatch.setattr(paper, "open_portfolio", lambda slug: ({"name": slug}, book))
+
+    from fundmgr.cli import cli
+    runner = CliRunner()
+    for unit in ("USD", "SEK", "EUR", "%", "x"):
+        result = runner.invoke(cli, ["paper-metric", "book", f"m_{unit}",
+                                     "--unit", unit])
+        assert result.exit_code == 0, f"{unit}: {result.output}"
+    assert evidence.field_meta(book)["m_usd"]["unit"] == "USD"
+
+    bad = runner.invoke(cli, ["paper-metric", "book", "nope", "--unit", "dollars"])
+    assert bad.exit_code != 0 and "Unit must be" in bad.output

@@ -2200,8 +2200,11 @@ if __name__ == "__main__":
 @click.argument("slug")
 @click.argument("key", required=False)
 @click.option("--label", default=None, help="How it reads on the dashboard.")
-@click.option("--unit", default="", type=click.Choice(["%", "x", "SEK", ""]),
-              help="Unit the figure is printed in.")
+# No click.Choice here on purpose: define_custom_metric owns this rule, and a
+# second copy of it in the option definition is how the error message came to
+# recommend a command the CLI then rejected.
+@click.option("--unit", default="",
+              help="Unit the figure is printed in: %, x, or a currency code (SEK, USD…).")
 @click.option("--note", default="", help="The company's definition, in your words.")
 @click.option("--edgar", default="", metavar="CONCEPT",
               help="us-gaap concept to fill this from SEC filings (US filers only).")

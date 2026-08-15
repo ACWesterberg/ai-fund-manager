@@ -113,8 +113,8 @@ def fetch_facts(ticker: str) -> dict:
 
 
 def quarterly_series(facts: dict, concept: str,
-                     taxonomy: str = "us-gaap") -> dict[str, float]:
-    """{period_end: value} for one concept, quarterly facts only.
+                     taxonomy: str = "us-gaap") -> dict:
+    """{"unit": str, "values": {period_end: value}} for one concept.
 
     A concept's fact list mixes durations — three months, nine months, a full
     year — and instants. Reading a nine-month revenue as a quarter would show
@@ -125,7 +125,7 @@ def quarterly_series(facts: dict, concept: str,
     node = ((facts.get("facts") or {}).get(taxonomy) or {}).get(concept) or {}
     units = node.get("units") or {}
     if not units:
-        return {}
+        return {"unit": "", "values": {}}
 
     # One concept, one unit. Prefer the currency with the most facts rather than
     # guessing USD, so a filer reporting in another currency still works.
@@ -150,7 +150,11 @@ def quarterly_series(facts: dict, concept: str,
         # itself, and the correction is the figure to keep.
         if end not in best or filed >= best[end][0]:
             best[end] = (filed, value)
-    return {end: value for end, (_filed, value) in sorted(best.items())}
+    # The filing's unit travels with the figures. Dropping it let NVIDIA's USD
+    # revenue display under a metric declared in SEK — the number was right and
+    # the label was a lie, which is worse than no number at all.
+    return {"unit": unit_key,
+            "values": {end: value for end, (_filed, value) in sorted(best.items())}}
 
 
 def read_ticker(store, ticker: str, facts: dict | None = None) -> dict:
@@ -170,9 +174,9 @@ def read_ticker(store, ticker: str, facts: dict | None = None) -> dict:
     if not facts:
         return {}
 
-    out: dict[str, dict[str, float]] = {}
+    out: dict[str, dict] = {}
     for metric, concept in mapped.items():
         series = quarterly_series(facts, concept)
-        if series:
+        if series["values"]:
             out[metric] = series
     return out

@@ -276,7 +276,7 @@ they cover — the shape this codebase already stores. Map a metric to a us-gaap
 concept and pull every quarter the company has filed:
 
 ```bash
-fund paper-metric kf segment_revenue --unit SEK --edgar Revenues
+fund paper-metric kf segment_revenue --unit USD --edgar Revenues
 fund paper-edgar  kf NVDA            # show
 fund paper-edgar  kf NVDA --apply    # record
 ```
@@ -300,6 +300,11 @@ Three parsing rules, each because the alternative fails quietly:
   to hold.
 - **Values are keyed by the period they cover**, so a criterion asking for two
   consecutive quarters works on filings the moment they are pulled.
+- **The filing's own currency travels with the figures**, and a metric declared
+  in a different one is refused rather than recorded. NVIDIA files in USD; its
+  revenue displayed under a metric declared in SEK is a right number with a
+  lying label, and every threshold written against it would mean something else.
+  Units may be `%`, `x`, empty, or any three-letter currency code.
 
 Coverage is US filers only. A foreign private issuer files a 20-F annually, and
 Nordic small caps are not in EDGAR at all — those go through `paper-read` or by

@@ -53,31 +53,31 @@ def store(tmp_path):
 def test_only_quarterly_durations_are_kept():
     """Nine-month and full-year facts share the concept. Reading 118,000 as a
     quarter would show growth that never happened."""
-    series = edgar.quarterly_series(FACTS, "Revenues")
+    series = edgar.quarterly_series(FACTS, "Revenues")["values"]
     assert set(series) == {"2025-10-31", "2026-01-31", "2026-04-30"}
     assert 118_000 not in series.values()
     assert 130_000 not in series.values()
 
 
 def test_an_instant_fact_is_not_a_quarter():
-    assert 9_999 not in edgar.quarterly_series(FACTS, "Revenues").values()
+    assert 9_999 not in edgar.quarterly_series(FACTS, "Revenues")["values"].values()
 
 
 def test_a_restatement_supersedes_the_original():
     """A later filing for the same period is the company correcting itself."""
-    assert edgar.quarterly_series(FACTS, "Revenues")["2026-04-30"] == 44_500
+    assert edgar.quarterly_series(FACTS, "Revenues")["values"]["2026-04-30"] == 44_500
 
 
 def test_values_are_keyed_by_the_period_they_cover():
     """Not the date fetched — that is what makes the quarters machinery work."""
-    series = edgar.quarterly_series(FACTS, "Revenues")
+    series = edgar.quarterly_series(FACTS, "Revenues")["values"]
     assert series["2025-10-31"] == 35_000
     assert series["2026-01-31"] == 39_000
 
 
 def test_an_unknown_concept_is_empty_not_an_error():
-    assert edgar.quarterly_series(FACTS, "NoSuchConcept") == {}
-    assert edgar.quarterly_series({}, "Revenues") == {}
+    assert edgar.quarterly_series(FACTS, "NoSuchConcept")["values"] == {}
+    assert edgar.quarterly_series({}, "Revenues")["values"] == {}
 
 
 def test_the_unit_with_the_most_facts_wins():
@@ -87,7 +87,9 @@ def test_the_unit_with_the_most_facts_wins():
         "SEK": [{"start": "2026-02-01", "end": "2026-04-30", "val": 11, "filed": "x"},
                 {"start": "2025-11-01", "end": "2026-01-31", "val": 10, "filed": "x"}],
     }}}}}
-    assert edgar.quarterly_series(facts, "Revenues")["2026-04-30"] == 11
+    out = edgar.quarterly_series(facts, "Revenues")
+    assert out["values"]["2026-04-30"] == 11
+    assert out["unit"] == "SEK"
 
 
 def test_malformed_facts_are_skipped_not_fatal():
@@ -97,7 +99,7 @@ def test_malformed_facts_are_skipped_not_fatal():
         {"start": "2026-02-01", "end": "2026-04-30", "val": "not a number", "filed": "x"},
         {"start": "2026-02-01", "end": "2026-04-30", "val": 42, "filed": "x"},
     ]}}}}}
-    assert edgar.quarterly_series(facts, "Revenues") == {"2026-04-30": 42.0}
+    assert edgar.quarterly_series(facts, "Revenues")["values"] == {"2026-04-30": 42.0}
 
 
 # ── Ticker → CIK ──────────────────────────────────────────────────────────────
@@ -128,10 +130,11 @@ def test_nothing_is_read_without_a_mapping(store):
 
 def test_a_mapped_metric_is_filled_from_the_filings(store):
     evidence.define_custom_metric(store, "segment_revenue", "Segment revenue",
-                                  "SEK", edgar="Revenues")
+                                  "USD", edgar="Revenues")
     out = edgar.read_ticker(store, "NVDA", FACTS)
     assert set(out) == {"segment_revenue"}
-    assert out["segment_revenue"]["2026-04-30"] == 44_500
+    assert out["segment_revenue"]["values"]["2026-04-30"] == 44_500
+    assert out["segment_revenue"]["unit"] == "USD"
 
 
 def test_a_built_in_field_cannot_be_filled_from_edgar(store):
@@ -165,8 +168,8 @@ def test_filled_quarters_feed_a_multi_quarter_criterion(store):
     """The point of keying by period: a 'two consecutive quarters' rule works
     on filings the moment they are pulled, with no waiting."""
     evidence.define_custom_metric(store, "segment_revenue", "Segment revenue",
-                                  "SEK", edgar="Revenues")
-    series = edgar.read_ticker(store, "NVDA", FACTS)["segment_revenue"]
+                                  "USD", edgar="Revenues")
+    series = edgar.read_ticker(store, "NVDA", FACTS)["segment_revenue"]["values"]
     for period, value in series.items():
         evidence.record_reported(store, "NVDA", {"segment_revenue": value}, period)
 
@@ -175,3 +178,25 @@ def test_filled_quarters_feed_a_multi_quarter_criterion(store):
 
     run = evidence.sustained_breach(store, "NVDA", "segment_revenue", "above", 30_000, 3)
     assert run["hit"] is True and run["periods_seen"] == 3
+
+
+# ── The filing's unit is not the book's guess ────────────────────────────────
+
+def test_the_filing_unit_travels_with_the_figures():
+    """NVIDIA files in USD. Dropping that let its revenue display under a metric
+    declared in SEK — the number right, the label a lie."""
+    assert edgar.quarterly_series(FACTS, "Revenues")["unit"] == "USD"
+
+
+def test_a_currency_code_is_a_valid_unit(store):
+    for unit in ("USD", "SEK", "EUR", "%", "x", ""):
+        evidence.define_custom_metric(store, f"m_{unit or 'none'}", unit=unit)
+    # Keys normalise to lower case; the unit is stored as given.
+    assert evidence.field_meta(store)["m_usd"]["unit"] == "USD"
+    assert evidence.field_meta(store)["m_sek"]["unit"] == "SEK"
+
+
+def test_a_nonsense_unit_is_still_refused(store):
+    for bad in ("dollars", "US$", "furlongs", "usd"):
+        with pytest.raises(ValueError, match="Unit must be"):
+            evidence.define_custom_metric(store, "x_metric", unit=bad)

@@ -123,7 +123,15 @@ CUSTOM_METRICS_KEY = "paper_custom_metrics"
 # Values in the built-in table arrive as the provider sends them (0–1 fractions
 # for percentages). A figure read off a report is entered as it is printed —
 # "6.4%" is 6.4 — so custom metrics are never fractions.
-_CUSTOM_UNITS = ("%", "x", "SEK", "")
+#
+# Any ISO currency code is allowed alongside the ratio units, because the
+# currency is a property of the filer, not of this codebase: NVIDIA reports in
+# USD and forcing its revenue under a SEK label would make the number a lie.
+_CUSTOM_UNITS = ("%", "x", "")
+
+
+def _valid_unit(unit: str) -> bool:
+    return unit in _CUSTOM_UNITS or (len(unit) == 3 and unit.isalpha() and unit.isupper())
 
 
 def custom_metrics(store: Store) -> dict[str, dict]:
@@ -182,8 +190,11 @@ def define_custom_metric(store: Store, key: str, label: str = "",
         raise ValueError("A metric needs a name.")
     if key in FUND_FIELD_META:
         raise ValueError(f"'{key}' is already a built-in metric.")
-    if unit not in _CUSTOM_UNITS:
-        raise ValueError(f"Unit must be one of {_CUSTOM_UNITS!r}.")
+    unit = (unit or "").strip()
+    if not _valid_unit(unit):
+        raise ValueError(
+            f"Unit must be '%', 'x', empty, or a three-letter currency code "
+            f"like SEK or USD — got {unit!r}.")
 
     metrics = custom_metrics(store)
     metrics[key] = {"label": (label or key.replace("_", " ").capitalize()).strip(),

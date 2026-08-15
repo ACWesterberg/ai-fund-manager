@@ -2402,7 +2402,7 @@ def paper_edgar(slug, ticker, quarters, apply_):
     is simply absent from EDGAR, which the command says rather than guessing.
     """
     from fundmgr.data.edgar import EdgarError, read_ticker
-    from fundmgr.evidence import field_meta, record_reported
+    from fundmgr.evidence import MAX_SNAPSHOTS, custom_metrics, field_meta, record_reported
     from fundmgr.paper import open_portfolio
     try:
         _meta, store = open_portfolio(slug)
@@ -2424,20 +2424,38 @@ def paper_edgar(slug, ticker, quarters, apply_):
         return
 
     known = field_meta(store)
-    for metric, values in sorted(series.items()):
+    mismatched = []
+    for metric, found in sorted(series.items()):
         meta = known.get(metric, {})
-        click.echo(f"\n─── {meta.get('label', metric)} ───")
+        declared, filed_unit = meta.get("unit", ""), found["unit"]
+        values = found["values"]
+        click.echo(f"\n─── {meta.get('label', metric)} — filed in {filed_unit} ───")
         for period in sorted(values, reverse=True)[:quarters]:
-            click.echo(f"    {period}   {values[period]:>18,.0f}{meta.get('unit', '')}")
+            click.echo(f"    {period}   {values[period]:>18,.0f} {filed_unit}")
+        # A currency the metric does not claim makes every threshold written
+        # against it mean something else. Say so, and refuse to store it.
+        if declared and filed_unit and declared != filed_unit:
+            mismatched.append((metric, declared, filed_unit))
+
+    for metric, declared, filed_unit in mismatched:
+        click.echo(f"\n  ⚠ {metric} is declared in {declared} but the company files "
+                   f"in {filed_unit}. A threshold written against it would mean "
+                   f"something else. Fix it with:\n"
+                   f"      fund paper-metric {slug} {metric} --unit {filed_unit} "
+                   f"--edgar {custom_metrics(store)[metric]['edgar']}")
+    if mismatched:
+        raise click.ClickException("Nothing recorded — correct the unit(s) first.")
 
     if not apply_:
         click.echo("\n  Check these against the filing, then re-run with --apply.")
         return
 
     # One call per period so each figure lands in the quarter it describes.
-    periods = sorted({p for values in series.values() for p in values})
+    periods = sorted({p for f in series.values() for p in f["values"]})
     written = 0
     for period in periods:
-        batch = {m: v[period] for m, v in series.items() if period in v}
+        batch = {m: f["values"][period] for m, f in series.items()
+                 if period in f["values"]}
         written += len(record_reported(store, tkr, batch, period))
-    click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s).")
+    click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s). "
+               f"The period series keeps the most recent {MAX_SNAPSHOTS}.")

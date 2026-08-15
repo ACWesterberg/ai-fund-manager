@@ -18,6 +18,7 @@ from fundmgr.config import AppConfig, load_universe
 from fundmgr.engine.review_common import (
     context_blocks,
     live_price_sek,
+    log_review,
     majority,
     run_consensus,
     technicals_block,
@@ -71,8 +72,12 @@ def find_stop_breaches(store: Store, cfg: AppConfig | None = None) -> dict:
     return {"breaches": breaches, "skipped": skipped}
 
 
-def _build_review_prompt(ticker: str, store: Store, cfg: AppConfig, live_price: float | None) -> tuple[str, str] | None:
-    """Assemble (system, user) for the review, or None if the ticker isn't held."""
+def _build_review_prompt(ticker: str, store: Store, cfg: AppConfig, live_price: float | None) -> tuple[str, str, float | None] | None:
+    """Assemble (system, user, native_price), or None if the ticker isn't held.
+
+    The native price is what the decision gets logged at — outcomes are scored
+    against cached closes, which are native, never SEK-converted.
+    """
     pos = next((p for p in store.get_positions() if p.ticker == ticker), None)
     if pos is None:
         return None
@@ -120,7 +125,7 @@ The stop has been hit. Choose EXIT (sell all), TRIM (reduce), HOLD (the move was
 noise, conviction intact), or ADD (conviction unchanged or improved). If your most
 recent decision here was to ADD, address that tension head-on in `what_changed`.
 Return the StopReview JSON."""
-    return system, user
+    return system, user, tech_live
 
 
 def _vote(reviews: list[StopReview]) -> tuple[StopReview, dict[str, int]]:
@@ -139,20 +144,31 @@ def _vote(reviews: list[StopReview]) -> tuple[StopReview, dict[str, int]]:
 
 
 def review_position(
-    ticker: str, store: Store, cfg: AppConfig, live_price: float | None = None
+    ticker: str,
+    store: Store,
+    cfg: AppConfig,
+    live_price: float | None = None,
+    log_decision: bool = True,
 ) -> tuple[StopReview, dict[str, int]] | None:
     """Run an N-sample consensus stop-loss review for `ticker`.
 
     Returns (consensus StopReview, vote breakdown), or None if the ticker isn't
     held. Raises LLMError if every sample fails.
+
+    The verdict is logged as a decision so it is evaluated like any other call:
+    EXIT and TRIM as sales, ADD as a buy, HOLD as a hold. Review decisions are
+    excluded from the calibration buckets and the optimizer's training set,
+    which are about the weekly whole-portfolio prompt.
     """
     ticker = ticker.upper()
     built = _build_review_prompt(ticker, store, cfg, live_price)
     if built is None:
         return None
-    system, user = built
-
-    return _vote(run_consensus(system, user, cfg, StopReview, "stop-review"))
+    system, user, native_price = built
+    consensus, votes = _vote(run_consensus(system, user, cfg, StopReview, "stop-review"))
+    if log_decision:
+        log_review(consensus, store, "stop_review", native_price)
+    return consensus, votes
 
 
 _REC_EMOJI = {"exit": "🔴", "trim": "🟠", "hold": "⏸", "add": "🟢"}

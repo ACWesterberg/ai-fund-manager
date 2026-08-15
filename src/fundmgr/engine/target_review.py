@@ -19,6 +19,7 @@ from fundmgr.config import AppConfig, load_universe
 from fundmgr.engine.review_common import (
     context_blocks,
     live_price_sek,
+    log_review,
     majority,
     run_consensus,
     technicals_block,
@@ -70,8 +71,12 @@ def find_target_hits(store: Store, cfg: AppConfig | None = None) -> dict:
 
 def _build_review_prompt(
     ticker: str, store: Store, cfg: AppConfig, live_price: float | None
-) -> tuple[str, str] | None:
-    """Assemble (system, user) for the review, or None if the ticker isn't held."""
+) -> tuple[str, str, float | None] | None:
+    """Assemble (system, user, native_price), or None if the ticker isn't held.
+
+    The native price is what the decision gets logged at — outcomes are scored
+    against cached closes, which are native, never SEK-converted.
+    """
     pos = next((p for p in store.get_positions() if p.ticker == ticker), None)
     if pos is None:
         return None
@@ -125,7 +130,7 @@ A new_take_profit_pct is measured as % gain from the original entry price, so it
 must be greater than {tp_str} to mean anything. Justify it on the fundamentals or
 momentum actually in evidence above — not on the fact that the price has risen.
 Return the TargetReview JSON."""
-    return system, user
+    return system, user, tech_live
 
 
 def _vote(reviews: list[TargetReview]) -> tuple[TargetReview, dict[str, int]]:
@@ -153,19 +158,30 @@ def _vote(reviews: list[TargetReview]) -> tuple[TargetReview, dict[str, int]]:
 
 
 def review_position(
-    ticker: str, store: Store, cfg: AppConfig, live_price: float | None = None
+    ticker: str,
+    store: Store,
+    cfg: AppConfig,
+    live_price: float | None = None,
+    log_decision: bool = True,
 ) -> tuple[TargetReview, dict[str, int]] | None:
     """Run an N-sample consensus take-profit review for `ticker`.
 
     Returns (consensus TargetReview, vote breakdown), or None if the ticker
     isn't held. Raises LLMError if every sample fails.
+
+    The verdict is logged as a decision so it is evaluated ~4 weeks later like
+    any other call — SELL scored as a sale, RAISE and HOLD as holds, whose
+    return is measured but not graded correct/incorrect.
     """
     ticker = ticker.upper()
     built = _build_review_prompt(ticker, store, cfg, live_price)
     if built is None:
         return None
-    system, user = built
-    return _vote(run_consensus(system, user, cfg, TargetReview, "target-review"))
+    system, user, native_price = built
+    consensus, votes = _vote(run_consensus(system, user, cfg, TargetReview, "target-review"))
+    if log_decision:
+        log_review(consensus, store, "target_review", native_price)
+    return consensus, votes
 
 
 def apply_new_target(review: TargetReview, store: Store) -> tuple[float, float] | None:

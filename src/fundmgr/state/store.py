@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
     outperformed        INTEGER,            -- 1=yes, 0=no, NULL=not yet evaluated
     evaluation_date     TEXT,
     thesis              TEXT,               -- LLM's stated thesis at time of decision
+    source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review'
+    decision_date       TEXT,               -- set for review rows; run rows read it off the recommendation
     UNIQUE(run_id, ticker)
 );
 
@@ -194,6 +196,13 @@ class Store:
             "ALTER TABLE recommendations ADD COLUMN sampling_log TEXT",
             "ALTER TABLE transactions ADD COLUMN currency TEXT",
             "ALTER TABLE news_cache ADD COLUMN summary TEXT",
+            # Review-sourced decisions (stop / take-profit) live in
+            # decision_outcomes alongside run decisions, but carry their own date
+            # instead of borrowing a recommendations row — writing to that table
+            # would put a single-ticker review into the dashboard's "Last
+            # Decision", the run counter, and the optimizer's training set.
+            "ALTER TABLE decision_outcomes ADD COLUMN source TEXT",
+            "ALTER TABLE decision_outcomes ADD COLUMN decision_date TEXT",
         ]:
             with self._conn() as conn:
                 try:
@@ -707,10 +716,13 @@ class Store:
         """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT r.timestamp AS timestamp, do.action AS action, do.confidence AS confidence, "
-                "do.thesis AS thesis, do.price_at_decision AS price_at_decision "
-                "FROM decision_outcomes do JOIN recommendations r ON do.run_id = r.run_id "
-                "WHERE do.ticker = ? ORDER BY r.timestamp DESC LIMIT ?",
+                "SELECT COALESCE(do.decision_date, r.timestamp) AS timestamp, "
+                "do.action AS action, do.confidence AS confidence, "
+                "do.thesis AS thesis, do.price_at_decision AS price_at_decision, "
+                "do.source AS source "
+                "FROM decision_outcomes do "
+                "LEFT JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.ticker = ? ORDER BY timestamp DESC LIMIT ?",
                 (ticker.upper(), limit),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -763,10 +775,16 @@ class Store:
         from fundmgr.state.models import DecisionOutcome as DO
         cutoff = datetime.utcnow().isoformat()[:10]
         with self._conn() as conn:
+            # LEFT JOIN + COALESCE: review decisions carry their own date and have
+            # no recommendations row, so an inner join would silently drop them
+            # and they would never be evaluated.
             rows = conn.execute(
-                "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
-                "JOIN recommendations r ON do.run_id = r.run_id "
-                "WHERE do.outperformed IS NULL AND DATE(r.timestamp) <= DATE(?, ?)",
+                "SELECT do.*, COALESCE(do.decision_date, r.timestamp) as run_ts "
+                "FROM decision_outcomes do "
+                "LEFT JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.outperformed IS NULL "
+                "AND COALESCE(do.decision_date, r.timestamp) IS NOT NULL "
+                "AND DATE(COALESCE(do.decision_date, r.timestamp)) <= DATE(?, ?)",
                 (cutoff, f"-{older_than_days} days"),
             ).fetchall()
         return [
@@ -779,14 +797,56 @@ class Store:
             for r in rows
         ]
 
+    def log_review_decision(
+        self,
+        ticker: str,
+        action: str,
+        confidence: float,
+        thesis: str,
+        price_at_decision: float | None,
+        source: str,
+        decision_date: str | None = None,
+    ) -> str:
+        """
+        Record a review verdict as a decision, to be evaluated like any other.
+
+        `price_at_decision` must be the NATIVE-currency price: outcomes are
+        scored against the cached closes, which are native, so a SEK-converted
+        price would manufacture a fake return on every foreign holding.
+
+        Returns the synthetic run_id. Re-reviewing the same name on the same day
+        overwrites that day's row rather than accumulating duplicates — the
+        UNIQUE(run_id, ticker) constraint makes the day the unit of record.
+        """
+        date = decision_date or datetime.utcnow().strftime("%Y-%m-%d")
+        run_id = f"{date}-{source}-{ticker.upper()}"
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO decision_outcomes "
+                "(run_id, ticker, action, confidence, price_at_decision, thesis, source, decision_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(run_id, ticker) DO UPDATE SET "
+                "action = excluded.action, confidence = excluded.confidence, "
+                "price_at_decision = excluded.price_at_decision, thesis = excluded.thesis",
+                (run_id, ticker.upper(), action, confidence, price_at_decision,
+                 thesis, source, date),
+            )
+        return run_id
+
     def get_evaluated_outcomes(self) -> list["DecisionOutcome"]:
-        """Return all retrospectively evaluated outcomes with their run dates (optimizer training data)."""
+        """Return all retrospectively evaluated outcomes with their run dates (optimizer training data).
+
+        Run decisions only. The optimizer compiles the weekly whole-portfolio
+        prompt, and a single-name review answering a different question under a
+        different prompt is not training data for it.
+        """
         from fundmgr.state.models import DecisionOutcome as DO
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
                 "JOIN recommendations r ON do.run_id = r.run_id "
-                "WHERE do.outperformed IS NOT NULL"
+                "WHERE do.outperformed IS NOT NULL "
+                "AND (do.source IS NULL OR do.source = 'run')"
             ).fetchall()
         return [
             DO(
@@ -854,9 +914,14 @@ class Store:
     def get_calibration_stats(self) -> dict:
         """Return accuracy stats by confidence bucket for use in learnings generation."""
         with self._conn() as conn:
+            # Run decisions only: "your high-confidence buy calls" must keep
+            # meaning the weekly whole-portfolio calls. A stop review's ADD is a
+            # buy too, but made under a different prompt about one name, and
+            # folding it in here would quietly redefine the hit rate.
             rows = conn.execute(
                 "SELECT confidence, outperformed FROM decision_outcomes "
-                "WHERE outperformed IS NOT NULL AND action = 'buy'"
+                "WHERE outperformed IS NOT NULL AND action = 'buy' "
+                "AND (source IS NULL OR source = 'run')"
             ).fetchall()
 
         if not rows:

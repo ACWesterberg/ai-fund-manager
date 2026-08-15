@@ -2251,8 +2251,14 @@ def paper_metric(slug, key, label, unit, note, edgar, forget):
                    f"{meta.get('unit', '') or '—'}{src}")
         if meta.get("note"):
             click.echo(f"    {meta['note']}")
-    click.echo("\n  Enter figures with: fund paper-report <slug> <TICKER> "
-               "--period 2026-06-30 --set organic_growth=6.4\n")
+    # Name a metric this book actually has. A hardcoded example invites the
+    # "Unknown metric" error from a line the tool itself suggested.
+    example = sorted(defined)[0]
+    click.echo(f"\n  Enter figures with: fund paper-report {slug} <TICKER> "
+               f"--period <quarter-end> --set {example}=<value>")
+    if any(m.get("edgar") for m in defined.values()):
+        click.echo(f"  Or pull the SEC-mapped ones: fund paper-edgar {slug} <TICKER>")
+    click.echo()
 
 
 @cli.command("paper-report")
@@ -2454,11 +2460,17 @@ def paper_edgar(slug, ticker, quarters, apply_):
         return
 
     # One call per period so each figure lands in the quarter it describes.
-    periods = sorted({p for f in series.values() for p in f["values"]})
+    # Only the periods the series can hold are written: the older ones would be
+    # trimmed on the next append anyway, and writing them makes the count report
+    # sixteen years of history that is not there.
+    all_periods = sorted({p for f in series.values() for p in f["values"]})
+    periods = all_periods[-MAX_SNAPSHOTS:]
     written = 0
     for period in periods:
         batch = {m: f["values"][period] for m, f in series.items()
                  if period in f["values"]}
         written += len(record_reported(store, tkr, batch, period))
-    click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s). "
-               f"The period series keeps the most recent {MAX_SNAPSHOTS}.")
+    older = len(all_periods) - len(periods)
+    tail = f" ({older} older quarter(s) skipped — the series holds {MAX_SNAPSHOTS})" if older else ""
+    click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s)"
+               f"{tail}, {periods[0]} to {periods[-1]}.")

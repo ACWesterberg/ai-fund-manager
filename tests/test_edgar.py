@@ -222,3 +222,51 @@ def test_the_cli_accepts_every_unit_the_registry_does(tmp_path, monkeypatch):
 
     bad = runner.invoke(cli, ["paper-metric", "book", "nope", "--unit", "dollars"])
     assert bad.exit_code != 0 and "Unit must be" in bad.output
+
+
+def test_only_the_quarters_the_series_can_hold_are_written(tmp_path, monkeypatch):
+    """64 quarters pulled, 12 retained. Writing all 64 made the count claim
+    sixteen years of history that the next append would trim away."""
+    from click.testing import CliRunner
+
+    from fundmgr import paper
+    book = Store(tmp_path / "cap.db")
+    book.initialise(1000)
+    monkeypatch.setattr(paper, "open_portfolio", lambda slug: ({"name": slug}, book))
+    evidence.define_custom_metric(book, "segment_revenue", "Segment revenue",
+                                  "USD", edgar="Revenues")
+
+    # Twenty quarters of filings — more than the series keeps.
+    quarters = [(f"20{y:02d}-{m:02d}-30", 1000 + i)
+                for i, (y, m) in enumerate([(20 + n // 4, [3, 6, 9, 12][n % 4])
+                                            for n in range(20)])]
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        {"start": f"{end[:4]}-{int(end[5:7]) - 2:02d}-01", "end": end,
+         "val": val, "filed": end}
+        for end, val in quarters]}}}}}
+    monkeypatch.setattr(edgar, "fetch_facts", lambda t: facts)
+
+    from fundmgr.cli import cli
+    out = CliRunner().invoke(cli, ["paper-edgar", "book", "NVDA", "--apply"])
+    assert out.exit_code == 0, out.output
+    assert "older quarter(s) skipped" in out.output
+
+    history = evidence.metric_history(book, "NVDA", "segment_revenue")
+    assert len(history) <= evidence.MAX_SNAPSHOTS
+
+
+def test_the_metric_listing_names_a_metric_this_book_has(tmp_path, monkeypatch):
+    """A hardcoded example invites the 'Unknown metric' error from a line the
+    tool itself printed."""
+    from click.testing import CliRunner
+
+    from fundmgr import paper
+    book = Store(tmp_path / "hint.db")
+    book.initialise(1000)
+    monkeypatch.setattr(paper, "open_portfolio", lambda slug: ({"name": slug}, book))
+    evidence.define_custom_metric(book, "book_to_bill", "Book-to-bill", "x")
+
+    from fundmgr.cli import cli
+    out = CliRunner().invoke(cli, ["paper-metric", "book"])
+    assert "--set book_to_bill=" in out.output
+    assert "organic_growth" not in out.output

@@ -1186,3 +1186,26 @@ def test_retag_moves_the_currency_off_the_old_symbol(tmp_path, monkeypatch):
     paper.retag_position(store, "DYVOX", "DYVOX.ST")
     cmap = json.loads(store.get_meta("paper_currency_map"))
     assert cmap.get("DYVOX.ST") == "SEK" and "DYVOX" not in cmap
+
+
+def test_retag_moves_a_plan_that_has_no_position(tmp_path, monkeypatch):
+    """What a half-finished retag leaves behind: the shares already moved, the
+    criteria did not. Refusing to move a plan-only row would strand them on a
+    ticker nobody holds."""
+    from fundmgr import watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")        # shares + plan move
+    watchplan.set_position_plan(store, "STRAY", kill_criterion="left behind",
+                                horizon_months="12")
+
+    res = paper.retag_position(store, "STRAY", "STRAY.ST")
+    assert res["shares"] == 0
+    assert watchplan.get_kill_text(store)["STRAY.ST"] == "left behind"
+    assert "STRAY" not in watchplan.get_kill_text(store)
+    assert watchplan.get_horizons(store)["STRAY.ST"]["review_date"]
+
+
+def test_retag_still_refuses_a_ticker_with_nothing_at_all(tmp_path, monkeypatch):
+    store = _retag_book(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="no position and no plan"):
+        paper.retag_position(store, "NOTHING", "NOTHING.ST")

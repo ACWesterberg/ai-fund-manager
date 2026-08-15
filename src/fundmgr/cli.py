@@ -1731,6 +1731,8 @@ def paper_watch(slug: str | None):
 @click.argument("slug")
 @click.argument("ticker")
 @click.option("--kill", default=None, help="Kill criterion text (empty string clears it).")
+@click.option("--add", "add_criterion", default=None,
+              help="ADD criterion — what must still be true to add (empty string clears it).")
 @click.option("--max-drop", default=None, help="Max % drawdown from the review price before alerting.")
 @click.option("--price-below", default=None, help="Alert when price falls to/below this (native currency).")
 @click.option("--price-above", default=None, help="Alert when price rises to/above this (native currency).")
@@ -1740,9 +1742,10 @@ def paper_watch(slug: str | None):
 @click.option("--re-anchor", is_flag=True,
               help="Measure the drawdown line from today's price (do this after a fresh analysis).")
 @click.option("--clear", is_flag=True, help="Remove the whole watch plan for this ticker.")
-def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
-               price_below: str | None, price_above: str | None, horizon: str | None,
-               months: str | None, note: str | None, re_anchor: bool, clear: bool):
+def paper_plan(slug: str, ticker: str, kill: str | None, add_criterion: str | None,
+               max_drop: str | None, price_below: str | None, price_above: str | None,
+               horizon: str | None, months: str | None, note: str | None,
+               re_anchor: bool, clear: bool):
     """Set a position's kill criteria and time horizon.
 
     The CLI twin of the dashboard's watch-plan editor:
@@ -1769,8 +1772,20 @@ def paper_plan(slug: str, ticker: str, kill: str | None, max_drop: str | None,
         currency=meta["currency_map"].get(tkr), review_date=horizon,
         horizon_months=months, horizon_note=note, re_anchor=re_anchor,
     )
+    # The ADD criterion goes through the same analyser as the kill criterion,
+    # with the framing that reads its conditions as ones that must hold.
+    if add_criterion is not None:
+        previous = watchplan.get_add_text(store).get(tkr, "")
+        text = watchplan.set_add_text(store, tkr, add_criterion)
+        if text and text != previous:
+            watchplan.save_add_analysis(
+                store, tkr, watchplan.analyse_criterion(text, kind="add", store=store))
+        elif not text:
+            watchplan.save_add_analysis(store, tkr, None)
+
     click.echo(f"✓ {tkr} in {meta['name']}:")
     click.echo(f"  Kill criterion: {plan['kill_criterion'] or '—'}")
+    click.echo(f"  ADD criterion:  {watchplan.get_add_text(store).get(tkr) or '—'}")
     rules = plan["kill_rules"]
     click.echo(f"  Max drop: {rules.get('max_drawdown_pct') or '—'}   "
                f"Floor: {rules.get('price_below') or '—'}   "
@@ -2072,8 +2087,12 @@ def paper_retag(slug: str, old: str, new: str | None):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    click.echo(f"✓ Retagged {res['shares']:g} × {res['old']} → {res['new']} "
-               f"(cash unchanged).")
+    if res["shares"]:
+        click.echo(f"✓ Retagged {res['shares']:g} × {res['old']} → {res['new']} "
+                   f"(cash unchanged).")
+    else:
+        click.echo(f"✓ Moved the plan for {res['old']} → {res['new']} "
+                   f"(no position was held under {res['old']}).")
     if res.get("moved"):
         click.echo(f"  Plan carried over: {', '.join(res['moved'])}.")
     if res.get("dropped"):

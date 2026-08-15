@@ -563,3 +563,32 @@ def test_a_reworded_add_criterion_drops_its_stale_analysis(store):
 
 def test_no_add_criterion_evaluates_to_none(store):
     assert watchplan.evaluate_add_criterion(store, "VIT-B.ST") is None
+
+
+def test_the_cli_can_set_an_add_criterion(store, fake_llm, monkeypatch, tmp_path):
+    """It was reachable only from the web form, which is no use when you are
+    fixing a book over ssh."""
+    from click.testing import CliRunner
+
+    monkeypatch.setattr(paper, "PAPER_DIR", tmp_path / "paper")
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+    monkeypatch.setattr(paper, "_cache_price_history", lambda store, tickers, **kw: None)
+    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
+    import fundmgr.data.benchmark as benchmark
+    monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", lambda store, **kw: True)
+    paper.create_portfolio("Svenska Aktier", 10_000, "", kind="live",
+                           holdings_override=[{"ticker": "DYVOX.ST", "name": "Dynavox",
+                                               "weight_pct": 100, "shares": 10,
+                                               "avg_cost_sek": 77.0}],
+                           seed_holdings=True)
+
+    from fundmgr.cli import cli
+    result = CliRunner().invoke(cli, [
+        "paper-plan", "svenska-aktier", "DYVOX.ST",
+        "--add", "CC growth at least 15% and EBIT margin at least 15%"])
+    assert result.exit_code == 0, result.output
+    assert "ADD criterion:  CC growth at least 15%" in result.output
+
+    _meta, s2 = paper.open_portfolio("svenska-aktier")
+    assert watchplan.get_add_text(s2)["DYVOX.ST"].startswith("CC growth")
+    assert watchplan.get_add_analysis(s2, "DYVOX.ST") is not None

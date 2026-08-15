@@ -1135,12 +1135,23 @@ def retag_position(store: Store, old_ticker: str, new_ticker: str) -> dict:
     new = (new_ticker or "").strip().upper()
     if not old or not new or old == new:
         raise ValueError("Give distinct old and new tickers.")
+
+    # A plan with no position is a real state — the dashboard shows those rows
+    # as "plan only" — and it is exactly what a half-finished retag leaves
+    # behind. Refusing to move it would strand the criteria on a ticker nobody
+    # holds, which is the situation this function exists to clear up.
     with store._conn() as conn:
         pos = conn.execute(
             "SELECT shares, avg_cost_sek FROM positions WHERE ticker=?", (old,)).fetchone()
-        if not pos or float(pos["shares"]) <= 0:
-            raise ValueError(f"No position '{old}' to retag.")
-        old_shares, old_avg = float(pos["shares"]), float(pos["avg_cost_sek"])
+    held = bool(pos and float(pos["shares"]) > 0)
+    if not held and not _has_plan(store, old):
+        raise ValueError(f"Nothing to retag under '{old}' — no position and no plan.")
+
+    with store._conn() as conn:
+        old_shares = float(pos["shares"]) if held else 0.0
+        old_avg = float(pos["avg_cost_sek"]) if held else 0.0
+        if not held:
+            conn.execute("DELETE FROM positions WHERE ticker=?", (old,))
         newpos = conn.execute(
             "SELECT shares, avg_cost_sek FROM positions WHERE ticker=?", (new,)).fetchone()
         if newpos and float(newpos["shares"]) > 0:
@@ -1189,6 +1200,18 @@ _INSTRUMENT_PREFIXES = ("paper_killverdict:", "paper_fundsnap:", "paper_killwatc
 # drawdown from a number that never applied to this company.
 _PRICE_ANCHORS = {"paper_kill_rules": ("anchor_price_sek", "anchor_date"),
                   "paper_add_plan": ("review_price", "review_date")}
+
+
+def _has_plan(store: Store, ticker: str) -> bool:
+    """Does any plan entry name this ticker, position or not?"""
+    for key in _PLAN_MAPS:
+        try:
+            data = json.loads(store.get_meta(key) or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and ticker in data:
+            return True
+    return any(store.get_meta(f"{prefix}{ticker}") for prefix in _PLAN_PREFIXES)
 
 
 def _retag_plan(store: Store, old: str, new: str) -> list[str]:

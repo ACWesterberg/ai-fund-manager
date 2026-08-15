@@ -362,6 +362,15 @@
           form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
         });
       });
+
+      // A date and a month count are two ways to say the same thing, and the
+      // date wins on the server. Typing in one clears the other so the form
+      // can never show two answers while acting on one.
+      const date = form.horizon_date, months = form.horizon_months;
+      if (date && months) {
+        months.addEventListener('input', () => { if (months.value) date.value = ''; });
+        date.addEventListener('input',   () => { if (date.value) months.value = ''; });
+      }
     })();
   </script>
   {% endif %}

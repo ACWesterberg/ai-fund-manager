@@ -673,6 +673,14 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         if horizon_date.strip() and not watchplan.parse_horizon(horizon_date.strip()):
             return _back(f"Bad horizon date '{horizon_date}' — use YYYY-MM-DD.", 0)
 
+        # The editor pre-fills the existing horizon date, and an explicit date
+        # beats a month count. So a date that comes back *unchanged* is not a
+        # choice — it is the old value riding along, and it silently swallowed
+        # the months the investor just typed. Months win in that case.
+        stored_date = (watchplan.get_horizons(store).get(tkr) or {}).get("review_date", "")
+        if horizon_months.strip() and horizon_date.strip() == stored_date:
+            horizon_date = ""
+
         previous_criterion = watchplan.get_kill_text(store).get(tkr, "")
         previous_add = watchplan.get_add_text(store).get(tkr, "")
         currency = meta["currency_map"].get(tkr)

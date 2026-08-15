@@ -592,3 +592,47 @@ def test_the_cli_can_set_an_add_criterion(store, fake_llm, monkeypatch, tmp_path
     _meta, s2 = paper.open_portfolio("svenska-aktier")
     assert watchplan.get_add_text(s2)["DYVOX.ST"].startswith("CC growth")
     assert watchplan.get_add_analysis(s2, "DYVOX.ST") is not None
+
+
+# ── Horizon: months must not be swallowed by the pre-filled date ─────────────
+
+def test_months_win_over_a_date_that_was_not_changed(client):
+    """The editor pre-fills the existing date and the server prefers a date, so
+    typing 15 months into an existing horizon silently did nothing."""
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "horizon_months": "24"},
+                follow_redirects=False)
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    original = watchplan.get_horizons(store)["VIT-B.ST"]["review_date"]
+
+    # Exactly what the pencil submits: the stored date, plus the new months.
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "horizon_date": original,
+                      "horizon_months": "15"},
+                follow_redirects=False)
+
+    horizon = watchplan.get_horizons(store)["VIT-B.ST"]
+    assert horizon["review_date"] != original
+    assert horizon["label"] == "15 months"
+
+
+def test_a_changed_date_still_wins_over_months(client):
+    """Editing the date itself must not be overridden by a stale months box."""
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "horizon_months": "24"},
+                follow_redirects=False)
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "horizon_date": "2027-03-01",
+                      "horizon_months": "15"},
+                follow_redirects=False)
+
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    assert watchplan.get_horizons(store)["VIT-B.ST"]["review_date"] == "2027-03-01"
+
+
+def test_a_date_alone_still_works(client):
+    client.post("/live/acquirer-sleeve/watchplan",
+                data={"ticker": "VIT-B.ST", "horizon_date": "2027-06-30"},
+                follow_redirects=False)
+    _meta, store = paper.open_portfolio("acquirer-sleeve")
+    assert watchplan.get_horizons(store)["VIT-B.ST"]["review_date"] == "2027-06-30"

@@ -153,3 +153,38 @@ class StopReview(BaseModel):
     @classmethod
     def _upper(cls, v: str) -> str:
         return v.upper()
+
+
+class Lesson(BaseModel):
+    """One lesson distilled from a batch of evaluated outcomes."""
+    body: str = Field(
+        max_length=400,
+        description=(
+            "At most 2 sentences. Name a signal that was checkable before entry and "
+            "specific enough to change a future decision. 'Monitor macro indicators' "
+            "changes nothing and is not a lesson."
+        ),
+    )
+    tickers: list[str] = Field(
+        description=(
+            "The tickers from this batch that support the lesson. At least two — a "
+            "pattern seen in a single 28-day return is noise, not a lesson."
+        ),
+    )
+
+    @field_validator("tickers")
+    @classmethod
+    def _upper_all(cls, v: list[str]) -> list[str]:
+        return [t.upper() for t in v]
+
+
+class BatchLessons(BaseModel):
+    """The lessons a single evaluation batch yields — often none."""
+    lessons: list[Lesson] = Field(
+        default_factory=list,
+        description=(
+            "Empty whenever the batch shows no repeated, thesis-level pattern. That is "
+            "the expected result for most batches: an empty list is a better answer "
+            "than a plausible story."
+        ),
+    )

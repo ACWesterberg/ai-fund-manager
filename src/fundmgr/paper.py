@@ -1417,6 +1417,8 @@ def track_portfolio(slug: str) -> list[str]:
     evaluated = evaluate_pending_outcomes(store)
     if evaluated:
         stat = generate_learnings(store)
+        # A paper book has no fund config of its own: the lesson writer comes
+        # from the default config, the book's own benchmark from its meta.
         qual = generate_qualitative_learnings(
             store, evaluated, benchmark_label=meta.get("benchmark")
         )

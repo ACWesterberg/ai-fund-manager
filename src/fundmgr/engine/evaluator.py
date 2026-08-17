@@ -5,14 +5,21 @@ Runs automatically as part of fund run when outcomes are ≥28 days old.
 from __future__ import annotations
 
 import json
-import os
+import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import yfinance as yf
 
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.state.models import DecisionOutcome, Learning
 from fundmgr.state.store import Store
+
+if TYPE_CHECKING:
+    from fundmgr.config import AppConfig
+    from fundmgr.engine.schema import BatchLessons
+
+logger = logging.getLogger(__name__)
 
 
 def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[DecisionOutcome]:
@@ -164,7 +171,6 @@ def repair_outcomes(store: Store, dry_run: bool = False) -> dict[str, int]:
     return stats
 
 
-_LEARNING_MODEL = "gpt-4o-mini"
 MAX_BATCH_LESSONS = 3       # most a single evaluation batch may contribute
 MIN_SUPPORTING_TICKERS = 2  # a lesson must repeat across names to count as one
 
@@ -172,6 +178,7 @@ MIN_SUPPORTING_TICKERS = 2  # a lesson must repeat across names to count as one
 def generate_qualitative_learnings(
     store: Store,
     outcomes: list[DecisionOutcome],
+    cfg: "AppConfig | None" = None,
     benchmark_label: str | None = None,
     max_lessons: int = MAX_BATCH_LESSONS,
 ) -> list[Learning]:
@@ -187,33 +194,34 @@ def generate_qualitative_learnings(
     error), and requiring `MIN_SUPPORTING_TICKERS` behind every lesson means a
     pattern has to repeat before it is written down. Returning nothing is a
     valid, and common, outcome.
+
+    Runs on `cfg.learning_model` — the provider's heavy reasoner, not a cheap
+    one. This text conditions every subsequent decision the fund makes, and
+    batching turned the cost from one call per trade into one call per batch,
+    so the quality is worth far more here than the tokens saved.
     """
     if not outcomes:
         return []
 
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        return []
-
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-    except ImportError:
-        return []
+    if cfg is None:
+        from fundmgr.config import load_config
+        cfg = load_config()
 
     by_run: dict[str, list[DecisionOutcome]] = {}
     for o in outcomes:
         by_run.setdefault(o.run_id, []).append(o)
 
     macro_by_run = {run_id: _macro_summary(store, run_id) for run_id in by_run}
-    user_msg = _batch_review_message(by_run, macro_by_run, benchmark_label, max_lessons)
+    user_msg = _batch_review_message(
+        by_run, macro_by_run, benchmark_label or cfg.benchmark, max_lessons
+    )
 
-    content = _call_gpt_for_batch_lessons(client, user_msg, max_lessons)
-    if not content:
+    parsed = _call_for_batch_lessons(cfg, user_msg)
+    if parsed is None:
         return []
 
     new_learnings: list[Learning] = []
-    for body, tickers in parse_batch_lessons(content, outcomes, max_lessons):
+    for body, tickers in surviving_lessons(parsed, outcomes, max_lessons):
         run_ids = sorted({
             o.run_id for o in outcomes if o.ticker.upper() in tickers
         })
@@ -261,7 +269,10 @@ def _batch_review_message(
         lines.append(f"Macro context at entry (SHARED by every trade in this run): {macro}")
         for o in sorted(run_outcomes, key=lambda x: (_alpha(x) is None, _alpha(x) or 0.0)):
             alpha = _alpha(o)
-            head = f"- {o.action.upper()} {o.ticker} | conf {o.confidence:.0%}"
+            # Paper books seed outcomes without a confidence — the weekly runs
+            # always carry one, so this must degrade rather than raise.
+            conf = f"{o.confidence:.0%}" if o.confidence is not None else "n/a"
+            head = f"- {o.action.upper()} {o.ticker} | conf {conf}"
             if alpha is None:
                 lines.append(f"{head} | alpha unknown")
             else:
@@ -308,55 +319,55 @@ _BATCH_SYSTEM_PROMPT = (
     "change a future decision. 'Monitor macro indicators' changes nothing and is not a lesson.\n"
     "5. Returning zero lessons is correct whenever the batch shows no repeated pattern. This "
     "is the expected result for most batches — an empty list is a better answer than a "
-    "plausible story.\n\n"
-    'Respond with JSON: {"lessons": [{"body": "<= 2 sentences", "tickers": ["AAA.ST", "BBB.ST"]}]}'
+    "plausible story."
 )
 
 
-def _call_gpt_for_batch_lessons(client, user_msg: str, max_lessons: int) -> str | None:
+def _call_for_batch_lessons(cfg: "AppConfig", user_msg: str) -> "BatchLessons | None":
+    """One structured call on the fund's learning model. None on any failure.
+
+    Runs through `call_llm` so this inherits the provider handling the decision
+    path already has — structured outputs on OpenAI, JSON mode on Anthropic, and
+    the temperature/token carve-outs each model family needs.
+    """
+    from dataclasses import replace
+
+    from fundmgr.engine.client import LLMError, call_llm
+    from fundmgr.engine.schema import BatchLessons
+
+    # Same provider and credentials, heavy model, modest budget: the reply is at
+    # most a few sentences however much reasoning went into it.
+    learning_cfg = replace(
+        cfg, llm=replace(cfg.llm, model_id=cfg.learning_model, n_samples=1)
+    )
+
     try:
-        resp = client.chat.completions.create(
-            model=_LEARNING_MODEL,
-            messages=[
-                {"role": "system", "content": _BATCH_SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=100 + 160 * max_lessons,
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception:
+        parsed, _ = call_llm(_BATCH_SYSTEM_PROMPT, user_msg, learning_cfg, schema=BatchLessons)
+    except LLMError as exc:
+        logger.warning("Learning distillation failed on %s: %s", learning_cfg.llm.model_id, exc)
         return None
+    return parsed
 
 
-def parse_batch_lessons(
-    content: str, outcomes: list[DecisionOutcome], max_lessons: int
+def surviving_lessons(
+    parsed: "BatchLessons", outcomes: list[DecisionOutcome], max_lessons: int
 ) -> list[tuple[str, set[str]]]:
     """
-    (body, supporting tickers) for each lesson the model returned that survives
-    the evidence bar: real tickers from this batch, at least
-    MIN_SUPPORTING_TICKERS of them, and a non-empty body.
+    (body, supporting tickers) for each returned lesson that clears the evidence
+    bar: real tickers from this batch, at least MIN_SUPPORTING_TICKERS of them,
+    and a non-empty body.
 
-    The bar is enforced here rather than trusted to the prompt — a model told
-    "at least two tickers" will still cite one, and a lesson resting on one
-    28-day return is the exact failure mode this pipeline exists to avoid.
+    Enforced here rather than trusted to the prompt or the schema — a model told
+    "at least two tickers" will still cite one, or cite a name that was not in
+    the batch, and a lesson resting on one 28-day return is the exact failure
+    mode this pipeline exists to avoid.
     """
-    try:
-        payload = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        return []
-
     known = {o.ticker.upper() for o in outcomes}
     kept: list[tuple[str, set[str]]] = []
 
-    for entry in payload.get("lessons", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        body = str(entry.get("body", "") or "").strip()
-        tickers = {
-            str(t).upper() for t in (entry.get("tickers") or []) if isinstance(t, (str, int))
-        } & known
+    for lesson in parsed.lessons:
+        body = (lesson.body or "").strip()
+        tickers = set(lesson.tickers) & known
         if body and len(tickers) >= MIN_SUPPORTING_TICKERS:
             kept.append((body, tickers))
 

@@ -233,9 +233,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     evaluated = evaluate_pending_outcomes(store)
     if evaluated:
         stat_learnings = generate_learnings(store)
-        qual_learnings = generate_qualitative_learnings(
-            store, evaluated, benchmark_label=cfg.benchmark
-        )
+        qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
         total_learnings = len(stat_learnings) + len(qual_learnings)
         click.echo(
             f"\n[*] Evaluated {len(evaluated)} past decisions; "

@@ -14,6 +14,12 @@ llm:
   reasoning_effort: "high"  # low | medium | high — activates extended reasoning on gpt-5+/o-series
   n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled
 
+# Model that distils evaluated outcomes into learnings (one call per evaluation
+# batch, ~monthly). Defaults to this fund's provider's heavy reasoner. Set the
+# same id in every fund's config to keep one lesson-writer system-wide, so the
+# GPT-vs-Claude sims differ in decision model rather than in how they're coached.
+# learning_model_id: "gpt-5.6-sol"
+
 risk:
   max_position_pct: 18      # max single-name weight
   max_positions: 10

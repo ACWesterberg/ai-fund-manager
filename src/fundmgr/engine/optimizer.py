@@ -238,7 +238,8 @@ def price_from_snapshot(snapshot: dict, ticker: str) -> float | None:
 # ── Optimization run ─────────────────────────────────────────────────────────
 
 def _default_prompt_model(provider: str) -> str:
-    return "claude-opus-4-8" if provider == "anthropic" else "gpt-5.6-sol"
+    from fundmgr.config import default_heavy_model
+    return default_heavy_model(provider)
 
 
 def run_optimization(

@@ -82,10 +82,21 @@ class ScreenerConfig:
     rotate_weeks: int = 8  # spread the rest across N ISO-week buckets
 
 
+def default_heavy_model(provider: str) -> str:
+    """The heaviest reasoner for a provider.
+
+    Used for the roles where output quality matters far more than call volume —
+    writing the optimizer's candidate instructions, and distilling learnings.
+    Both run a handful of times a week and their output conditions every
+    subsequent decision, so neither should be served by a cheap model.
+    """
+    return "claude-opus-4-8" if provider == "anthropic" else "gpt-5.6-sol"
+
+
 @dataclass
 class OptimizerConfig:
     # Heavy model that *writes* candidate instructions (MIPRO prompt_model).
-    # None → derived from llm.provider at run time (anthropic → claude-opus-4-8, openai → gpt-5.6-sol).
+    # None → derived from llm.provider at run time (see default_heavy_model).
     prompt_model_id: str | None = None
     min_outcomes: int = 30       # evaluated outcomes required before optimization runs
     min_examples: int = 8        # usable run-level examples required after reconstruction
@@ -111,10 +122,20 @@ class AppConfig:
     fx_to_sek: bool = False  # convert foreign-currency holdings to SEK for cash/NAV
                              # (real fund). Sims run native-consistent; leave False.
     name: str = ""           # display name for notifications (which fund this is)
+    # Model that distils evaluated outcomes into learnings. None → this fund's
+    # provider's heavy model. Pin the same id across every fund's config to keep
+    # one lesson-writer system-wide, so the GPT-vs-Claude comparison is a
+    # difference in decision model rather than in how each fund is coached.
+    learning_model_id: str | None = None
 
     @property
     def display_name(self) -> str:
         return self.name or f"{self.llm.provider}/{self.llm.model_id}"
+
+    @property
+    def learning_model(self) -> str:
+        """Resolved id of the model that writes this fund's learnings."""
+        return self.learning_model_id or default_heavy_model(self.llm.provider)
 
     def config_hash(self) -> str:
         """Short hash of the decision-shaping config, for within-repo regime drift.
@@ -207,6 +228,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.fx_to_sek = bool(raw["fx_to_sek"])
     if "name" in raw:
         cfg.name = str(raw["name"])
+    if "learning_model_id" in raw:
+        cfg.learning_model_id = str(raw["learning_model_id"])
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(

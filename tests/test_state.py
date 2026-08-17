@@ -135,3 +135,41 @@ def test_prune_learnings_retires_rather_than_deletes(store):
     # Still on disk, just inactive — past runs stay reconstructible.
     with store._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM learnings").fetchone()[0] == 1
+
+
+def test_score_by_regime_separates_the_unguided_arm(store):
+    import json as _json
+
+    from fundmgr.state.models import RecommendationLog
+
+    def _run(run_id, learnings_hash, score):
+        snap = {"regime": {"learnings_hash": learnings_hash}} if learnings_hash is not False else {}
+        store.save_recommendation(RecommendationLog(
+            run_id=run_id, timestamp=datetime(2026, 6, 1),
+            prompt_snapshot=_json.dumps(snap),
+            llm_response="{}", guardrail_log="{}", actions_json="[]",
+        ))
+        with store._conn() as conn:
+            conn.execute("UPDATE recommendations SET score = ? WHERE run_id = ?", (score, run_id))
+
+    _run("r1", "abc123", 0.02)
+    _run("r2", "abc123", 0.04)
+    _run("r3", None, -0.01)      # ran with no lessons — the comparison arm
+    _run("r4", False, 0.00)      # legacy v1 row, no regime at all
+
+    buckets = {b["value"]: b for b in store.score_by_regime("learnings_hash")}
+    assert buckets["abc123"]["runs"] == 2
+    assert buckets["abc123"]["mean_score"] == pytest.approx(0.03)
+    # Missing key and explicit null both mean "no lessons that run".
+    assert buckets[None]["runs"] == 2
+    assert buckets[None]["mean_score"] == pytest.approx(-0.005)
+
+
+def test_score_by_regime_ignores_unscored_runs(store):
+    from fundmgr.state.models import RecommendationLog
+
+    store.save_recommendation(RecommendationLog(
+        run_id="unscored", timestamp=datetime(2026, 6, 1),
+        prompt_snapshot="{}", llm_response="{}", guardrail_log="{}", actions_json="[]",
+    ))
+    assert store.score_by_regime("learnings_hash") == []

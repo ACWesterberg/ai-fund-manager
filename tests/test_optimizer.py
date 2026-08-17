@@ -401,3 +401,51 @@ def test_learnings_block_renders_only_the_selection():
     ])
     assert block.count("[QUALITATIVE]") == PROMPT_LEARNING_LIMIT
     assert _learnings_block([]) == ""
+
+
+# ── Learnings regime fingerprint ──────────────────────────────────────────────
+
+def test_learnings_fingerprint_tracks_the_block_the_model_saw():
+    from fundmgr.engine.prompt import learnings_fingerprint
+
+    assert learnings_fingerprint("") is None
+    assert learnings_fingerprint("   ") is None
+
+    a = learnings_fingerprint("## Past Performance Reflections\n  [CALIBRATION] x")
+    b = learnings_fingerprint("## Past Performance Reflections\n  [CALIBRATION] x")
+    c = learnings_fingerprint("## Past Performance Reflections\n  [CALIBRATION] y")
+    assert a == b and a != c
+    assert len(a) == 12
+
+
+def test_learnings_count_matches_the_rendered_block():
+    from fundmgr.engine.prompt import _learnings_block, learnings_count
+
+    assert learnings_count("") == 0
+    block = _learnings_block([
+        _l("calibration", "Hit rate."),
+        _l("qualitative", "Repeated pattern.", run_ids=["r1", "r2"]),
+    ])
+    assert learnings_count(block) == 2
+
+
+def test_snapshot_regime_records_the_learnings_channel():
+    """Learnings reach every prompt; without a fingerprint their effect is unmeasurable."""
+    from fundmgr.engine.prompt import _learnings_block, snapshot_to_dict
+
+    cfg = AppConfig()
+    snap = PortfolioSnapshot(positions=[], cash_sek=150_000)
+
+    block = _learnings_block([_l("calibration", "Hit rate 40%.")])
+    regime = json.loads(
+        snapshot_to_dict(snap, "sys", "usr", fields={"learnings": block}, cfg=cfg)
+    )["regime"]
+    assert regime["learnings_hash"] is not None
+    assert regime["learnings_n"] == 1
+
+    # A run carrying no lessons is the unguided arm — it must be distinguishable.
+    unguided = json.loads(
+        snapshot_to_dict(snap, "sys", "usr", fields={"learnings": ""}, cfg=cfg)
+    )["regime"]
+    assert unguided["learnings_hash"] is None
+    assert unguided["learnings_n"] == 0

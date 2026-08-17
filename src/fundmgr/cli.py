@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import click
 
@@ -1427,6 +1428,17 @@ def score_runs():
             f"{sign}{r['score']*100:>8.3f}%  "
             f"{r['nav_start']:>12,.0f} {r['nav_end']:>12,.0f}"
         )
+
+    # The two channels that shape every prompt without ever being measured.
+    for key, label in (("learnings_hash", "learnings"), ("guidance_hash", "MIPRO guidance")):
+        buckets = store.score_by_regime(key)
+        if len(buckets) < 2:
+            continue  # only one regime seen — nothing to compare against yet
+        click.echo(f"\n  Mean score by {label} regime:")
+        for b in buckets:
+            name = b["value"] or "(none — unguided)"
+            click.echo(f"    {name:<22} {b['runs']:>3} run(s)  {b['mean_score']*100:>+8.3f}%")
+        click.echo("    (descriptive only — weekly runs are few and not randomised)")
     click.echo()
 
 
@@ -1527,36 +1539,91 @@ def repair_outcomes_cmd(dry_run: bool, deactivate_learnings: bool):
 @click.option("--before", default=None, metavar="YYYY-MM-DD",
               help="Only lessons created before this date.")
 @click.option("--dry-run", is_flag=True, help="Show what would be retired, write nothing.")
-def prune_learnings_cmd(category: str | None, before: str | None, dry_run: bool):
+@click.option("--all-books", is_flag=True,
+              help="Every fund in config/ and every paper book, not just this one.")
+def prune_learnings_cmd(category: str | None, before: str | None, dry_run: bool, all_books: bool):
     """Retire active learnings so they stop being injected into the prompt.
 
     For clearing out a batch that turned out to be noise — e.g. the per-trade
     lessons written before batch distillation, which explained a whole run's
     outcomes by the one macro line every trade in that run shared. Rows are
     deactivated, not deleted, so past runs remain reconstructible.
+
+    Learnings are per-book: each fund and each paper portfolio distils from its
+    own outcomes into its own database. Without --all-books this touches one
+    book — the fund named by FUND_CONFIG, or the default config.
     """
-    cfg, store = _get_store()
-    matched = store.find_active_learnings(category=category, before=before)
+    books = _all_learning_books() if all_books else [_current_learning_book()]
 
     scope = category or "all categories"
     window = f" created before {before}" if before else ""
     click.echo(f"\n─── Prune learnings ({scope}{window}) ───────────────")
 
-    if not matched:
-        click.echo("  Nothing matches — no learnings retired.")
-        return
+    total_matched = total_retired = 0
+    for label, store in books:
+        matched = store.find_active_learnings(category=category, before=before)
+        if not matched:
+            if all_books:
+                click.echo(f"\n  {label}: nothing matches.")
+            continue
 
-    for lrn in matched:
-        body = lrn.body if len(lrn.body) <= 96 else lrn.body[:93] + "..."
-        click.echo(f"  [{lrn.created_at.strftime('%Y-%m-%d')}] {lrn.category}: {body}")
+        total_matched += len(matched)
+        click.echo(f"\n  {label}:")
+        for lrn in matched:
+            body = lrn.body if len(lrn.body) <= 88 else lrn.body[:85] + "..."
+            click.echo(f"    [{lrn.created_at.strftime('%Y-%m-%d')}] {lrn.category}: {body}")
 
-    if dry_run:
-        click.echo(f"\n  DRY RUN — {len(matched)} would be retired, nothing written.")
-        return
+        if not dry_run:
+            total_retired += store.deactivate_learnings(category=category, before=before)
+            click.echo(f"    → {len(store.get_active_learnings())} active learning(s) remain.")
 
-    n = store.deactivate_learnings(category=category, before=before)
-    remaining = len(store.get_active_learnings())
-    click.echo(f"\n  Retired {n}; {remaining} active learning(s) remain.")
+    if not total_matched:
+        click.echo("\n  Nothing matches — no learnings retired.")
+    elif dry_run:
+        click.echo(f"\n  DRY RUN — {total_matched} would be retired across "
+                   f"{len(books)} book(s), nothing written.")
+    else:
+        click.echo(f"\n  Retired {total_retired} across {len(books)} book(s).")
+
+
+def _current_learning_book() -> tuple[str, Store]:
+    cfg, store = _get_store()
+    return cfg.display_name, store
+
+
+def _all_learning_books() -> list[tuple[str, Store]]:
+    """Every book that distils learnings: each config/*.yaml fund, each paper book.
+
+    Both run the same learning pipeline against their own database, so a prune
+    that only reached the fund selected by FUND_CONFIG would silently leave the
+    other funds' lessons live in their prompts.
+    """
+    from fundmgr import paper
+    from fundmgr.config import CONFIG_DIR, load_config
+
+    books: list[tuple[str, Store]] = []
+    seen: set[Path] = set()
+
+    for path in sorted(CONFIG_DIR.glob("config*.yaml")):
+        try:
+            cfg = load_config(path)
+        except Exception as exc:
+            click.echo(f"  ⚠ skipping {path.name}: {exc}")
+            continue
+        if cfg.db_path in seen or not cfg.db_path.exists():
+            continue
+        seen.add(cfg.db_path)
+        books.append((f"{cfg.display_name} [{path.name}]", Store(cfg.db_path)))
+
+    for meta in paper.list_portfolios():
+        try:
+            _, store = paper.open_portfolio(meta["slug"])
+        except Exception as exc:
+            click.echo(f"  ⚠ skipping paper book {meta['slug']}: {exc}")
+            continue
+        books.append((f"{meta['name']} [paper/{meta['slug']}]", store))
+
+    return books
 
 
 @cli.command("reject-rates")

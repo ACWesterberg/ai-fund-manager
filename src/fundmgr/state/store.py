@@ -648,6 +648,45 @@ class Store:
                 count += 1
         return count
 
+    def score_by_regime(self, key: str) -> list[dict]:
+        """Mean score of scored runs, grouped by one regime key from the snapshot.
+
+        The A/B readout for the two channels that silently shape every prompt:
+        `guidance_hash` (MIPRO's compiled instructions) and `learnings_hash`
+        (the lessons block). Runs where the key was absent group under None —
+        that is the unguided arm, and it is the comparison that matters.
+
+        Descriptive only: weekly runs are few and self-selected in time, so
+        treat a difference here as a prompt to look, not as an effect.
+        """
+        import json as _json
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT prompt_snapshot, score FROM recommendations WHERE score IS NOT NULL"
+            ).fetchall()
+
+        buckets: dict[object, list[float]] = {}
+        for r in rows:
+            try:
+                regime = _json.loads(r["prompt_snapshot"]).get("regime") or {}
+            except Exception:
+                regime = {}
+            buckets.setdefault(regime.get(key), []).append(float(r["score"]))
+
+        return sorted(
+            (
+                {
+                    "value": value,
+                    "runs": len(scores),
+                    "mean_score": sum(scores) / len(scores),
+                }
+                for value, scores in buckets.items()
+            ),
+            key=lambda b: b["mean_score"],
+            reverse=True,
+        )
+
     def get_rejection_stats(self) -> dict:
         """Aggregate the two rates the Refine gate depends on, across all runs:
 

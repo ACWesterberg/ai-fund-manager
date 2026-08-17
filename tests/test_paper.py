@@ -1228,3 +1228,69 @@ def test_every_cli_command_gets_the_environment(monkeypatch, tmp_path):
     # Any subcommand will do; paper-list touches no config and no network.
     CliRunner().invoke(cli, ["paper-list"])
     assert os.environ.get("OPENAI_API_KEY") == "sk-from-dotenv"
+
+
+# ── prune-learnings across books ──────────────────────────────────────────────
+
+def _seed_learning(store, body, category="qualitative"):
+    from fundmgr.state.models import Learning
+    store.save_learning(Learning(category=category, body=body,
+                                 created_at=datetime(2026, 8, 17, 10, 0, tzinfo=timezone.utc)))
+
+
+def _invoke_prune(*args):
+    from click.testing import CliRunner
+
+    from fundmgr.cli import cli
+    return CliRunner().invoke(cli, ["prune-learnings", *args])
+
+
+def test_prune_touches_only_the_selected_book_by_default(paper_dir, mock_market, monkeypatch, tmp_path):
+    """Learnings are per-book — a default prune must not reach across funds."""
+    slug_a, _ = paper.create_portfolio("Book A", 100_000, "AAPL 100%")
+    slug_b, _ = paper.create_portfolio("Book B", 100_000, "MSFT 100%")
+    _, store_a = paper.open_portfolio(slug_a)
+    _, store_b = paper.open_portfolio(slug_b)
+    _seed_learning(store_a, "A lesson.")
+    _seed_learning(store_b, "B lesson.")
+
+    # The "current" fund is a separate db entirely; neither book is in scope.
+    from fundmgr.config import AppConfig
+    cfg = AppConfig()
+    cfg.db_path = tmp_path / "fund.db"
+    monkeypatch.setattr("fundmgr.cli.load_config", lambda *a, **k: cfg)
+
+    assert _invoke_prune("--category", "qualitative").exit_code == 0
+    assert len(store_a.get_active_learnings()) == 1
+    assert len(store_b.get_active_learnings()) == 1
+
+
+def test_prune_all_books_reaches_every_paper_portfolio(paper_dir, mock_market, monkeypatch, tmp_path):
+    slug_a, _ = paper.create_portfolio("Book A", 100_000, "AAPL 100%")
+    slug_b, _ = paper.create_portfolio("Book B", 100_000, "MSFT 100%")
+    _, store_a = paper.open_portfolio(slug_a)
+    _, store_b = paper.open_portfolio(slug_b)
+    _seed_learning(store_a, "A lesson.")
+    _seed_learning(store_b, "B lesson.")
+    _seed_learning(store_b, "B calibration.", category="calibration")
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path / "no-configs")
+
+    result = _invoke_prune("--category", "qualitative", "--all-books")
+    assert result.exit_code == 0, result.output
+    assert store_a.get_active_learnings() == []
+    # Only the qualitative lesson went; the calibration one is untouched.
+    assert [lrn.category for lrn in store_b.get_active_learnings()] == ["calibration"]
+
+
+def test_prune_all_books_dry_run_writes_nothing(paper_dir, mock_market, monkeypatch, tmp_path):
+    slug, _ = paper.create_portfolio("Book A", 100_000, "AAPL 100%")
+    _, store = paper.open_portfolio(slug)
+    _seed_learning(store, "A lesson.")
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path / "no-configs")
+
+    result = _invoke_prune("--all-books", "--dry-run")
+    assert result.exit_code == 0, result.output
+    assert "DRY RUN" in result.output
+    assert len(store.get_active_learnings()) == 1

@@ -144,14 +144,45 @@ def select_prompt_learnings(
     return sorted(learnings, key=rank)[:limit]
 
 
+def learnings_fingerprint(learnings_block: str) -> str | None:
+    """Short hash of the lessons block as injected, or None when none were.
+
+    Recorded in each run's snapshot regime, mirroring `guidance_fingerprint`, so
+    scored runs can be sliced by which lessons the model was actually carrying.
+    Learnings go into every prompt, so without this there is no way to tell
+    whether the channel helps, hurts, or does nothing — and a pipeline that
+    feeds its own output back into its next decision is exactly the one you
+    want a measurement on.
+
+    Hashes the rendered block rather than the row ids: it is what the model saw,
+    so an edited body or a changed cut both register as a new regime.
+    """
+    block = (learnings_block or "").strip()
+    if not block:
+        return None
+    import hashlib
+    return hashlib.sha256(block.encode()).hexdigest()[:12]
+
+
+_LESSON_LINE_PREFIX = "  ["
+
+
 def _learnings_block(learnings: list[Learning]) -> str:
     selected = select_prompt_learnings(learnings)
     if not selected:
         return ""
     lines = ["## Past Performance Reflections", "These are lessons distilled from your prior decisions. Factor them in."]
     for lrn in selected:
-        lines.append(f"  [{lrn.category.upper()}] {lrn.body}")
+        lines.append(f"{_LESSON_LINE_PREFIX}{lrn.category.upper()}] {lrn.body}")
     return "\n".join(lines)
+
+
+def learnings_count(learnings_block: str) -> int:
+    """How many lessons a rendered block carries, counted the way it was written."""
+    return sum(
+        1 for line in (learnings_block or "").split("\n")
+        if line.startswith(_LESSON_LINE_PREFIX)
+    )
 
 
 _CANDIDATE_LIMIT = 75  # non-held tickers shown to LLM per run
@@ -365,6 +396,7 @@ def snapshot_to_dict(
     }
     if cfg is not None:
         from fundmgr.engine.optimizer import guidance_fingerprint
+        learnings_block = (fields or {}).get("learnings", "")
         out["regime"] = {
             "capital_sek":  cfg.capital_sek,
             "provider":     cfg.llm.provider,
@@ -373,5 +405,8 @@ def snapshot_to_dict(
             "session":      None,  # nullable shared key (swing-trader sets us/european)
             "config_hash":  cfg.config_hash(),
             "guidance_hash": guidance_fingerprint(cfg),  # None when no MIPRO guidance active
+            # None when the run carried no lessons — the unguided arm of the A/B
+            "learnings_hash": learnings_fingerprint(learnings_block),
+            "learnings_n":    learnings_count(learnings_block),
         }
     return json.dumps(out)

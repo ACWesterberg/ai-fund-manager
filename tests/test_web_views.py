@@ -7,6 +7,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from fundmgr.config import AppConfig
 from fundmgr.engine.optimizer import guidance_path, guidance_versions
+from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT
 from fundmgr.state.models import Learning
 from fundmgr.state.store import Store
 from fundmgr.web.views import learnings_context, prompt_context
@@ -31,9 +32,9 @@ def store(cfg):
     return Store(cfg.db_path)
 
 
-def _learning(store, category, body, run_ids=()):
+def _learning(store, category, body, run_ids=(), created=datetime(2026, 6, 1)):
     store.save_learning(Learning(category=category, body=body, run_ids=list(run_ids),
-                                 created_at=datetime(2026, 6, 1)))
+                                 created_at=created))
 
 
 def _write_guidance(cfg, text, archived=False, stamp="20260601_020000"):
@@ -66,6 +67,32 @@ def test_learnings_context_groups_by_category(cfg, store):
 def test_learnings_context_empty(cfg, store):
     ctx = learnings_context(cfg, store)
     assert ctx["total"] == 0 and ctx["by_category"] == {}
+    assert ctx["injected"] == 0
+
+
+def test_learnings_context_marks_only_the_injected_slice(cfg, store):
+    # One batch of anecdotes, larger than the prompt cap, all newer than the
+    # calibration lesson — the shape that used to push calibration out entirely.
+    _learning(store, "calibration", "High-conf buys hit 40%.", created=datetime(2026, 8, 17, 9))
+    for i in range(PROMPT_LEARNING_LIMIT + 4):
+        _learning(store, "qualitative", f"Anecdote {i}.", run_ids=["r1"],
+                  created=datetime(2026, 8, 17, 10, i))
+
+    ctx = learnings_context(cfg, store)
+    assert ctx["total"] == PROMPT_LEARNING_LIMIT + 5
+    assert ctx["injected"] == PROMPT_LEARNING_LIMIT
+    # The calibration lesson is injected despite being the oldest of the batch.
+    assert ctx["by_category"]["calibration"][0]["injected"] is True
+    injected_qual = [q for q in ctx["by_category"]["qualitative"] if q["injected"]]
+    assert len(injected_qual) == PROMPT_LEARNING_LIMIT - 1
+
+
+def test_learnings_page_does_not_claim_uninjected_lessons_reach_the_prompt(cfg, store):
+    for i in range(PROMPT_LEARNING_LIMIT + 2):
+        _learning(store, "qualitative", f"Anecdote {i}.", created=datetime(2026, 8, 17, 10, i))
+    html = _jinja.get_template("learnings.html").render(**learnings_context(cfg, store))
+    assert "not injected" in html
+    assert "All of them are injected" not in html
 
 
 def test_learnings_are_per_fund(tmp_path):

@@ -907,8 +907,54 @@ class Store:
 
     def deactivate_all_learnings(self) -> int:
         """Deactivate every active learning (used after repairing corrupted outcome data)."""
+        return self.deactivate_learnings()
+
+    @staticmethod
+    def _learning_filter(category: str | None, before: str | None) -> tuple[str, list]:
+        clauses, params = ["is_active = 1"], []
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if before:
+            # created_at is stored as an ISO timestamp, so a bare date compares
+            # correctly as a prefix: everything on `before` itself sorts after it.
+            clauses.append("created_at < ?")
+            params.append(before)
+        return " AND ".join(clauses), params
+
+    def find_active_learnings(
+        self, category: str | None = None, before: str | None = None
+    ) -> list["Learning"]:
+        """Active learnings matching the filter — the preview for a prune."""
+        import json as _json
+        from fundmgr.state.models import Learning as L
+        where, params = self._learning_filter(category, before)
         with self._conn() as conn:
-            cur = conn.execute("UPDATE learnings SET is_active = 0 WHERE is_active = 1")
+            rows = conn.execute(
+                f"SELECT * FROM learnings WHERE {where} ORDER BY created_at DESC", params
+            ).fetchall()
+        return [
+            L(
+                id=r["id"],
+                category=r["category"],
+                body=r["body"],
+                run_ids=_json.loads(r["run_ids"] or "[]"),
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    def deactivate_learnings(
+        self, category: str | None = None, before: str | None = None
+    ) -> int:
+        """Deactivate active learnings matching the filter. Returns rows affected.
+
+        Retires rather than deletes: a lesson that shaped past decisions stays
+        in the table so the run it influenced can still be reconstructed.
+        """
+        where, params = self._learning_filter(category, before)
+        with self._conn() as conn:
+            cur = conn.execute(f"UPDATE learnings SET is_active = 0 WHERE {where}", params)
             return cur.rowcount
 
     def get_calibration_stats(self) -> dict:

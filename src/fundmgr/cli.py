@@ -233,7 +233,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     evaluated = evaluate_pending_outcomes(store)
     if evaluated:
         stat_learnings = generate_learnings(store)
-        qual_learnings = generate_qualitative_learnings(store, evaluated)
+        qual_learnings = generate_qualitative_learnings(
+            store, evaluated, benchmark_label=cfg.benchmark
+        )
         total_learnings = len(stat_learnings) + len(qual_learnings)
         click.echo(
             f"\n[*] Evaluated {len(evaluated)} past decisions; "
@@ -1519,6 +1521,44 @@ def repair_outcomes_cmd(dry_run: bool, deactivate_learnings: bool):
     elif stats["price_fixed"] or stats["recomputed"]:
         click.echo("\n  ⚠ Existing learnings were distilled from the corrupted returns —")
         click.echo("    consider re-running with --deactivate-learnings.")
+
+
+@cli.command("prune-learnings")
+@click.option("--category", default=None, metavar="NAME",
+              help="Only this category (e.g. 'qualitative').")
+@click.option("--before", default=None, metavar="YYYY-MM-DD",
+              help="Only lessons created before this date.")
+@click.option("--dry-run", is_flag=True, help="Show what would be retired, write nothing.")
+def prune_learnings_cmd(category: str | None, before: str | None, dry_run: bool):
+    """Retire active learnings so they stop being injected into the prompt.
+
+    For clearing out a batch that turned out to be noise — e.g. the per-trade
+    lessons written before batch distillation, which explained a whole run's
+    outcomes by the one macro line every trade in that run shared. Rows are
+    deactivated, not deleted, so past runs remain reconstructible.
+    """
+    cfg, store = _get_store()
+    matched = store.find_active_learnings(category=category, before=before)
+
+    scope = category or "all categories"
+    window = f" created before {before}" if before else ""
+    click.echo(f"\n─── Prune learnings ({scope}{window}) ───────────────")
+
+    if not matched:
+        click.echo("  Nothing matches — no learnings retired.")
+        return
+
+    for lrn in matched:
+        body = lrn.body if len(lrn.body) <= 96 else lrn.body[:93] + "..."
+        click.echo(f"  [{lrn.created_at.strftime('%Y-%m-%d')}] {lrn.category}: {body}")
+
+    if dry_run:
+        click.echo(f"\n  DRY RUN — {len(matched)} would be retired, nothing written.")
+        return
+
+    n = store.deactivate_learnings(category=category, before=before)
+    remaining = len(store.get_active_learnings())
+    click.echo(f"\n  Retired {n}; {remaining} active learning(s) remain.")
 
 
 @cli.command("reject-rates")

@@ -346,3 +346,58 @@ def test_snapshot_regime_records_guidance_hash(cfg, store):
     _write_guidance(cfg, "Prefer momentum entries.")
     guided = json.loads(snapshot_to_dict(snap, "sys", "user", {}, cfg))
     assert guided["regime"]["guidance_hash"] == guidance_fingerprint(cfg)
+
+
+# ── Prompt learning selection ─────────────────────────────────────────────────
+
+def _l(category, body, run_ids=(), created="2026-08-17T10:00:00"):
+    from fundmgr.state.models import Learning
+    return Learning(category=category, body=body, run_ids=list(run_ids),
+                    created_at=datetime.fromisoformat(created))
+
+
+def test_calibration_survives_a_flood_of_newer_anecdotes():
+    """generate_learnings runs first, so calibration always carries the older
+    timestamp — recency ranking dropped the only aggregate-derived lesson."""
+    from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT, select_prompt_learnings
+
+    calib = _l("calibration", "Hit rate 40% over 5.", created="2026-08-17T09:00:00")
+    anecdotes = [
+        _l("qualitative", f"Anecdote {i}.", run_ids=["r1"],
+           created=f"2026-08-17T10:{i:02d}:00")
+        for i in range(PROMPT_LEARNING_LIMIT + 4)
+    ]
+
+    selected = select_prompt_learnings([*anecdotes, calib])
+    assert len(selected) == PROMPT_LEARNING_LIMIT
+    assert selected[0] is calib
+
+
+def test_repeated_lessons_outrank_one_off_anecdotes():
+    from fundmgr.engine.prompt import select_prompt_learnings
+
+    once = _l("qualitative", "Seen once.", run_ids=["r1"], created="2026-08-17T12:00:00")
+    thrice = _l("qualitative", "Seen thrice.", run_ids=["r1", "r2", "r3"],
+                created="2026-06-01T12:00:00")
+
+    assert select_prompt_learnings([once, thrice], limit=1) == [thrice]
+
+
+def test_selection_is_recency_ordered_within_a_tier():
+    from fundmgr.engine.prompt import select_prompt_learnings
+
+    older = _l("qualitative", "Older.", run_ids=["r1"], created="2026-06-01T12:00:00")
+    newer = _l("qualitative", "Newer.", run_ids=["r2"], created="2026-08-17T12:00:00")
+
+    assert select_prompt_learnings([older, newer]) == [newer, older]
+
+
+def test_learnings_block_renders_only_the_selection():
+    from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT, _learnings_block
+
+    block = _learnings_block([
+        _l("qualitative", f"Anecdote {i}.", created=f"2026-08-17T10:{i:02d}:00")
+        for i in range(PROMPT_LEARNING_LIMIT + 3)
+    ])
+    assert block.count("[QUALITATIVE]") == PROMPT_LEARNING_LIMIT
+    assert _learnings_block([]) == ""

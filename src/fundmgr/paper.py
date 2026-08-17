@@ -1417,7 +1417,9 @@ def track_portfolio(slug: str) -> list[str]:
     evaluated = evaluate_pending_outcomes(store)
     if evaluated:
         stat = generate_learnings(store)
-        qual = generate_qualitative_learnings(store, evaluated)
+        qual = generate_qualitative_learnings(
+            store, evaluated, benchmark_label=meta.get("benchmark")
+        )
         log.append(f"Evaluated {len(evaluated)} outcomes → "
                    f"{len(stat)} calibration + {len(qual)} qualitative learnings")
     return log

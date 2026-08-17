@@ -98,3 +98,40 @@ def test_total_fees(store):
         price_sek=200.0, fee_sek=1.0, source="fill", timestamp=datetime.utcnow()
     ))
     assert store.total_fees_paid() == pytest.approx(4.0)
+
+
+# ── Learnings retention ───────────────────────────────────────────────────────
+
+def _lrn(store, category, body, created):
+    from fundmgr.state.models import Learning
+    store.save_learning(Learning(category=category, body=body,
+                                 created_at=datetime.fromisoformat(created)))
+
+
+def test_prune_learnings_by_category(store):
+    _lrn(store, "qualitative", "Anecdote.", "2026-08-17T10:00:00")
+    _lrn(store, "calibration", "Hit rate 40%.", "2026-08-17T09:00:00")
+
+    assert len(store.find_active_learnings(category="qualitative")) == 1
+    assert store.deactivate_learnings(category="qualitative") == 1
+
+    remaining = store.get_active_learnings()
+    assert [lrn.category for lrn in remaining] == ["calibration"]
+
+
+def test_prune_learnings_before_date(store):
+    _lrn(store, "qualitative", "Old.", "2026-08-10T10:00:00")
+    _lrn(store, "qualitative", "New.", "2026-08-17T10:00:00")
+
+    # A bare date compares as an ISO prefix: 08-17 itself is not "before 08-17".
+    assert store.deactivate_learnings(before="2026-08-17") == 1
+    assert [lrn.body for lrn in store.get_active_learnings()] == ["New."]
+
+
+def test_prune_learnings_retires_rather_than_deletes(store):
+    _lrn(store, "qualitative", "Anecdote.", "2026-08-17T10:00:00")
+    store.deactivate_learnings()
+    assert store.get_active_learnings() == []
+    # Still on disk, just inactive — past runs stay reconstructible.
+    with store._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM learnings").fetchone()[0] == 1

@@ -115,12 +115,42 @@ def _risk_limits_block(
     return "\n".join(lines)
 
 
+PROMPT_LEARNING_LIMIT = 8  # lessons injected per run — keeps the prompt tight
+
+
+def select_prompt_learnings(
+    learnings: list[Learning], limit: int = PROMPT_LEARNING_LIMIT
+) -> list[Learning]:
+    """The lessons that actually reach the model, in the order they are shown.
+
+    Ranked by strength of evidence rather than recency. Calibration lessons
+    lead: they are computed from hit rates over many decisions, so a batch of
+    single-trade anecdotes must not be able to displace them — which is exactly
+    what a plain `created_at DESC` cut did, since `generate_learnings` runs
+    before `generate_qualitative_learnings` and so always stamps the older
+    timestamp of the pair. Within a tier, a lesson backed by more runs outranks
+    one backed by fewer, and recency only breaks the remaining ties.
+
+    The web view renders the same selection, so the page and the prompt can
+    never disagree about which lessons are live.
+    """
+    def rank(lrn: Learning) -> tuple:
+        return (
+            0 if lrn.category == "calibration" else 1,
+            -len(lrn.run_ids),
+            -lrn.created_at.timestamp(),
+        )
+
+    return sorted(learnings, key=rank)[:limit]
+
+
 def _learnings_block(learnings: list[Learning]) -> str:
-    if not learnings:
+    selected = select_prompt_learnings(learnings)
+    if not selected:
         return ""
     lines = ["## Past Performance Reflections", "These are lessons distilled from your prior decisions. Factor them in."]
-    for l in learnings[:8]:  # cap at 8 to keep prompt tight
-        lines.append(f"  [{l.category.upper()}] {l.body}")
+    for lrn in selected:
+        lines.append(f"  [{lrn.category.upper()}] {lrn.body}")
     return "\n".join(lines)
 
 
@@ -278,7 +308,7 @@ def build_prompt(
         "",
     ]
 
-    if learnings:
+    if learnings_block:
         sections.append(learnings_block)
         sections.append("")
 

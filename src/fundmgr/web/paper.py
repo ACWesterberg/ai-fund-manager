@@ -1004,20 +1004,16 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             meta, store = paper.open_portfolio(slug)
         except KeyError:
             return _not_found()
-        learnings = store.get_active_learnings()
-        by_category: dict[str, list[dict]] = {}
-        for lrn in learnings:
-            by_category.setdefault(lrn.category, []).append({
-                "body": lrn.body,
-                "created": lrn.created_at.strftime("%Y-%m-%d"),
-                "run_count": len(lrn.run_ids),
-            })
+        # Shared builder, not a local copy — a portfolio's page must report the
+        # same injected/retained split as the funds' (this route had drifted).
+        from fundmgr.config import AppConfig
+        from fundmgr.web.views import learnings_context
+
+        cfg = AppConfig()
+        cfg.name = meta["name"]
         return _render("learnings.html", {
             "request": request,
-            "total": len(learnings),
-            "by_category": by_category,
-            "categories": sorted(by_category.keys()),
-            "active_page": "learnings",
+            **learnings_context(cfg, store),
             **_base_ctx(meta),
         })
 

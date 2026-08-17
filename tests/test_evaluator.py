@@ -3,8 +3,13 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from fundmgr.engine.evaluator import evaluate_pending_outcomes
-from fundmgr.state.models import RecommendationLog
+from fundmgr.engine.evaluator import (
+    _batch_review_message,
+    evaluate_pending_outcomes,
+    generate_qualitative_learnings,
+    parse_batch_lessons,
+)
+from fundmgr.state.models import DecisionOutcome, RecommendationLog
 from fundmgr.state.store import Store
 
 
@@ -68,6 +73,76 @@ def test_evaluation_pinned_to_fixed_horizon(store):
     assert o.position_return_pct == pytest.approx(10.0)           # 110 / 100 - 1
     assert o.benchmark_return_pct == pytest.approx(3.0)           # 1030 / 1000 within window
     assert o.outperformed is True
+
+
+def _outcome(ticker, run_id="r1", ret=5.0, bench=1.0, conf=0.6, action="buy"):
+    return DecisionOutcome(
+        run_id=run_id, ticker=ticker, action=action, confidence=conf,
+        position_return_pct=ret, benchmark_return_pct=bench,
+        outperformed=ret > bench, thesis="t",
+    )
+
+
+# ── batch distillation ────────────────────────────────────────────────────────
+
+def test_batch_lesson_needs_more_than_one_ticker():
+    """A lesson resting on a single 28-day return is the failure mode, not a lesson."""
+    outcomes = [_outcome("AAA.ST"), _outcome("BBB.ST"), _outcome("CCC.ST")]
+    content = json.dumps({"lessons": [
+        {"body": "Only AAA moved on the thesis.", "tickers": ["AAA.ST"]},
+        {"body": "Both tanker names tracked freight rates.", "tickers": ["AAA.ST", "BBB.ST"]},
+    ]})
+    kept = parse_batch_lessons(content, outcomes, max_lessons=3)
+    assert [b for b, _ in kept] == ["Both tanker names tracked freight rates."]
+    assert kept[0][1] == {"AAA.ST", "BBB.ST"}
+
+
+def test_batch_lessons_drop_tickers_outside_the_batch():
+    outcomes = [_outcome("AAA.ST"), _outcome("BBB.ST")]
+    content = json.dumps({"lessons": [
+        # Only one of the two cited tickers was actually in this batch.
+        {"body": "Hallucinated support.", "tickers": ["AAA.ST", "ZZZ.ST"]},
+    ]})
+    assert parse_batch_lessons(content, outcomes, max_lessons=3) == []
+
+
+def test_batch_lessons_accept_empty_and_malformed():
+    outcomes = [_outcome("AAA.ST"), _outcome("BBB.ST")]
+    assert parse_batch_lessons(json.dumps({"lessons": []}), outcomes, 3) == []
+    assert parse_batch_lessons("not json", outcomes, 3) == []
+    assert parse_batch_lessons(json.dumps({}), outcomes, 3) == []
+
+
+def test_batch_lessons_respect_max():
+    outcomes = [_outcome(t) for t in ("AAA.ST", "BBB.ST", "CCC.ST")]
+    pair = ["AAA.ST", "BBB.ST"]
+    content = json.dumps({"lessons": [{"body": f"L{i}", "tickers": pair} for i in range(5)]})
+    assert len(parse_batch_lessons(content, outcomes, max_lessons=2)) == 2
+
+
+def test_batch_review_message_uses_the_funds_own_benchmark():
+    by_run = {"r1": [_outcome("AAA.ST", ret=8.0, bench=2.0)]}
+    msg = _batch_review_message(by_run, {"r1": "oil up"}, "URTH", max_lessons=3)
+    assert "URTH" in msg and "OMXSPI" not in msg
+    # The shared-macro trap is stated where the model will read it.
+    assert "SHARED" in msg
+    assert "alpha +6.0pp" in msg
+
+
+def test_batch_review_message_reports_dispersion():
+    by_run = {"r1": [
+        _outcome("AAA.ST", ret=8.0, bench=2.0),   # +6pp
+        _outcome("BBB.ST", ret=-4.0, bench=2.0),  # -6pp
+    ]}
+    msg = _batch_review_message(by_run, {"r1": ""}, "^OMXSPI", max_lessons=3)
+    assert "2 trades, 1 beat" in msg
+    assert "mean alpha +0.0pp" in msg and "spread 12.0pp" in msg
+
+
+def test_generate_qualitative_learnings_without_api_key(store, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert generate_qualitative_learnings(store, [_outcome("AAA.ST")]) == []
+    assert generate_qualitative_learnings(store, []) == []
 
 
 def test_evaluation_skips_outcome_without_decision_price(store):

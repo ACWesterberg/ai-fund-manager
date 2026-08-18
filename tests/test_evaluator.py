@@ -1,14 +1,17 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from fundmgr.config import AppConfig, default_heavy_model
 from fundmgr.engine.evaluator import (
     _batch_review_message,
+    calibration_body,
     evaluate_pending_outcomes,
+    generate_learnings,
     generate_qualitative_learnings,
     surviving_lessons,
+    wilson_interval,
 )
 from fundmgr.engine.schema import BatchLessons
 from fundmgr.state.models import DecisionOutcome, RecommendationLog
@@ -189,3 +192,129 @@ def test_evaluation_skips_outcome_without_decision_price(store):
         prices=None,  # unknown price → NULL → skipped, no network call
     )
     assert evaluate_pending_outcomes(store, lookback_days=28) == []
+
+
+# ── Calibration lesson ────────────────────────────────────────────────────────
+
+def _stats(**buckets) -> dict:
+    """buckets: bucket=(hits, n)"""
+    return {
+        b: {"n": n, "hits": hits, "hit_rate": hits / n if n else None}
+        for b, (hits, n) in buckets.items()
+    }
+
+
+def test_wilson_interval_is_wide_at_small_n():
+    """2-of-5 cannot distinguish a bad strategy from a good one."""
+    lo, hi = wilson_interval(2, 5)
+    assert lo < 0.15 and hi > 0.75
+    # The same rate over 100 decisions is a real finding.
+    lo, hi = wilson_interval(40, 100)
+    assert lo > 0.30 and hi < 0.51
+
+
+def test_wilson_interval_stays_inside_zero_one():
+    assert wilson_interval(0, 5)[0] == 0.0
+    assert wilson_interval(5, 5)[1] == 1.0
+    assert wilson_interval(0, 0) == (0.0, 1.0)
+
+
+def test_no_calibration_lesson_below_the_sample_bar():
+    """The old text made a directive claim off 5 decisions."""
+    assert calibration_body(_stats(high=(2, 5), low=(3, 6))) is None
+
+
+def test_calibration_body_reports_intervals_not_a_breakeven_claim():
+    body = calibration_body(_stats(high=(11, 25), low=(14, 25)))
+    assert "95% CI" in body and "n=25" in body
+    # No invented threshold, and no advice that the statistic cannot support.
+    assert "breakeven" not in body.lower()
+    assert "stop-loss" not in body.lower() and "stop loss" not in body.lower()
+    # States what a hit rate cannot tell you.
+    assert "not by how much" in body
+
+
+def test_calibration_reports_every_qualifying_band():
+    """The old chain was silent for the medium band and for whole ranges of the others."""
+    body = calibration_body(_stats(high=(12, 25), medium=(13, 25), low=(11, 25)))
+    for label in ("high (>=0.7)", "medium (0.4-0.7)", "low (<0.4)"):
+        assert label in body
+
+
+def test_calibration_verdict_calls_overlap_inconclusive():
+    body = calibration_body(_stats(high=(12, 25), low=(13, 25)))
+    assert "intervals overlap" in body
+    assert "not yet separating" in body
+
+
+def test_calibration_verdict_detects_informative_conviction():
+    body = calibration_body(_stats(high=(24, 25), low=(3, 25)))
+    assert "carrying real information" in body
+
+
+def test_calibration_verdict_detects_inverted_conviction():
+    body = calibration_body(_stats(high=(3, 25), low=(24, 25)))
+    assert "inverted" in body
+
+
+def test_calibration_single_band_makes_no_comparison_claim():
+    body = calibration_body(_stats(high=(12, 25), low=(2, 4)))
+    assert "Too few decisions in the other conviction bands" in body
+    assert "n=4" not in body  # the under-powered band is not reported at all
+
+
+def _seed_buys(store, run_id, rows):
+    """rows: (confidence, outperformed)"""
+    import sqlite3
+    with store._conn() as conn:
+        for i, (conf, won) in enumerate(rows):
+            conn.execute(
+                "INSERT INTO decision_outcomes (run_id, ticker, action, confidence, "
+                "outperformed, source) VALUES (?, ?, 'buy', ?, ?, 'run')",
+                (run_id, f"T{i}.ST", conf, 1 if won else 0),
+            )
+
+
+def test_two_qualifying_bands_no_longer_delete_each_other(store):
+    """Both bands keyed supersede on category='calibration' — the second killed the first."""
+    _seed_buys(store, "r1", [(0.8, i % 2 == 0) for i in range(25)]
+                          + [(0.2, i % 2 == 0) for i in range(25)])
+
+    created = generate_learnings(store)
+    assert len(created) == 1
+    active = store.get_active_learnings()
+    assert len(active) == 1
+    # One lesson carrying both readings, rather than one band silently lost.
+    assert "high (>=0.7)" in active[0].body and "low (<0.4)" in active[0].body
+
+
+def test_calibration_refresh_supersedes_the_previous_reading(store):
+    _seed_buys(store, "r1", [(0.8, i % 2 == 0) for i in range(25)])
+    first = generate_learnings(store)
+    assert len(first) == 1
+
+    # Same data again — the reading has not changed, so nothing is rewritten.
+    assert generate_learnings(store) == []
+    assert len(store.get_active_learnings()) == 1
+
+    # New outcomes shift the rate: one active lesson, the old one superseded.
+    _seed_buys(store, "r2", [(0.8, True) for _ in range(25)])
+    second = generate_learnings(store)
+    assert len(second) == 1
+    assert len(store.get_active_learnings()) == 1
+    assert store.get_active_learnings()[0].body == second[0].body
+
+
+def test_unsupported_calibration_claim_is_retired(store):
+    """A standing claim is in every prompt — it must not outlive its evidence."""
+    from fundmgr.state.models import Learning
+
+    store.save_learning(Learning(
+        category="calibration",
+        body="Your high-confidence buys have a 40% hit rate over 5 decisions.",
+        created_at=datetime(2026, 8, 17, tzinfo=timezone.utc),
+    ))
+    _seed_buys(store, "r1", [(0.8, True), (0.8, False)])  # nowhere near the bar
+
+    assert generate_learnings(store) == []
+    assert store.get_active_learnings() == []

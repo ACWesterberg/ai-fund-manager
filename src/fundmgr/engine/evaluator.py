@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -374,59 +375,134 @@ def surviving_lessons(
     return kept[:max_lessons]
 
 
-def generate_learnings(store: Store, min_sample: int = 5) -> list[Learning]:
+CALIBRATION_MIN_SAMPLE = 20  # evaluated buys in a bucket before its rate is reported
+
+_BUCKET_LABELS = {
+    "high":   "high (>=0.7)",
+    "medium": "medium (0.4-0.7)",
+    "low":    "low (<0.4)",
+}
+
+
+def wilson_interval(hits: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for a hit rate.
+
+    Wilson rather than the normal approximation because these samples are small
+    and the rates sit near the ends, where the naive interval runs past 0 and 1
+    and badly understates how little a dozen trades tell you.
     """
-    Generate statistical calibration learnings from hit-rate data and save them.
-    Returns newly created Learning objects.
+    if n <= 0:
+        return (0.0, 1.0)
+    p = hits / n
+    denom = 1 + z**2 / n
+    centre = (p + z**2 / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / denom
+    return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def _calibration_verdict(bands: dict[str, tuple[float, float]]) -> str:
+    """What the intervals licence saying about conviction — and nothing more.
+
+    Only a non-overlap between the high and low bands says anything at this
+    sample size. Everything else is "not yet distinguishable", which is a
+    finding worth stating: it stops the model reading its own confidence
+    number as evidence.
     """
-    stats = store.get_calibration_stats()
-    new_learnings: list[Learning] = []
-
-    for bucket, data in stats.items():
-        if data["n"] < min_sample or data["hit_rate"] is None:
-            continue
-
-        hit_rate = data["hit_rate"]
-        n = data["n"]
-
-        if bucket == "high" and hit_rate < 0.5:
-            body = (
-                f"Your high-confidence buy calls (≥0.7 conviction) have a {hit_rate:.0%} hit rate "
-                f"over {n} decisions — below the 50% breakeven threshold. "
-                "Consider widening stop-losses or reducing position sizing on high-confidence calls."
-            )
-            category = "calibration"
-        elif bucket == "high" and hit_rate >= 0.65:
-            body = (
-                f"Your high-confidence buy calls (≥0.7 conviction) have a strong {hit_rate:.0%} hit rate "
-                f"over {n} decisions. Continue sizing up on high-conviction ideas."
-            )
-            category = "calibration"
-        elif bucket == "low" and hit_rate > 0.5:
-            body = (
-                f"Your low-confidence buy calls (<0.4 conviction) are actually performing well "
-                f"({hit_rate:.0%} hit rate over {n} decisions). "
-                "You may be undersizing these — consider bumping conviction thresholds."
-            )
-            category = "calibration"
-        else:
-            continue
-
-        existing = [l for l in store.get_active_learnings() if l.category == category]
-
-        learning = Learning(
-            category=category,
-            body=body,
-            run_ids=[],
-            created_at=datetime.now(timezone.utc),
+    high, low = bands.get("high"), bands.get("low")
+    if not high or not low:
+        return (
+            "Too few decisions in the other conviction bands to compare them yet, so "
+            "this rate says nothing about whether your conviction is informative."
         )
-        new_id = store.save_learning(learning)
-        learning.id = new_id
+    if high[0] > low[1]:
+        return (
+            "High-conviction calls beat low-conviction ones with no overlap in their "
+            "intervals, so your stated conviction is carrying real information — it is "
+            "reasonable to let it drive sizing."
+        )
+    if high[1] < low[0]:
+        return (
+            "High-conviction calls do WORSE than low-conviction ones, with no overlap in "
+            "their intervals. Your stated conviction is inverted: treat a strong prior as "
+            "a reason to re-examine the thesis, not to size up."
+        )
+    return (
+        "The intervals overlap, so stated conviction is not yet separating winners from "
+        "losers. Set your confidence to reflect the evidence you actually have rather "
+        "than to justify a position, and do not let it drive sizing until it does."
+    )
 
-        for old in existing:
-            if old.id:
-                store.supersede_learning(old.id, new_id)
 
-        new_learnings.append(learning)
+def calibration_body(stats: dict, min_sample: int = CALIBRATION_MIN_SAMPLE) -> str | None:
+    """One calibration lesson from hit-rate stats, or None when nothing is supported.
 
-    return new_learnings
+    Reports every conviction band that clears `min_sample`, each with its
+    interval, and says only what the intervals licence. Deliberately makes no
+    claim about a "breakeven" hit rate: a hit rate is the share of calls that
+    beat the benchmark, and whether the strategy makes money depends on the size
+    of the wins against the losses, which this statistic does not measure.
+    """
+    reported, bands = [], {}
+    for bucket in ("high", "medium", "low"):
+        data = stats.get(bucket) or {}
+        n, hits = data.get("n", 0), data.get("hits")
+        if n < min_sample or hits is None:
+            continue
+        lo, hi = wilson_interval(hits, n)
+        bands[bucket] = (lo, hi)
+        reported.append(
+            f"{_BUCKET_LABELS[bucket]} {hits / n:.0%} [95% CI {lo:.0%}-{hi:.0%}, n={n}]"
+        )
+
+    if not reported:
+        return None
+
+    return (
+        "Calibration of your buy calls, measured as the share that beat the benchmark "
+        f"over 28 days: {'; '.join(reported)}. {_calibration_verdict(bands)} "
+        "Note this counts only how often you were right, not by how much — it cannot "
+        "tell you whether the book is profitable."
+    )
+
+
+def generate_learnings(
+    store: Store, min_sample: int = CALIBRATION_MIN_SAMPLE
+) -> list[Learning]:
+    """
+    Refresh the fund's single calibration lesson from its hit-rate stats.
+
+    One lesson covering every conviction band, not one per band. The per-band
+    version keyed its supersede on `category`, which was "calibration" for all
+    of them, so two bands qualifying in the same pass meant the second silently
+    deactivated the first — the fund could never hold a reading on more than one
+    band, and which one survived depended on dict order.
+
+    When the evidence no longer supports any claim, the standing lesson is
+    retired rather than left running: it is injected into every prompt, so an
+    unsupported claim left active keeps steering decisions.
+    """
+    body = calibration_body(store.get_calibration_stats(), min_sample=min_sample)
+
+    if body is None:
+        store.deactivate_learnings(category="calibration")
+        return []
+
+    existing = [
+        lrn for lrn in store.get_active_learnings() if lrn.category == "calibration"
+    ]
+    if any(lrn.body == body for lrn in existing):
+        return []  # unchanged reading — keep the original timestamp
+
+    learning = Learning(
+        category="calibration",
+        body=body,
+        run_ids=[],
+        created_at=datetime.now(timezone.utc),
+    )
+    learning.id = store.save_learning(learning)
+
+    for old in existing:
+        if old.id:
+            store.supersede_learning(old.id, learning.id)
+
+    return [learning]

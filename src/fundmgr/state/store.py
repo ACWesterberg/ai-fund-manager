@@ -1018,8 +1018,10 @@ class Store:
             bucket = "high" if c >= 0.7 else "medium" if c >= 0.4 else "low"
             buckets[bucket].append(r["outperformed"])
 
+        # `hits` rides along so callers can put an interval on the rate: a hit
+        # rate without its sample size reads as a fact at n=5.
         return {
-            k: {"n": len(v), "hit_rate": sum(v) / len(v) if v else None}
+            k: {"n": len(v), "hits": sum(v), "hit_rate": sum(v) / len(v) if v else None}
             for k, v in buckets.items()
         }
 

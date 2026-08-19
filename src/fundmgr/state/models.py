@@ -119,6 +119,10 @@ class DecisionOutcome:
     evaluation_date: str | None = None
     thesis: str | None = None
     decision_date: str | None = None  # run date (YYYY-MM-DD), from the recommendation timestamp
+    # Whether the claim made at entry came true, judged separately from whether
+    # the price obliged. None = not checked yet.
+    thesis_verdict: str | None = None      # held | broke | unresolved
+    thesis_evidence: str | None = None
     id: int | None = None
 
     @property

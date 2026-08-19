@@ -188,3 +188,36 @@ class BatchLessons(BaseModel):
             "than a plausible story."
         ),
     )
+
+
+class ThesisCheck(BaseModel):
+    """Whether one decision's stated thesis came true, judged on evidence."""
+    ticker: str = Field(description="The ticker this verdict is for")
+    verdict: Literal["held", "broke", "unresolved"] = Field(
+        description=(
+            "held = the specific claim in the thesis demonstrably came true; "
+            "broke = it demonstrably did not; "
+            "unresolved = the evidence available does not settle it. "
+            "unresolved is the correct answer whenever the claim is about something "
+            "the evidence below cannot show, and it is the most common answer."
+        ),
+    )
+    evidence: str = Field(
+        max_length=300,
+        description=(
+            "The specific evidence the verdict rests on — a headline, a reported "
+            "figure, a stated guidance change. For 'unresolved', say what would "
+            "have settled it. Never cite the share price move as evidence: that is "
+            "the outcome being explained, not evidence about the reasoning."
+        ),
+    )
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper(cls, v: str) -> str:
+        return v.upper()
+
+
+class ThesisChecks(BaseModel):
+    """Verdicts for a batch of matured decisions."""
+    checks: list[ThesisCheck] = Field(default_factory=list)

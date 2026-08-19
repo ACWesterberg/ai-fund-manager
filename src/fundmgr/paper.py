@@ -1414,8 +1414,14 @@ def track_portfolio(slug: str) -> list[str]:
         generate_learnings,
         generate_qualitative_learnings,
     )
+    from fundmgr.engine.thesis_check import verify_theses
     evaluated = evaluate_pending_outcomes(store)
     if evaluated:
+        verdicts = verify_theses(store, evaluated)
+        if verdicts:
+            log.append("Thesis check: " + ", ".join(
+                f"{n} {v}" for v, n in sorted(verdicts.items())
+            ))
         stat = generate_learnings(store)
         # A paper book has no fund config of its own: the lesson writer comes
         # from the default config, the book's own benchmark from its meta.

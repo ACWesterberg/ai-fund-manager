@@ -282,6 +282,10 @@ def _batch_review_message(
                     f"{bench_name} {o.benchmark_return_pct:+.1f}% | alpha {alpha:+.1f}pp"
                 )
             lines.append(f"    thesis: {o.thesis or '(not recorded)'}")
+            if o.thesis_verdict:
+                lines.append(
+                    f"    thesis {o.thesis_verdict.upper()}: {o.thesis_evidence or ''}"
+                )
         lines.append("")
 
     alphas = [a for a in (_alpha(o) for rl in by_run.values() for o in rl) if a is not None]
@@ -318,7 +322,13 @@ _BATCH_SYSTEM_PROMPT = (
     "factor to account for both a winner and a loser.\n"
     "4. A lesson must name a signal that was checkable before entry and specific enough to "
     "change a future decision. 'Monitor macro indicators' changes nothing and is not a lesson.\n"
-    "5. Returning zero lessons is correct whenever the batch shows no repeated pattern. This "
+    "5. Where a thesis verdict is shown, it says whether the reasoning held, judged on "
+    "company news and not on the return. A thesis that HELD while the position lagged is a "
+    "timing or sizing lesson, not a research one. A thesis that BROKE while the position "
+    "beat is luck — never write a lesson endorsing the reasoning behind it. UNRESOLVED "
+    "means the claim was not checkable, which is itself worth a lesson if theses are "
+    "routinely written that way.\n"
+    "6. Returning zero lessons is correct whenever the batch shows no repeated pattern. This "
     "is the expected result for most batches — an empty list is a better answer than a "
     "plausible story."
 )

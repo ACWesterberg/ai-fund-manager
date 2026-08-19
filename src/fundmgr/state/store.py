@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
     thesis              TEXT,               -- LLM's stated thesis at time of decision
     source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review'
     decision_date       TEXT,               -- set for review rows; run rows read it off the recommendation
+    -- Did the reasoning hold, independently of whether the price obliged?
+    thesis_verdict      TEXT,               -- held | broke | unresolved | NULL=not checked
+    thesis_evidence     TEXT,               -- what the verdict was read off
     UNIQUE(run_id, ticker)
 );
 
@@ -208,6 +211,10 @@ class Store:
             # Decision", the run counter, and the optimizer's training set.
             "ALTER TABLE decision_outcomes ADD COLUMN source TEXT",
             "ALTER TABLE decision_outcomes ADD COLUMN decision_date TEXT",
+            # Thesis verification: whether the claim made at entry came true, which
+            # is checkable in weeks and far denser than a 28-day price move.
+            "ALTER TABLE decision_outcomes ADD COLUMN thesis_verdict TEXT",
+            "ALTER TABLE decision_outcomes ADD COLUMN thesis_evidence TEXT",
         ]:
             with self._conn() as conn:
                 try:
@@ -911,6 +918,8 @@ class Store:
                 outperformed=bool(r["outperformed"]),
                 evaluation_date=r["evaluation_date"],
                 thesis=r["thesis"],
+                thesis_verdict=r["thesis_verdict"],
+                thesis_evidence=r["thesis_evidence"],
                 decision_date=r["run_ts"][:10],
             )
             for r in rows
@@ -935,6 +944,8 @@ class Store:
                 outperformed=bool(r["outperformed"]) if r["outperformed"] is not None else None,
                 evaluation_date=r["evaluation_date"],
                 thesis=r["thesis"],
+                thesis_verdict=r["thesis_verdict"],
+                thesis_evidence=r["thesis_evidence"],
                 decision_date=r["run_ts"][:10],
             )
             for r in rows
@@ -1008,6 +1019,47 @@ class Store:
         with self._conn() as conn:
             cur = conn.execute(f"UPDATE learnings SET is_active = 0 WHERE {where}", params)
             return cur.rowcount
+
+    def set_thesis_verdict(self, outcome_id: int, verdict: str, evidence: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE decision_outcomes SET thesis_verdict = ?, thesis_evidence = ? WHERE id = ?",
+                (verdict, evidence, outcome_id),
+            )
+
+    def get_thesis_stats(self) -> dict:
+        """Cross-tab of whether the reasoning held against whether the price obliged.
+
+        The four cells are the point of the whole exercise. A thesis that held
+        while the position lagged is a timing or sizing problem; a thesis that
+        broke while the position won is luck, and is the cell that quietly
+        teaches the wrong lesson if you only ever look at returns. "unresolved"
+        is kept separate rather than folded into either — it means the evidence
+        did not settle the question, which is not the same as being wrong.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT thesis_verdict, outperformed FROM decision_outcomes "
+                "WHERE thesis_verdict IS NOT NULL AND outperformed IS NOT NULL "
+                "AND (source IS NULL OR source = 'run')"
+            ).fetchall()
+
+        cells: dict[str, dict[str, int]] = {}
+        for r in rows:
+            verdict = r["thesis_verdict"]
+            side = "beat" if r["outperformed"] else "lagged"
+            cells.setdefault(verdict, {"beat": 0, "lagged": 0})[side] += 1
+
+        resolved = sum(
+            sum(c.values()) for v, c in cells.items() if v in ("held", "broke")
+        )
+        held = sum(cells.get("held", {}).values())
+        return {
+            "cells": cells,
+            "n": sum(sum(c.values()) for c in cells.values()),
+            "resolved": resolved,
+            "hold_rate": held / resolved if resolved else None,
+        }
 
     def get_calibration_stats(self) -> dict:
         """Return accuracy stats by confidence bucket for use in learnings generation."""

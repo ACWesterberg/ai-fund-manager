@@ -25,6 +25,7 @@ from fundmgr.engine.client import LLMError, call_llm_consensus
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
 from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
+from fundmgr.engine.thesis_check import verify_theses
 from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.levels import alertable_hits, merged_levels, record_sent_alerts
 from fundmgr.reporting.actions import format_action_list
@@ -233,6 +234,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
     evaluated = evaluate_pending_outcomes(store)
     if evaluated:
+        # Judge the reasoning before distilling: a lesson needs to know whether a
+        # position that beat did so because the thesis held or in spite of it.
+        verdicts = verify_theses(store, evaluated, cfg)
+        if verdicts:
+            click.echo("\n[*] Thesis check: " + ", ".join(
+                f"{n} {v}" for v, n in sorted(verdicts.items())
+            ))
         stat_learnings = generate_learnings(store)
         qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
         total_learnings = len(stat_learnings) + len(qual_learnings)
@@ -1531,6 +1539,38 @@ def repair_outcomes_cmd(dry_run: bool, deactivate_learnings: bool):
     elif stats["price_fixed"] or stats["recomputed"]:
         click.echo("\n  ⚠ Existing learnings were distilled from the corrupted returns —")
         click.echo("    consider re-running with --deactivate-learnings.")
+
+
+@cli.command("thesis-report")
+def thesis_report():
+    """Did the reasoning hold, and did the price agree? The four-cell readout."""
+    cfg, store = _get_store()
+    stats = store.get_thesis_stats()
+
+    click.echo(f"\n─── Thesis vs outcome — {cfg.display_name} ───────────")
+    if not stats["n"]:
+        click.echo("  No checked theses yet. Verdicts are written when outcomes")
+        click.echo("  mature (~4 weeks after each run).")
+        return
+
+    click.echo(f"\n  {'':<12} {'beat':>8} {'lagged':>8}")
+    click.echo(f"  {'─'*12} {'─'*8} {'─'*8}")
+    for verdict in ("held", "broke", "unresolved"):
+        cell = stats["cells"].get(verdict)
+        if not cell:
+            continue
+        click.echo(f"  {verdict:<12} {cell['beat']:>8} {cell['lagged']:>8}")
+
+    if stats["hold_rate"] is not None:
+        click.echo(
+            f"\n  Theses that held: {stats['hold_rate']:.0%} "
+            f"of {stats['resolved']} resolved ({stats['n']} checked)"
+        )
+    lucky = (stats["cells"].get("broke") or {}).get("beat", 0)
+    if lucky:
+        click.echo(f"  ⚠ {lucky} position(s) beat the benchmark on a thesis that broke —")
+        click.echo("    judged on return alone these are indistinguishable from skill.")
+    click.echo()
 
 
 @cli.command("prune-learnings")

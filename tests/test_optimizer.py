@@ -449,3 +449,132 @@ def test_snapshot_regime_records_the_learnings_channel():
     )["regime"]
     assert unguided["learnings_hash"] is None
     assert unguided["learnings_n"] == 0
+
+
+# ── Thesis signal in the metric ───────────────────────────────────────────────
+
+def _ex(alphas, theses=None):
+    return SimpleNamespace(ticker_alphas=alphas, ticker_theses=theses or {})
+
+
+def _pred(*actions):
+    return SimpleNamespace(decision=SimpleNamespace(actions=[
+        SimpleNamespace(ticker=t, side=s) for t, s in actions
+    ]))
+
+
+def test_metric_unchanged_when_no_thesis_verdicts_exist():
+    """Degrades to the pure-alpha behaviour while verdicts are still sparse."""
+    ex = _ex({"AAA": 4.0, "BBB": -4.0})
+    assert decision_metric(ex, _pred(("AAA", "buy"))) > 0.5
+    assert decision_metric(ex, _pred(("BBB", "buy"))) < 0.5
+    # An unresolved verdict carries no information and must not change the score.
+    unresolved = _ex({"AAA": 4.0, "BBB": -4.0}, {"AAA": "unresolved", "BBB": "unresolved"})
+    assert decision_metric(unresolved, _pred(("AAA", "buy"))) == pytest.approx(
+        decision_metric(ex, _pred(("AAA", "buy")))
+    )
+
+
+def test_metric_rewards_buying_a_name_whose_thesis_held():
+    """The point of the blend: reward being right about the business, which is a
+    far less noisy signal than a 28-day price move."""
+    alphas = {"AAA": 0.0, "BBB": 0.0}   # price said nothing either way
+    held = _ex(alphas, {"AAA": "held"})
+    broke = _ex(alphas, {"AAA": "broke"})
+    assert decision_metric(held, _pred(("AAA", "buy"))) > 0.5
+    assert decision_metric(broke, _pred(("AAA", "buy"))) < 0.5
+
+
+def test_metric_rewards_selling_a_name_whose_thesis_broke():
+    alphas = {"AAA": 0.0}
+    broke = _ex(alphas, {"AAA": "broke"})
+    assert decision_metric(broke, _pred(("AAA", "sell"))) > 0.5
+
+
+def test_thesis_term_can_temper_a_lucky_win():
+    """A position that beat on a thesis that broke is luck; the metric should not
+    reward it as fully as the same win on a thesis that held."""
+    alphas = {"AAA": 6.0}
+    lucky = decision_metric(_ex(alphas, {"AAA": "broke"}), _pred(("AAA", "buy")))
+    earned = decision_metric(_ex(alphas, {"AAA": "held"}), _pred(("AAA", "buy")))
+    assert earned > lucky
+
+
+def test_metric_stays_bounded_with_thesis_signal():
+    alphas = {t: 50.0 for t in ("A", "B", "C")}
+    theses = {t: "held" for t in ("A", "B", "C")}
+    score = decision_metric(_ex(alphas, theses), _pred(*[(t, "buy") for t in alphas]))
+    assert 0.0 < score < 1.0
+
+
+# ── Pooled trainset ───────────────────────────────────────────────────────────
+
+def test_trainset_carries_thesis_verdicts(store):
+    _save_run(store, "2026-07-01-a", datetime(2026, 7, 1))
+    store.seed_outcomes_for_run("2026-07-01-a", json.dumps([
+        {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+    ]), prices={"AAA.ST": 100.0})
+    row = [o for o in store.get_all_outcomes() if o.ticker == "AAA.ST"][0]
+    with store._conn() as conn:
+        conn.execute(
+            "UPDATE decision_outcomes SET position_return_pct=8, benchmark_return_pct=2, "
+            "outperformed=1, thesis_verdict='held' WHERE id=?", (row.id,))
+
+    ex = build_trainset(store)
+    assert len(ex) == 1
+    assert ex[0]["ticker_theses"] == {"AAA.ST": "held"}
+
+
+def test_pooled_trainset_merges_funds_in_time_order(tmp_path, monkeypatch):
+    """Five funds accrue five examples a week between them; one accrues one."""
+    from fundmgr.engine.optimizer import build_pooled_trainset
+
+    def _fund(name, run_ids):
+        cfg = AppConfig()
+        cfg.db_path = tmp_path / f"{name}.db"
+        st = Store(cfg.db_path)
+        for rid in run_ids:
+            _save_run(st, rid, datetime.strptime(rid[:10], "%Y-%m-%d"))
+            st.seed_outcomes_for_run(rid, json.dumps([
+                {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+            ]), prices={"AAA.ST": 100.0})
+            with st._conn() as conn:
+                conn.execute(
+                    "UPDATE decision_outcomes SET position_return_pct=8, "
+                    "benchmark_return_pct=2, outperformed=1 WHERE run_id=?", (rid,))
+        return cfg
+
+    a = _fund("alpha", ["2026-07-06-a", "2026-07-20-a"])
+    b = _fund("beta", ["2026-07-13-b"])
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("fundmgr.config.load_config", lambda p=None: b)
+
+    a.optimizer.pool_configs = ["beta.yaml"]
+    pooled = build_pooled_trainset(a)
+
+    assert [e["run_id"] for e in pooled] == [
+        "2026-07-06-a", "2026-07-13-b", "2026-07-20-a",
+    ]
+    # Sources are labelled, so the artifact can record what it trained on.
+    assert {e["source"] for e in pooled} == {"alpha", "beta"}
+
+
+def test_pooling_survives_an_unreadable_sibling(tmp_path, monkeypatch):
+    """A missing sibling config must not stop this fund optimizing."""
+    from fundmgr.engine.optimizer import build_pooled_trainset
+
+    cfg = AppConfig()
+    cfg.db_path = tmp_path / "solo.db"
+    st = Store(cfg.db_path)
+    _save_run(st, "2026-07-06-a", datetime(2026, 7, 6))
+    st.seed_outcomes_for_run("2026-07-06-a", json.dumps([
+        {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+    ]), prices={"AAA.ST": 100.0})
+    with st._conn() as conn:
+        conn.execute("UPDATE decision_outcomes SET position_return_pct=8, "
+                     "benchmark_return_pct=2, outperformed=1")
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path)
+    cfg.optimizer.pool_configs = ["does-not-exist.yaml"]
+    assert len(build_pooled_trainset(cfg)) == 1

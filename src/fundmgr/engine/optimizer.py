@@ -35,6 +35,15 @@ logger = logging.getLogger(__name__)
 # should already saturate: at k=25 a ±2pp mean alpha lands near the extremes.
 _ALPHA_METRIC_SCALE = 25.0
 
+# Weight given to "was the reasoning right" against "did the price agree".
+# Half and half: the thesis term is the less noisy of the two per observation,
+# but alpha is the thing the fund is ultimately judged on, and a metric that
+# ignored it would optimize for being persuasive rather than for making money.
+THESIS_METRIC_WEIGHT = 0.5
+# Chosen so a run whose every resolved thesis went the predicted way lands near
+# the same extreme as a strongly positive alpha run, rather than dominating it.
+_THESIS_METRIC_SCALE = 1.5
+
 INPUT_FIELDS = ("mandate", "macro", "portfolio_state", "risk_limits", "universe", "learnings")
 
 
@@ -110,56 +119,92 @@ def guidance_fingerprint(cfg: AppConfig) -> str | None:
 
 # ── Metric ───────────────────────────────────────────────────────────────────
 
+def _sided(side: str, value: float) -> float:
+    """A buy earns the value, a sell earns its inverse, a hold earns nothing."""
+    if side == "buy":
+        return value
+    if side == "sell":
+        return -value
+    return 0.0
+
+
 def decision_metric(example, prediction, trace=None) -> float:
     """
-    Reward a predicted DecisionRun by the alpha it would have captured.
+    Reward a predicted DecisionRun by the alpha it captured and by whether the
+    reasoning available on those names turned out to be right.
 
-    Each example carries `ticker_alphas`: realized return-vs-benchmark (in
-    percentage points, over the ~28-day evaluation window) for every ticker
-    whose outcome from that run is known. A predicted buy "earns" that alpha, a
-    sell earns the inverse (exiting before underperformance is good), and a
-    hold — or omitting the ticker — earns nothing. The mean over all known
-    tickers is squashed to (0, 1), so sitting out beats acting badly, acting
-    well beats sitting out, and the *size* of each move drives the optimization.
+    `ticker_alphas` is realized return-vs-benchmark in percentage points over
+    the ~28-day window. A predicted buy earns that alpha, a sell earns its
+    inverse (exiting before underperformance is good), a hold or an omitted
+    ticker earns nothing.
+
+    `ticker_theses` is the verdict on each name's stated thesis, judged on
+    company news rather than on the price. It is blended in because a 28-day
+    single-name return is a very noisy verdict on a decision — at the fund's
+    tracking error, separating a better instruction set from a worse one on
+    alpha alone takes far more runs than the optimizer will ever have. Whether
+    the thesis held is a much less noisy per-observation signal, so mixing it
+    in buys discrimination the alpha term cannot supply on its own.
+
+    Names whose thesis was unresolved contribute nothing to the thesis term,
+    and an example with no resolved verdicts scores on alpha exactly as before
+    — so this degrades cleanly while verdicts are still sparse.
     """
     alphas: dict[str, float] = dict(getattr(example, "ticker_alphas", None) or {})
     if not alphas:
         return 0.5
 
+    verdicts: dict[str, str] = dict(getattr(example, "ticker_theses", None) or {})
+    resolved = {t: v for t, v in verdicts.items() if v in ("held", "broke")}
+
     decision = getattr(prediction, "decision", None)
     actions = getattr(decision, "actions", None) or []
 
     realized = 0.0
+    thesis_earned = 0.0
     for action in actions:
         ticker = str(getattr(action, "ticker", "")).upper()
-        alpha = alphas.get(ticker)
-        if alpha is None:
-            continue
         side = str(getattr(action, "side", "")).lower()
-        if side == "buy":
-            realized += alpha
-        elif side == "sell":
-            realized -= alpha
 
-    mean_alpha = realized / len(alphas) / 100.0
-    return 0.5 + 0.5 * math.tanh(mean_alpha * _ALPHA_METRIC_SCALE)
+        alpha = alphas.get(ticker)
+        if alpha is not None:
+            realized += _sided(side, alpha)
+
+        verdict = resolved.get(ticker)
+        if verdict is not None:
+            thesis_earned += _sided(side, 1.0 if verdict == "held" else -1.0)
+
+    alpha_signal = (realized / len(alphas) / 100.0) * _ALPHA_METRIC_SCALE
+
+    if not resolved:
+        return 0.5 + 0.5 * math.tanh(alpha_signal)
+
+    thesis_signal = (thesis_earned / len(resolved)) * _THESIS_METRIC_SCALE
+    blended = (1 - THESIS_METRIC_WEIGHT) * alpha_signal + THESIS_METRIC_WEIGHT * thesis_signal
+    return 0.5 + 0.5 * math.tanh(blended)
 
 
 # ── Trainset ─────────────────────────────────────────────────────────────────
 
-def build_trainset(store: "Store") -> list[dict]:
+def build_trainset(store: "Store", source: str = "") -> list[dict]:
     """
     One example per run that has (a) at least one evaluated outcome and (b) a
     recoverable fielded context. Inputs match WeeklyDecision's fields; the
-    per-ticker alphas ride along for the metric.
+    per-ticker alphas and thesis verdicts ride along for the metric.
+
+    `source` labels which fund an example came from, for pooled trainsets.
     """
     alphas_by_run: dict[str, dict[str, float]] = {}
+    theses_by_run: dict[str, dict[str, str]] = {}
     for o in store.get_evaluated_outcomes():
         if o.position_return_pct is None or o.benchmark_return_pct is None:
             continue
-        alphas_by_run.setdefault(o.run_id, {})[o.ticker.upper()] = float(
+        ticker = o.ticker.upper()
+        alphas_by_run.setdefault(o.run_id, {})[ticker] = float(
             o.position_return_pct - o.benchmark_return_pct
         )
+        if o.thesis_verdict:
+            theses_by_run.setdefault(o.run_id, {})[ticker] = o.thesis_verdict
 
     examples: list[dict] = []
     for run_id, alphas in sorted(alphas_by_run.items()):
@@ -173,9 +218,58 @@ def build_trainset(store: "Store") -> list[dict]:
         fields = fields_from_snapshot(snapshot)
         if not fields:
             continue
-        examples.append({**fields, "ticker_alphas": alphas, "run_id": run_id})
+        examples.append({
+            **fields,
+            "ticker_alphas": alphas,
+            "ticker_theses": theses_by_run.get(run_id, {}),
+            "run_id": run_id,
+            "source": source,
+        })
 
     return examples
+
+
+def build_pooled_trainset(cfg: AppConfig) -> list[dict]:
+    """This fund's examples plus those of any fund named in `optimizer.pool_configs`.
+
+    Pooling is defensible here in a way it is not for performance measurement.
+    Correlated funds do not give independent evidence about whether *this book*
+    has an edge — they all trade the same weeks. But the optimizer is not
+    measuring the book, it is searching for instructions that make the decision
+    task go better, and that question is shared across funds: examples from a
+    different universe are extra evidence about how to reason, not a contaminated
+    read on one portfolio. It also buys elapsed time, which is the binding
+    constraint — five funds accrue five examples a week between them, not one.
+
+    Each fund keeps its own guidance artifact regardless; only the trainset is
+    shared. Failures to open a pooled fund are logged and skipped, never fatal:
+    a missing sibling config must not stop this fund optimizing.
+    """
+    from fundmgr.config import CONFIG_DIR, load_config
+    from fundmgr.state.store import Store
+
+    examples = build_trainset(Store(cfg.db_path), source=cfg.db_path.stem)
+    seen = {cfg.db_path}
+
+    for name in cfg.optimizer.pool_configs:
+        path = Path(name)
+        if not path.is_absolute():
+            path = CONFIG_DIR / name
+        try:
+            other = load_config(path)
+        except Exception as exc:
+            logger.warning("Optimizer: cannot pool from %s: %s", name, exc)
+            continue
+        if other.db_path in seen or not other.db_path.exists():
+            continue
+        seen.add(other.db_path)
+        pooled = build_trainset(Store(other.db_path), source=other.db_path.stem)
+        logger.info("Optimizer: pooled %d example(s) from %s", len(pooled), name)
+        examples.extend(pooled)
+
+    # Chronological across funds, so the held-out split stays a forward split
+    # rather than becoming a random sample of history.
+    return sorted(examples, key=lambda e: e["run_id"])
 
 
 def fields_from_snapshot(snapshot: dict) -> dict[str, str] | None:
@@ -269,7 +363,7 @@ def run_optimization(
         logger.info("Optimizer: only %d evaluated outcomes, need %d — skipping", len(evaluated), min_outcomes)
         return False
 
-    raw = build_trainset(store)
+    raw = build_pooled_trainset(cfg)
     if len(raw) < min_examples:
         logger.info("Optimizer: only %d usable run examples, need %d — skipping", len(raw), min_examples)
         return False
@@ -332,6 +426,11 @@ def run_optimization(
         "n_train_runs": len(train),
         "n_val_runs": len(val),
         "n_outcomes": len(evaluated),
+        "pooled_from": sorted({e.get("source", "") for e in raw} - {""}),
+        "n_resolved_theses": sum(
+            1 for e in raw for v in (e.get("ticker_theses") or {}).values()
+            if v in ("held", "broke")
+        ),
         "task_model": cfg.llm.model_id,
         "prompt_model": prompt_model_id,
         "instructions": instructions,

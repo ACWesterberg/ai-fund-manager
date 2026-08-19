@@ -99,7 +99,18 @@ class OptimizerConfig:
     # None → derived from llm.provider at run time (see default_heavy_model).
     prompt_model_id: str | None = None
     min_outcomes: int = 30       # evaluated outcomes required before optimization runs
-    min_examples: int = 8        # usable run-level examples required after reconstruction
+    # Usable run-level examples required before MIPRO runs at all. MIPRO holds
+    # out 20% and picks the winning instructions on that slice, so at 8 examples
+    # it was selecting on 2 runs — with weekly excess return noise of roughly 2pp,
+    # the best of a dozen candidates beats the field by more than that from
+    # chance alone, and the artifact would look like an improvement while being
+    # none. This is the "should we believe it" threshold, not "can it run".
+    min_examples: int = 25
+    # Other funds' configs to pool training examples from (filenames in config/,
+    # or absolute paths). Empty = this fund's own history only. Pooling shares
+    # the trainset, never the guidance artifact — each fund still compiles and
+    # applies its own.
+    pool_configs: list[str] = field(default_factory=list)
     compiled_dir: Path = field(default_factory=lambda: CONFIG_DIR / "compiled")
 
 
@@ -230,6 +241,16 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.name = str(raw["name"])
     if "learning_model_id" in raw:
         cfg.learning_model_id = str(raw["learning_model_id"])
+
+    if opt_raw := raw.get("optimizer"):
+        if "min_outcomes" in opt_raw:
+            cfg.optimizer.min_outcomes = int(opt_raw["min_outcomes"])
+        if "min_examples" in opt_raw:
+            cfg.optimizer.min_examples = int(opt_raw["min_examples"])
+        if "prompt_model_id" in opt_raw:
+            cfg.optimizer.prompt_model_id = str(opt_raw["prompt_model_id"])
+        if "pool_configs" in opt_raw:
+            cfg.optimizer.pool_configs = [str(x) for x in (opt_raw["pool_configs"] or [])]
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(

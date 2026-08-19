@@ -1487,15 +1487,27 @@ def optimize(min_outcomes: int | None, dry_run: bool):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     cfg, store = _get_store()
-    from fundmgr.engine.optimizer import build_trainset, guidance_path, run_optimization
+    from fundmgr.engine.optimizer import build_pooled_trainset, guidance_path, run_optimization
 
     threshold = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
     evaluated = store.get_evaluated_outcomes()
-    examples = build_trainset(store)
+    examples = build_pooled_trainset(cfg)
+    resolved = sum(
+        1 for e in examples for v in (e.get("ticker_theses") or {}).values()
+        if v in ("held", "broke")
+    )
 
     click.echo("\n─── Prompt Optimizer ───────────────────────────────")
     click.echo(f"  Evaluated outcomes:   {len(evaluated)} (need {threshold})")
     click.echo(f"  Usable run examples:  {len(examples)} (need {cfg.optimizer.min_examples})")
+    if cfg.optimizer.pool_configs:
+        by_source: dict[str, int] = {}
+        for e in examples:
+            by_source[e.get("source") or "?"] = by_source.get(e.get("source") or "?", 0) + 1
+        click.echo("    pooled from:        " + ", ".join(
+            f"{src} ({n})" for src, n in sorted(by_source.items())
+        ))
+    click.echo(f"  Resolved theses:      {resolved} (metric signal beyond raw alpha)")
     click.echo(f"  Guidance artifact:    {guidance_path(cfg)}")
 
     if dry_run:

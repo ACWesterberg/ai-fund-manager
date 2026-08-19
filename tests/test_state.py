@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fundmgr.state.models import Transaction
-from fundmgr.state.store import Store
+from fundmgr.state.store import NOT_RECORDED, Store
 
 
 @pytest.fixture
@@ -155,14 +155,20 @@ def test_score_by_regime_separates_the_unguided_arm(store):
     _run("r1", "abc123", 0.02)
     _run("r2", "abc123", 0.04)
     _run("r3", None, -0.01)      # ran with no lessons — the comparison arm
-    _run("r4", False, 0.00)      # legacy v1 row, no regime at all
+    _run("r4", False, 0.00)      # snapshot predates the key entirely
 
     buckets = {b["value"]: b for b in store.score_by_regime("learnings_hash")}
     assert buckets["abc123"]["runs"] == 2
     assert buckets["abc123"]["mean_score"] == pytest.approx(0.03)
-    # Missing key and explicit null both mean "no lessons that run".
-    assert buckets[None]["runs"] == 2
-    assert buckets[None]["mean_score"] == pytest.approx(-0.005)
+
+    # The baseline arm is only the run that demonstrably carried nothing. A
+    # snapshot written before the key existed carried whatever was live then —
+    # folding it in here would average guided runs into the unguided arm and
+    # label the result "unguided".
+    assert buckets[None]["runs"] == 1
+    assert buckets[None]["mean_score"] == pytest.approx(-0.01)
+    assert buckets[NOT_RECORDED]["runs"] == 1
+    assert buckets[NOT_RECORDED]["mean_score"] == pytest.approx(0.0)
 
 
 def test_score_by_regime_ignores_unscored_runs(store):

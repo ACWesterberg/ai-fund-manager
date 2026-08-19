@@ -168,6 +168,11 @@ CREATE TABLE IF NOT EXISTS app_meta (
 """
 
 
+# Regime bucket for runs whose snapshot predates the key being asked about —
+# distinct from None, which means the run carried none of whatever it is.
+NOT_RECORDED = "(not recorded)"
+
+
 class Store:
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -653,8 +658,10 @@ class Store:
 
         The A/B readout for the two channels that silently shape every prompt:
         `guidance_hash` (MIPRO's compiled instructions) and `learnings_hash`
-        (the lessons block). Runs where the key was absent group under None —
-        that is the unguided arm, and it is the comparison that matters.
+        (the lessons block). Runs that carried none of it group under None —
+        that is the unguided arm, and it is the comparison that matters. Runs
+        whose snapshot predates the key group under NOT_RECORDED instead, kept
+        apart because they carried whatever was live at the time.
 
         Descriptive only: weekly runs are few and self-selected in time, so
         treat a difference here as a prompt to look, not as an effect.
@@ -672,7 +679,13 @@ class Store:
                 regime = _json.loads(r["prompt_snapshot"]).get("regime") or {}
             except Exception:
                 regime = {}
-            buckets.setdefault(regime.get(key), []).append(float(r["score"]))
+            # Absent key and explicit null mean opposite things: a snapshot
+            # written before this key existed carried whatever was live at the
+            # time, while a null means the run demonstrably carried none. Folding
+            # them together would average the unguided baseline with runs that
+            # were fully guided, and label the result "unguided".
+            value = regime[key] if key in regime else NOT_RECORDED
+            buckets.setdefault(value, []).append(float(r["score"]))
 
         return sorted(
             (

@@ -46,8 +46,9 @@ def _patch_call(monkeypatch, reply):
     from fundmgr.engine import thesis_check
     captured = {}
 
-    def _fake(cfg, user_msg):
+    def _fake(cfg, user_msg, horizon_days):
         captured["msg"] = user_msg
+        captured["horizon"] = horizon_days
         return reply
 
     monkeypatch.setattr(thesis_check, "_call_for_checks", _fake)
@@ -95,7 +96,7 @@ def test_no_news_means_no_verdict(store, monkeypatch):
 
     from fundmgr.engine import thesis_check
 
-    def _fake(cfg, user_msg):
+    def _fake(cfg, user_msg, horizon_days):
         called["n"] += 1
         return _reply(("AAA.ST", "held", "invented"))
 
@@ -126,7 +127,7 @@ def test_verification_survives_an_llm_failure(store, monkeypatch):
     outcome = _seed(store)
     _news(store, "AAA.ST", "Orders up")
     from fundmgr.engine import thesis_check
-    monkeypatch.setattr(thesis_check, "_call_for_checks", lambda cfg, msg: None)
+    monkeypatch.setattr(thesis_check, "_call_for_checks", lambda cfg, msg, horizon: None)
     assert verify_theses(store, [outcome], cfg=AppConfig()) == {}
 
 
@@ -177,3 +178,40 @@ def test_thesis_stats_separate_luck_from_skill(store):
 def test_thesis_stats_empty(store):
     stats = store.get_thesis_stats()
     assert stats["n"] == 0 and stats["hold_rate"] is None
+
+
+# ── Per-fund evaluation horizon ───────────────────────────────────────────────
+
+def test_audit_prompt_states_the_fund_s_own_horizon():
+    """A 90-day fund must not be told its theses had four weeks to resolve."""
+    from fundmgr.engine.thesis_check import _system_prompt
+
+    assert "28 days after each was made" in _system_prompt(28)
+    assert "90 days after each was made" in _system_prompt(90)
+    assert "4-week window" in _system_prompt(28)
+    assert "13-week window" in _system_prompt(90)
+
+
+def test_audit_prompt_never_claims_reports_land_inside_the_window():
+    """The old wording asserted margin theses are unresolvable — true at four
+    weeks, false at a quarter, where a report usually does land."""
+    for horizon in (28, 90):
+        prompt = _system_prompt_text(horizon)
+        assert "unless such a report actually fell inside" in prompt
+        assert "Do not assume one did" in prompt
+
+
+def _system_prompt_text(horizon):
+    from fundmgr.engine.thesis_check import _system_prompt
+    return _system_prompt(horizon)
+
+
+def test_the_fund_s_horizon_reaches_the_auditor(store, monkeypatch):
+    outcome = _seed(store)
+    _news(store, "AAA.ST", "Orders up")
+    captured = _patch_call(monkeypatch, _reply(("AAA.ST", "held", "orders up")))
+
+    cfg = AppConfig()
+    cfg.evaluation_horizon_days = 90
+    verify_theses(store, [outcome], cfg=cfg)
+    assert captured["horizon"] == 90

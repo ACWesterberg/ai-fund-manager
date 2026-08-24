@@ -82,3 +82,10 @@ optimizer:
     - config_buffett_claude.yaml
     - config_claude.yaml
     - config_global.yaml
+
+# A quality-compounder screen is not the same question asked at 28 days. The
+# learning loop reads this horizon back: at 28 days it concluded, correctly for
+# that window, that theses whose invalidators only appear in a scheduled report
+# cannot be scored — which for this mandate would mean rejecting exactly the
+# positions it exists to hold. One quarter lets a report land inside the window.
+evaluation_horizon_days: 90

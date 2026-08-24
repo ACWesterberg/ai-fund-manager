@@ -138,6 +138,14 @@ class AppConfig:
     # one lesson-writer system-wide, so the GPT-vs-Claude comparison is a
     # difference in decision model rather than in how each fund is coached.
     learning_model_id: str | None = None
+    # Days after a decision before its outcome is scored. This is a property of
+    # the mandate, not a system constant: a momentum book and a quality-
+    # compounder screen are not the same question asked at 28 days. Set it to
+    # match how long a thesis in this fund is expected to take to resolve — the
+    # learning loop reads the horizon back and will tell the fund to stop taking
+    # positions it cannot score inside it, so too short a horizon quietly
+    # rewrites the strategy.
+    evaluation_horizon_days: int = 28
 
     @property
     def display_name(self) -> str:
@@ -241,6 +249,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.name = str(raw["name"])
     if "learning_model_id" in raw:
         cfg.learning_model_id = str(raw["learning_model_id"])
+    if "evaluation_horizon_days" in raw:
+        cfg.evaluation_horizon_days = int(raw["evaluation_horizon_days"])
 
     if opt_raw := raw.get("optimizer"):
         if "min_outcomes" in opt_raw:

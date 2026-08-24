@@ -1414,15 +1414,18 @@ def track_portfolio(slug: str) -> list[str]:
         generate_learnings,
         generate_qualitative_learnings,
     )
+    from fundmgr.config import AppConfig
     from fundmgr.engine.thesis_check import verify_theses
-    evaluated = evaluate_pending_outcomes(store)
+    # A paper book has no fund config; the default horizon applies.
+    horizon = AppConfig().evaluation_horizon_days
+    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
     if evaluated:
-        verdicts = verify_theses(store, evaluated)
+        verdicts = verify_theses(store, evaluated, lookback_days=horizon)
         if verdicts:
             log.append("Thesis check: " + ", ".join(
                 f"{n} {v}" for v, n in sorted(verdicts.items())
             ))
-        stat = generate_learnings(store)
+        stat = generate_learnings(store, horizon_days=horizon)
         # A paper book has no fund config of its own: the lesson writer comes
         # from the default config, the book's own benchmark from its meta.
         qual = generate_qualitative_learnings(

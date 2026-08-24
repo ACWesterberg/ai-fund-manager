@@ -35,24 +35,29 @@ logger = logging.getLogger(__name__)
 
 MAX_HEADLINES_PER_TICKER = 12
 
-_SYSTEM_PROMPT = (
-    "You are auditing the reasoning behind stock decisions made by a fund manager, "
-    "four weeks after each was made. For each decision you are given the thesis "
-    "stated at entry and the news published about that company since. You judge one "
-    "thing only: did the specific claim the thesis made come true?\n\n"
-    "Rules:\n"
-    "1. You are NOT judging whether the decision made money. You are not told the "
-    "return, and you must not guess it. A thesis can hold while the stock falls and "
-    "break while it rises — separating those two is the entire purpose of this task.\n"
-    "2. A verdict of 'held' or 'broke' requires evidence in the material below that "
-    "bears on the claim. Cite it.\n"
-    "3. 'unresolved' is the correct answer whenever the claim concerns something the "
-    "material cannot show — most theses about margins, multi-quarter growth or "
-    "valuation will be unresolved on four weeks of headlines. This is the most "
-    "common verdict and returning it is doing the job properly, not failing it.\n"
-    "4. A vague thesis that makes no falsifiable claim is 'unresolved'. Do not "
-    "reconstruct a claim it did not make.\n"
-    "5. Judge each decision only on its own company's evidence."
+def _system_prompt(horizon_days: int) -> str:
+    weeks = max(1, round(horizon_days / 7))
+    return (
+        "You are auditing the reasoning behind stock decisions made by a fund manager, "
+        "" + str(horizon_days) + " days after each was made. For each decision you are "
+        "given the thesis "
+        "stated at entry and the news published about that company since. You judge one "
+        "thing only: did the specific claim the thesis made come true?\n\n"
+        "Rules:\n"
+        "1. You are NOT judging whether the decision made money. You are not told the "
+        "return, and you must not guess it. A thesis can hold while the stock falls and "
+        "break while it rises — separating those two is the entire purpose of this task.\n"
+        "2. A verdict of 'held' or 'broke' requires evidence in the material below that "
+        "bears on the claim. Cite it.\n"
+        "3. 'unresolved' is the correct answer whenever the claim concerns something the "
+        "material cannot show. A claim that only surfaces in a scheduled report — "
+        "margins, retention, comparable sales, multi-quarter growth — is unresolved "
+        "unless such a report actually fell inside this " + str(weeks) + "-week window "
+        "and appears below. Do not assume one did. Returning 'unresolved' is doing the "
+        "job properly, not failing it, and on short windows it is the common answer.\n"
+        "4. A vague thesis that makes no falsifiable claim is 'unresolved'. Do not "
+        "reconstruct a claim it did not make.\n"
+        "5. Judge each decision only on its own company's evidence."
 )
 
 
@@ -60,7 +65,7 @@ def verify_theses(
     store: Store,
     outcomes: list[DecisionOutcome],
     cfg: "AppConfig | None" = None,
-    lookback_days: int = 28,
+    lookback_days: int | None = None,
 ) -> dict[str, str]:
     """Judge each matured decision's thesis and persist the verdict.
 
@@ -74,6 +79,8 @@ def verify_theses(
     if cfg is None:
         from fundmgr.config import load_config
         cfg = load_config()
+    if lookback_days is None:
+        lookback_days = cfg.evaluation_horizon_days
 
     evidence = {o.ticker: _news_window(store, o, lookback_days) for o in judgeable}
     # Nothing to judge against is not a verdict — say nothing rather than let the
@@ -83,7 +90,9 @@ def verify_theses(
         logger.info("Thesis check: no news in the holding window for any decision — skipped")
         return {}
 
-    parsed = _call_for_checks(cfg, _review_message(judgeable, evidence))
+    parsed = _call_for_checks(
+        cfg, _review_message(judgeable, evidence), lookback_days
+    )
     if parsed is None:
         return {}
 
@@ -137,7 +146,9 @@ def _review_message(outcomes: list[DecisionOutcome], evidence: dict[str, list[di
     return "\n".join(lines)
 
 
-def _call_for_checks(cfg: "AppConfig", user_msg: str) -> "ThesisChecks | None":
+def _call_for_checks(
+    cfg: "AppConfig", user_msg: str, horizon_days: int
+) -> "ThesisChecks | None":
     from dataclasses import replace
 
     from fundmgr.engine.client import LLMError, call_llm
@@ -148,7 +159,9 @@ def _call_for_checks(cfg: "AppConfig", user_msg: str) -> "ThesisChecks | None":
     audit_cfg = replace(cfg, llm=replace(cfg.llm, model_id=cfg.learning_model, n_samples=1))
 
     try:
-        parsed, _ = call_llm(_SYSTEM_PROMPT, user_msg, audit_cfg, schema=ThesisChecks)
+        parsed, _ = call_llm(
+            _system_prompt(horizon_days), user_msg, audit_cfg, schema=ThesisChecks
+        )
     except LLMError as exc:
         logger.warning("Thesis check failed on %s: %s", audit_cfg.llm.model_id, exc)
         return None

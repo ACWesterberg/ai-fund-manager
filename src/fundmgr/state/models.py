@@ -123,6 +123,7 @@ class DecisionOutcome:
     # the price obliged. None = not checked yet.
     thesis_verdict: str | None = None      # held | broke | unresolved
     thesis_evidence: str | None = None
+    horizon_days: int | None = None        # days this outcome was scored over
     id: int | None = None
 
     @property

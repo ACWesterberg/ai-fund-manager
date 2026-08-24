@@ -318,3 +318,40 @@ def test_unsupported_calibration_claim_is_retired(store):
 
     assert generate_learnings(store) == []
     assert store.get_active_learnings() == []
+
+
+# ── Per-fund evaluation horizon ───────────────────────────────────────────────
+
+def test_outcome_records_the_horizon_it_was_scored_over(store):
+    """A row measured at 28 days must not be silently compared with one at 90."""
+    decision = _iso(100)
+    target = (datetime.strptime(decision, "%Y-%m-%d") + timedelta(days=90)).strftime("%Y-%m-%d")
+    _save_run(store, "r1", days_ago=100)
+    store.seed_outcomes_for_run("r1", json.dumps([
+        {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+    ]), prices={"AAA.ST": 100.0})
+    store.save_prices("AAA.ST", [
+        {"date": target, "open": 0, "high": 0, "low": 0, "close": 120.0, "volume": 0}])
+    store.save_benchmark([{"date": decision, "close": 1000.0},
+                          {"date": target, "close": 1050.0}])
+
+    evaluated = evaluate_pending_outcomes(store, lookback_days=90)
+    assert len(evaluated) == 1
+    assert evaluated[0].horizon_days == 90
+    assert evaluated[0].evaluation_date == target
+    # Persisted, not just set in memory.
+    assert [o for o in store.get_all_outcomes()][0].horizon_days == 90
+
+
+def test_distiller_prompt_states_the_fund_s_own_horizon():
+    """Telling a 90-day fund its returns are 28-day noise misdescribes its data."""
+    from fundmgr.engine.evaluator import _batch_system_prompt
+
+    assert "28-day return" in _batch_system_prompt(28)
+    assert "90-day return" in _batch_system_prompt(90)
+
+
+def test_calibration_body_states_the_fund_s_own_horizon():
+    stats = _stats(high=(11, 25), low=(14, 25))
+    assert "over 28 days" in calibration_body(stats, horizon_days=28)
+    assert "over 90 days" in calibration_body(stats, horizon_days=90)

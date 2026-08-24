@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
     -- Did the reasoning hold, independently of whether the price obliged?
     thesis_verdict      TEXT,               -- held | broke | unresolved | NULL=not checked
     thesis_evidence     TEXT,               -- what the verdict was read off
+    -- Horizon this outcome was actually scored over. Per-fund and changeable,
+    -- so a row measured at 28 days must not be silently compared with one
+    -- measured at 90.
+    horizon_days        INTEGER,
     UNIQUE(run_id, ticker)
 );
 
@@ -215,6 +219,7 @@ class Store:
             # is checkable in weeks and far denser than a 28-day price move.
             "ALTER TABLE decision_outcomes ADD COLUMN thesis_verdict TEXT",
             "ALTER TABLE decision_outcomes ADD COLUMN thesis_evidence TEXT",
+            "ALTER TABLE decision_outcomes ADD COLUMN horizon_days INTEGER",
         ]:
             with self._conn() as conn:
                 try:
@@ -816,7 +821,7 @@ class Store:
             conn.execute(
                 "UPDATE decision_outcomes SET "
                 "price_at_evaluation = ?, benchmark_return_pct = ?, position_return_pct = ?, "
-                "outperformed = ?, evaluation_date = ? "
+                "outperformed = ?, evaluation_date = ?, horizon_days = ? "
                 "WHERE run_id = ? AND ticker = ?",
                 (
                     outcome.price_at_evaluation,
@@ -824,6 +829,7 @@ class Store:
                     outcome.position_return_pct,
                     1 if outcome.outperformed else 0 if outcome.outperformed is not None else None,
                     outcome.evaluation_date,
+                    outcome.horizon_days,
                     outcome.run_id,
                     outcome.ticker,
                 ),
@@ -920,6 +926,7 @@ class Store:
                 thesis=r["thesis"],
                 thesis_verdict=r["thesis_verdict"],
                 thesis_evidence=r["thesis_evidence"],
+                horizon_days=r["horizon_days"],
                 decision_date=r["run_ts"][:10],
             )
             for r in rows
@@ -946,6 +953,7 @@ class Store:
                 thesis=r["thesis"],
                 thesis_verdict=r["thesis_verdict"],
                 thesis_evidence=r["thesis_evidence"],
+                horizon_days=r["horizon_days"],
                 decision_date=r["run_ts"][:10],
             )
             for r in rows

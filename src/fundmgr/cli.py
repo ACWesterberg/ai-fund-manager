@@ -232,16 +232,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     _print_feature_table(features, cfg)
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
-    evaluated = evaluate_pending_outcomes(store)
+    horizon = cfg.evaluation_horizon_days
+    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
     if evaluated:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
-        verdicts = verify_theses(store, evaluated, cfg)
+        verdicts = verify_theses(store, evaluated, cfg, lookback_days=horizon)
         if verdicts:
             click.echo("\n[*] Thesis check: " + ", ".join(
                 f"{n} {v}" for v, n in sorted(verdicts.items())
             ))
-        stat_learnings = generate_learnings(store)
+        stat_learnings = generate_learnings(store, horizon_days=horizon)
         qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
         total_learnings = len(stat_learnings) + len(qual_learnings)
         click.echo(

@@ -63,6 +63,7 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
         outcome.benchmark_return_pct = bench_return
         outcome.outperformed = outperformed
         outcome.evaluation_date = eval_date
+        outcome.horizon_days = lookback_days
 
         store.update_outcome(outcome)
         evaluated.append(outcome)
@@ -217,7 +218,7 @@ def generate_qualitative_learnings(
         by_run, macro_by_run, benchmark_label or cfg.benchmark, max_lessons
     )
 
-    parsed = _call_for_batch_lessons(cfg, user_msg)
+    parsed = _call_for_batch_lessons(cfg, user_msg, cfg.evaluation_horizon_days)
     if parsed is None:
         return []
 
@@ -307,34 +308,38 @@ def _batch_review_message(
     return "\n".join(lines)
 
 
-_BATCH_SYSTEM_PROMPT = (
-    "You are a trading coach reviewing a batch of completed trades made by an AI fund "
-    "manager. You look for patterns that repeat across trades. You do not explain "
-    "individual results.\n\n"
-    "Rules:\n"
-    "1. A single trade's 28-day return against an index is mostly noise. Never write a "
-    "lesson resting on one trade.\n"
-    "2. If most of the batch moved the same way, that is the market or the sector, not the "
-    "theses. Do not convert a common move into a lesson about individual reasoning — the "
-    "dispersion stats tell you when this is the case.\n"
-    "3. The macro context is identical for every trade within a run. It therefore cannot "
-    "explain why one trade in that run beat and another lagged. Never use the same macro "
-    "factor to account for both a winner and a loser.\n"
-    "4. A lesson must name a signal that was checkable before entry and specific enough to "
-    "change a future decision. 'Monitor macro indicators' changes nothing and is not a lesson.\n"
-    "5. Where a thesis verdict is shown, it says whether the reasoning held, judged on "
-    "company news and not on the return. A thesis that HELD while the position lagged is a "
-    "timing or sizing lesson, not a research one. A thesis that BROKE while the position "
-    "beat is luck — never write a lesson endorsing the reasoning behind it. UNRESOLVED "
-    "means the claim was not checkable, which is itself worth a lesson if theses are "
-    "routinely written that way.\n"
-    "6. Returning zero lessons is correct whenever the batch shows no repeated pattern. This "
-    "is the expected result for most batches — an empty list is a better answer than a "
-    "plausible story."
+def _batch_system_prompt(horizon_days: int) -> str:
+    return (
+        "You are a trading coach reviewing a batch of completed trades made by an AI fund "
+        "manager. You look for patterns that repeat across trades. You do not explain "
+        "individual results.\n\n"
+        "Rules:\n"
+        "1. A single trade's " + str(horizon_days) + "-day return against an index is mostly "
+        "noise. Never write a "
+        "lesson resting on one trade.\n"
+        "2. If most of the batch moved the same way, that is the market or the sector, not the "
+        "theses. Do not convert a common move into a lesson about individual reasoning — the "
+        "dispersion stats tell you when this is the case.\n"
+        "3. The macro context is identical for every trade within a run. It therefore cannot "
+        "explain why one trade in that run beat and another lagged. Never use the same macro "
+        "factor to account for both a winner and a loser.\n"
+        "4. A lesson must name a signal that was checkable before entry and specific enough to "
+        "change a future decision. 'Monitor macro indicators' changes nothing and is not a lesson.\n"
+        "5. Where a thesis verdict is shown, it says whether the reasoning held, judged on "
+        "company news and not on the return. A thesis that HELD while the position lagged is a "
+        "timing or sizing lesson, not a research one. A thesis that BROKE while the position "
+        "beat is luck — never write a lesson endorsing the reasoning behind it. UNRESOLVED "
+        "means the claim was not checkable, which is itself worth a lesson if theses are "
+        "routinely written that way.\n"
+        "6. Returning zero lessons is correct whenever the batch shows no repeated pattern. This "
+        "is the expected result for most batches — an empty list is a better answer than a "
+        "plausible story."
 )
 
 
-def _call_for_batch_lessons(cfg: "AppConfig", user_msg: str) -> "BatchLessons | None":
+def _call_for_batch_lessons(
+    cfg: "AppConfig", user_msg: str, horizon_days: int
+) -> "BatchLessons | None":
     """One structured call on the fund's learning model. None on any failure.
 
     Runs through `call_llm` so this inherits the provider handling the decision
@@ -353,7 +358,9 @@ def _call_for_batch_lessons(cfg: "AppConfig", user_msg: str) -> "BatchLessons | 
     )
 
     try:
-        parsed, _ = call_llm(_BATCH_SYSTEM_PROMPT, user_msg, learning_cfg, schema=BatchLessons)
+        parsed, _ = call_llm(
+            _batch_system_prompt(horizon_days), user_msg, learning_cfg, schema=BatchLessons
+        )
     except LLMError as exc:
         logger.warning("Learning distillation failed on %s: %s", learning_cfg.llm.model_id, exc)
         return None
@@ -443,7 +450,9 @@ def _calibration_verdict(bands: dict[str, tuple[float, float]]) -> str:
     )
 
 
-def calibration_body(stats: dict, min_sample: int = CALIBRATION_MIN_SAMPLE) -> str | None:
+def calibration_body(
+    stats: dict, min_sample: int = CALIBRATION_MIN_SAMPLE, horizon_days: int = 28
+) -> str | None:
     """One calibration lesson from hit-rate stats, or None when nothing is supported.
 
     Reports every conviction band that clears `min_sample`, each with its
@@ -469,14 +478,14 @@ def calibration_body(stats: dict, min_sample: int = CALIBRATION_MIN_SAMPLE) -> s
 
     return (
         "Calibration of your buy calls, measured as the share that beat the benchmark "
-        f"over 28 days: {'; '.join(reported)}. {_calibration_verdict(bands)} "
+        f"over {horizon_days} days: {'; '.join(reported)}. {_calibration_verdict(bands)} "
         "Note this counts only how often you were right, not by how much — it cannot "
         "tell you whether the book is profitable."
     )
 
 
 def generate_learnings(
-    store: Store, min_sample: int = CALIBRATION_MIN_SAMPLE
+    store: Store, min_sample: int = CALIBRATION_MIN_SAMPLE, horizon_days: int = 28
 ) -> list[Learning]:
     """
     Refresh the fund's single calibration lesson from its hit-rate stats.
@@ -491,7 +500,9 @@ def generate_learnings(
     retired rather than left running: it is injected into every prompt, so an
     unsupported claim left active keeps steering decisions.
     """
-    body = calibration_body(store.get_calibration_stats(), min_sample=min_sample)
+    body = calibration_body(
+        store.get_calibration_stats(), min_sample=min_sample, horizon_days=horizon_days
+    )
 
     if body is None:
         store.deactivate_learnings(category="calibration")

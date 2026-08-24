@@ -44,6 +44,8 @@ class GenerateRequest(BaseModel):
     # None = use the profile's own capital
     capital_sek: float | None = Field(default=None, gt=0, le=MAX_CAPITAL_SEK)
     deploy_full: bool = False
+    # Refetch the screened candidates before deciding. Off = cache-only, fast.
+    refresh_prices: bool = True
 
 
 def _run_job(job_id: str, req: GenerateRequest) -> None:
@@ -57,6 +59,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             include_macro=req.include_macro,
             capital_sek=req.capital_sek,
             deploy_full=req.deploy_full,
+            refresh_prices=req.refresh_prices,
         )
         with _job_lock:
             if _job and _job["id"] == job_id:

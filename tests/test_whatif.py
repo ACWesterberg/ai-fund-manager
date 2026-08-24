@@ -152,7 +152,7 @@ def test_generate_uses_clean_slate_snapshot(profile, monkeypatch):
         return decision, "{}", {"ALFA.ST": 3}, {"requested": 3, "succeeded": 3, "failed": 0, "errors": []}
 
     monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
-    whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+    whatif.generate_whatif("config_test.yaml", refresh_prices=False, n_runs=3, include_macro=False)
 
     assert "No open positions — fully in cash." in captured["user"]
     assert "NAV: 100,000 SEK  |  Cash: 100,000 SEK (100.0%)" in captured["user"]
@@ -177,7 +177,7 @@ def test_generate_applies_model_override_and_run_count(profile, monkeypatch):
 
     monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
     result = whatif.generate_whatif(
-        "config_test.yaml", provider="anthropic", model_id="claude-opus-4-8",
+        "config_test.yaml", refresh_prices=False, provider="anthropic", model_id="claude-opus-4-8",
         n_runs=5, include_macro=False,
     )
 
@@ -200,7 +200,7 @@ def test_n_runs_is_clamped(profile, monkeypatch):
         return decision, "{}", None, {"requested": 1, "succeeded": 1, "failed": 0, "errors": []}
 
     monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
-    whatif.generate_whatif("config_test.yaml", n_runs=99, include_macro=False)
+    whatif.generate_whatif("config_test.yaml", refresh_prices=False, n_runs=99, include_macro=False)
     assert seen["n"] == whatif.MAX_RUNS
 
 
@@ -219,7 +219,7 @@ def test_generate_records_votes_and_guardrail_verdicts(profile, monkeypatch):
     votes = {"ALFA.ST": 3, "NOPE.ST": 2, "BETA.ST": 2}
     monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(actions, votes))
 
-    result = whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, n_runs=3, include_macro=False)
 
     by_ticker = {a["ticker"]: a for a in result["actions"]}
     assert by_ticker["ALFA.ST"]["status"] == "APPROVED"
@@ -246,7 +246,7 @@ def test_generate_never_writes_to_the_fund_book(profile, monkeypatch):
     actions = [Action(ticker="ALFA.ST", side="buy", target_weight_pct=15,
                       sek_estimate=15000, confidence=0.85, thesis="good")]
     monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(actions, {"ALFA.ST": 3}))
-    whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+    whatif.generate_whatif("config_test.yaml", refresh_prices=False, n_runs=3, include_macro=False)
 
     after = (
         store.count_recommendations(),
@@ -262,7 +262,7 @@ def test_result_is_persisted_and_listed(profile, monkeypatch):
                       sek_estimate=15000, confidence=0.85, thesis="good")]
     monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(actions, {"ALFA.ST": 3}))
 
-    result = whatif.generate_whatif("config_test.yaml", n_runs=3, include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, n_runs=3, include_macro=False)
     path = whatif.WHATIF_DIR / f"{result['id']}.json"
     assert path.exists()
     assert json.loads(path.read_text())["id"] == result["id"]
@@ -292,7 +292,7 @@ def test_capital_override_sets_the_placed_amount(profile, monkeypatch):
     seen = {}
     _capture_cfg(monkeypatch, seen)
 
-    result = whatif.generate_whatif("config_test.yaml", capital_sek=60000, include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, capital_sek=60000, include_macro=False)
 
     assert seen["cfg"].capital_sek == 60000
     # The synthetic book the model sees is the placed amount, not the profile's
@@ -306,7 +306,7 @@ def test_amount_defaults_to_profile_capital(profile, monkeypatch):
     seen = {}
     _capture_cfg(monkeypatch, seen)
 
-    result = whatif.generate_whatif("config_test.yaml", include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, include_macro=False)
 
     assert seen["cfg"].capital_sek == 100000
     assert result["deployment"]["placed_sek"] == 100000
@@ -317,7 +317,7 @@ def test_full_deploy_lifts_turnover_cap_and_cash_floor(profile, monkeypatch):
     seen = {}
     _capture_cfg(monkeypatch, seen)
 
-    result = whatif.generate_whatif("config_test.yaml", deploy_full=True, include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, deploy_full=True, include_macro=False)
 
     risk = seen["cfg"].risk
     assert risk.max_turnover_pct == 100.0
@@ -332,7 +332,7 @@ def test_staged_deploy_keeps_the_cold_start_cap(profile, monkeypatch):
     seen = {}
     _capture_cfg(monkeypatch, seen)
 
-    result = whatif.generate_whatif("config_test.yaml", deploy_full=False, include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, deploy_full=False, include_macro=False)
 
     risk = seen["cfg"].risk
     assert risk.max_turnover_pct == 100.0  # fixture's cold_start_turnover_pct
@@ -346,8 +346,8 @@ def test_full_deploy_does_not_mutate_the_profile_defaults(profile, monkeypatch):
     seen = {}
     _capture_cfg(monkeypatch, seen)
 
-    whatif.generate_whatif("config_test.yaml", deploy_full=True, include_macro=False)
-    whatif.generate_whatif("config_test.yaml", deploy_full=False, include_macro=False)
+    whatif.generate_whatif("config_test.yaml", refresh_prices=False, deploy_full=True, include_macro=False)
+    whatif.generate_whatif("config_test.yaml", refresh_prices=False, deploy_full=False, include_macro=False)
 
     assert seen["cfg"].risk.min_cash_pct == 5.0  # restored from the yaml, not leaked as 0
 
@@ -356,7 +356,7 @@ def test_full_deploy_does_not_mutate_the_profile_defaults(profile, monkeypatch):
 def test_non_positive_amount_rejected(profile, monkeypatch, amount):
     _capture_cfg(monkeypatch, {})
     with pytest.raises(ValueError, match="greater than 0"):
-        whatif.generate_whatif("config_test.yaml", capital_sek=amount, include_macro=False)
+        whatif.generate_whatif("config_test.yaml", refresh_prices=False, capital_sek=amount, include_macro=False)
 
 
 def test_amount_below_min_trade_size_rejected_before_spending_calls(profile, monkeypatch):
@@ -369,7 +369,7 @@ def test_amount_below_min_trade_size_rejected_before_spending_calls(profile, mon
 
     monkeypatch.setattr(whatif, "call_llm_consensus", _should_not_run)
     with pytest.raises(ValueError, match="below this profile's minimum trade size"):
-        whatif.generate_whatif("config_test.yaml", capital_sek=500, include_macro=False)
+        whatif.generate_whatif("config_test.yaml", refresh_prices=False, capital_sek=500, include_macro=False)
     assert called["n"] == 0
 
 
@@ -381,7 +381,7 @@ def test_undersized_amount_is_flagged_but_still_runs(profile, monkeypatch):
     seen = {}
     _capture_cfg(monkeypatch, seen)
 
-    result = whatif.generate_whatif("config_test.yaml", capital_sek=3000, include_macro=False)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, capital_sek=3000, include_macro=False)
 
     assert result["deployment"]["undersized"] is True
     assert result["deployment"]["comfortable_floor_sek"] == 5000
@@ -568,3 +568,65 @@ def test_job_reports_generation_failure(client, monkeypatch):
 
 def test_unknown_job_id_is_404(client):
     assert client.get("/whatif/api/jobs/deadbeef").status_code == 404
+
+
+# ── Candidate refresh ─────────────────────────────────────────────────────────
+
+def test_refresh_refetches_only_the_screened_candidates(profile, monkeypatch):
+    """The global profile is 17k tickers on a 2.5k weekly rotation — refreshing
+    the universe for one what-if is hours. Only what the model sees is refetched."""
+    seen = {}
+
+    def _fake_prices(tickers, store, lookback_days, force_refresh=False):
+        seen["tickers"] = [t.yahoo_ticker for t in tickers]
+        seen["force"] = force_refresh
+        return {t.yahoo_ticker: True for t in tickers}
+
+    monkeypatch.setattr(whatif, "fetch_and_cache_prices", _fake_prices)
+    monkeypatch.setattr(whatif, "fetch_and_cache_fundamentals", lambda *a, **k: 0)
+    monkeypatch.setattr(whatif, "fetch_and_cache_benchmark", lambda *a, **k: True)
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(
+        [Action(ticker="ALFA.ST", side="buy", target_weight_pct=10,
+                sek_estimate=10000, confidence=0.7, thesis="t")], {"ALFA.ST": 3}))
+
+    result = whatif.generate_whatif("config_test.yaml", include_macro=False)
+
+    assert seen["force"] is True, "a refresh that honours the cache is not a refresh"
+    # Never more than the candidates the model is shown.
+    assert 0 < len(seen["tickers"]) <= result["data"]["candidates_to_llm"]
+    assert result["data"]["refresh"]["refreshed"] is True
+    assert result["data"]["refresh"]["tickers"] == len(seen["tickers"])
+
+
+def test_refresh_can_be_skipped_for_a_cache_only_run(profile, monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("no fetching when refresh_prices=False")
+
+    monkeypatch.setattr(whatif, "fetch_and_cache_prices", _boom)
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(
+        [Action(ticker="ALFA.ST", side="buy", target_weight_pct=10,
+                sek_estimate=10000, confidence=0.7, thesis="t")], {"ALFA.ST": 3}))
+
+    result = whatif.generate_whatif(
+        "config_test.yaml", include_macro=False, refresh_prices=False
+    )
+    assert result["data"]["refresh"] == {"refreshed": False}
+
+
+def test_a_failed_refresh_does_not_take_the_run_down(profile, monkeypatch):
+    """Market data is best-effort here; a fetch outage should degrade to the
+    cached run, not lose the whole what-if."""
+    monkeypatch.setattr(whatif, "fetch_and_cache_prices",
+                        lambda tickers, *a, **k: {t.yahoo_ticker: True for t in tickers})
+    monkeypatch.setattr(whatif, "fetch_and_cache_fundamentals",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("yfinance down")))
+    monkeypatch.setattr(whatif, "fetch_and_cache_benchmark",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("yfinance down")))
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus(
+        [Action(ticker="ALFA.ST", side="buy", target_weight_pct=10,
+                sek_estimate=10000, confidence=0.7, thesis="t")], {"ALFA.ST": 3}))
+
+    result = whatif.generate_whatif("config_test.yaml", include_macro=False)
+    assert result["data"]["refresh"]["fundamentals_refreshed"] == 0
+    assert result["data"]["refresh"]["benchmark_ok"] is False
+    assert result["data"]["candidates_to_llm"] > 0

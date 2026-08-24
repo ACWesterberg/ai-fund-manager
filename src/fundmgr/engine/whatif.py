@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -30,9 +31,11 @@ from pathlib import Path
 import yaml
 
 from fundmgr.config import CONFIG_DIR, DATA_DIR, AppConfig, get_enabled_tickers, load_config
+from fundmgr.data.benchmark import fetch_and_cache_benchmark
+from fundmgr.data.fundamentals import fetch_and_cache_fundamentals
 from fundmgr.data.fundamentals import apply_to_features
 from fundmgr.data.news import attach_sentiment_to_features
-from fundmgr.data.prices import build_all_features
+from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
 from fundmgr.data.universe_selection import tickers_for_feature_build
 from fundmgr.engine.client import call_llm_consensus
@@ -40,6 +43,8 @@ from fundmgr.engine.prompt import build_prompt
 from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.state.models import PortfolioSnapshot
 from fundmgr.state.store import Store
+
+logger = logging.getLogger(__name__)
 
 WHATIF_DIR = DATA_DIR / "whatif"
 
@@ -122,6 +127,66 @@ def _build_features_from_cache(cfg: AppConfig, store: Store) -> tuple[dict, int]
     return features, len(tickers)
 
 
+def refresh_candidates(
+    cfg: AppConfig, store: Store, candidates: dict
+) -> tuple[dict, dict]:
+    """Refetch prices, fundamentals and news for the screened candidates only.
+
+    A what-if is triggered on demand and read from the profile's caches, which
+    the fund last filled on its weekly run — up to six days stale, and on the
+    global profiles far worse, since 17k tickers rotate through a 2.5k weekly
+    price budget over eight weeks. A portfolio built for "today" on prices from
+    a fortnight ago is not the thing the user asked for.
+
+    Refreshing the whole universe is not the answer either: on the global
+    profiles that is 17k fetches for one what-if. The screened candidates are
+    the only tickers the model is ever shown, so those are the ones refreshed —
+    around a hundred, seconds rather than hours.
+
+    The honest limit: candidates are *selected* on cached data, so a name that
+    would have screened in on fresh prices can still be missed. What the model
+    sees is current; what it was offered was chosen a few days ago.
+
+    Returns (features, report).
+    """
+    tickers = _universe_subset(cfg, set(candidates))
+    symbols = [t.yahoo_ticker for t in tickers]
+    report: dict = {"tickers": len(symbols)}
+    if not tickers:
+        return candidates, report
+
+    fetch_result = fetch_and_cache_prices(tickers, store, cfg.data.lookback_days, force_refresh=True)
+    report["prices_ok"] = sum(1 for v in fetch_result.values() if v)
+
+    try:
+        stale = store.get_stale_fundamentals_tickers(symbols, ttl_days=7)
+        report["fundamentals_refreshed"] = (
+            fetch_and_cache_fundamentals(symbols, store, ttl_days=7, max_workers=12) if stale else 0
+        )
+    except Exception as exc:
+        logger.warning("What-if: fundamentals refresh failed: %s", exc)
+        report["fundamentals_refreshed"] = 0
+
+    try:
+        report["benchmark_ok"] = bool(
+            fetch_and_cache_benchmark(store, cfg.benchmark, cfg.data.lookback_days, True)
+        )
+    except Exception as exc:
+        logger.warning("What-if: benchmark refresh failed: %s", exc)
+        report["benchmark_ok"] = False
+
+    # Rebuild features over the refreshed rows.
+    features = build_all_features(tickers, store, cfg, fetch_result)
+    apply_to_features(features, store)
+    since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+    attach_sentiment_to_features(features, store, since_date=since_news)
+    return features, report
+
+
+def _universe_subset(cfg: AppConfig, symbols: set[str]) -> list:
+    return [t for t in get_enabled_tickers(cfg.universe_path) if t.yahoo_ticker in symbols]
+
+
 def _freshness(features: dict) -> dict:
     ages = sorted(f.data_age_trading_days for f in features.values())
     if not ages:
@@ -156,6 +221,7 @@ def generate_whatif(
     include_macro: bool = True,
     capital_sek: float | None = None,
     deploy_full: bool = False,
+    refresh_prices: bool = True,
 ) -> dict:
     """
     Generate a hypothetical from-scratch portfolio for one fund profile.
@@ -167,6 +233,11 @@ def generate_whatif(
     own capital). deploy_full puts the whole amount to work in this one run —
     it lifts the staged-entry turnover cap to 100% and drops the cash floor to
     zero, so the result is a fully-invested book rather than a first tranche.
+
+    refresh_prices refetches prices, fundamentals and news for the screened
+    candidates before the model sees them, so an on-demand what-if is built on
+    today's market rather than the profile's last weekly run. Turn it off for a
+    fast, cache-only run.
 
     Blocking — call from a background thread in the web layer.
     """
@@ -213,6 +284,17 @@ def generate_whatif(
 
     pinned = set(cfg.screener.pinned_tickers)
     screened_features, _ = screen(features, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned)
+
+    refresh_report: dict = {"refreshed": False}
+    if refresh_prices:
+        fresh, refresh_report = refresh_candidates(cfg, store, screened_features)
+        refresh_report["refreshed"] = True
+        if fresh:
+            # Re-screen on the refreshed numbers so ordering and any staleness
+            # gate reflect today, not the fund's last weekly run.
+            screened_features, _ = screen(
+                fresh, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned
+            )
 
     macro_block = ""
     if include_macro:
@@ -328,6 +410,9 @@ def generate_whatif(
             "features_from_cache": len(features),
             "candidates_to_llm": len(screened_features),
             "macro_included": bool(macro_block),
+            # What was refetched for this run, so a portfolio built on stale
+            # caches is never mistaken for one built on today's market.
+            "refresh": refresh_report,
             **_freshness(screened_features),
         },
     }

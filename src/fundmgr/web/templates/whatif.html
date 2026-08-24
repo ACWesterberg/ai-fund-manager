@@ -119,6 +119,15 @@
                class="rounded bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
         Include fresh macro context
       </label>
+      <label class="flex items-center gap-2 mb-3 text-sm text-slate-300 select-none cursor-pointer">
+        <input id="f-refresh" type="checkbox" checked
+               class="rounded bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
+        <span>Refetch candidate prices
+          <span class="block text-[10px] text-slate-500 leading-snug">
+            Otherwise the run uses this profile's caches, filled at its last weekly run.
+          </span>
+        </span>
+      </label>
       <button id="f-submit" type="submit"
               class="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed
                      text-white text-sm font-semibold rounded-lg px-4 py-2 transition-colors">
@@ -393,6 +402,7 @@
       include_macro: $('f-macro').checked,
       capital_sek: Number.isFinite(amount) && amount > 0 ? amount : null,
       deploy_full: document.querySelector('input[name="deploy"]:checked').value === 'full',
+      refresh_prices: $('f-refresh').checked,
     };
     setBusy(true, 'Starting…');
     try {

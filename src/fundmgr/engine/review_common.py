@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from fundmgr.config import AppConfig
 from fundmgr.engine.client import LLMError, call_llm
-from fundmgr.state.store import Store
+from fundmgr.state.store import ACTIONABLE_VERDICTS, Store
 
 
 def technicals_block(ticker: str) -> tuple[str, float | None]:
@@ -164,18 +164,134 @@ def action_for_verdict(verdict: str) -> str:
     return _ACTION_FOR_VERDICT.get(verdict, "hold")
 
 
-def log_review(review, store: Store, source: str, native_price: float | None) -> str | None:
-    """Record a review verdict as an evaluable decision. Returns the run_id."""
-    if native_price is None:
-        return None      # the evaluator skips priceless outcomes; don't write one
-    return store.log_review_decision(
+def log_review(
+    review,
+    store: Store,
+    source: str,
+    native_price: float | None,
+    votes: dict[str, int] | None = None,
+    n_samples: int | None = None,
+    old_target_pct: float | None = None,
+) -> str:
+    """Record a review verdict, and return the id it is filed under.
+
+    Two writes, for two different readers. decision_outcomes gets a buy/sell/hold
+    row so the call is scored weeks later like any other. position_reviews gets
+    the verdict as given — how much to sell, where the target moved, the vote
+    behind it — because that is what has to reach a human before they can act,
+    and a scoring row cannot carry it.
+
+    Only the scoring row needs a price: an outcome with nothing to measure from
+    is skipped, but the instruction still has to be recorded and shown.
+    """
+    review_id = store.record_review(
         ticker=review.ticker,
-        action=action_for_verdict(review.recommendation),
-        confidence=review.confidence,
-        thesis=f"[{source}: {review.recommendation.upper()}] {review.rationale}",
-        price_at_decision=native_price,
         source=source,
+        verdict=review.recommendation,
+        confidence=review.confidence,
+        trim_pct=getattr(review, "trim_pct", None),
+        votes=votes,
+        n_samples=n_samples,
+        old_target_pct=old_target_pct,
+        new_target_pct=getattr(review, "new_take_profit_pct", None),
+        price_at_review=native_price,
+        what_changed=review.what_changed,
+        rationale=review.rationale,
     )
+    if native_price is not None:
+        store.log_review_decision(
+            ticker=review.ticker,
+            action=action_for_verdict(review.recommendation),
+            confidence=review.confidence,
+            thesis=f"[{source}: {review.recommendation.upper()}] {review.rationale}",
+            price_at_decision=native_price,
+            source=source,
+        )
+    return review_id
+
+
+# What each verdict asks of the person reading it. The fund holds no broker
+# connection: every one of these is a manual order, which is exactly what the
+# Telegram alert left implicit and the dashboard did not say at all.
+MANUAL_NOTE = "You place the order yourself — the fund never trades for you."
+
+
+def needs_trade(verdict: str) -> bool:
+    """Whether the verdict asks the human to do anything in their broker."""
+    return verdict in ACTIONABLE_VERDICTS
+
+
+def _size_hint(shares: float | None, sek: float | None) -> str:
+    bits = []
+    if shares:
+        bits.append(f"{shares:,.0f} share{'s' if round(shares) != 1 else ''}")
+    if sek:
+        bits.append(f"≈{sek:,.0f} SEK")
+    return f" — about {', '.join(bits)}" if bits else ""
+
+
+def instruction(
+    verdict: str,
+    trim_pct: float | None = None,
+    new_target_pct: float | None = None,
+    shares: float | None = None,
+    sek: float | None = None,
+) -> str:
+    """One imperative sentence: what to do about this position, in order terms.
+
+    `shares`/`sek` are optional — Telegram has no position maths to hand, the
+    dashboard does — so the same sentence reads correctly with or without them.
+    """
+    verdict = (verdict or "").lower()
+    if verdict == "raise":
+        tail = f", target now +{new_target_pct:.0f}%" if new_target_pct else ""
+        return f"Nothing to place: keep the position{tail}."
+    if verdict == "hold":
+        return "Nothing to place: keep the position and its current level."
+    if verdict == "trim":
+        head = f"Sell {trim_pct:.0f}% of the position" if trim_pct else "Sell part of the position"
+    elif verdict in ("exit", "sell"):
+        head = "Sell the whole position"
+    elif verdict == "add":
+        return "Buy more of this position" + _size_hint(shares, sek) + "."
+    else:
+        return ""
+    return head + _size_hint(shares, sek) + "."
+
+
+def todo_line(
+    verdict: str,
+    trim_pct: float | None = None,
+    new_target_pct: float | None = None,
+    old_target_pct: float | None = None,
+    shares: float | None = None,
+    sek: float | None = None,
+) -> str:
+    """The whole answer to "what is it telling me to do": the order, what happens
+    to the remainder, and — only where there is an order — who places it."""
+    parts = [instruction(verdict, trim_pct, new_target_pct, shares, sek),
+             follow_up(verdict, trim_pct, new_target_pct, old_target_pct)]
+    if needs_trade(verdict):
+        parts.append(MANUAL_NOTE)
+    return " ".join(p for p in parts if p)
+
+
+def follow_up(
+    verdict: str,
+    trim_pct: float | None = None,
+    applied_target_pct: float | None = None,
+    old_target_pct: float | None = None,
+) -> str:
+    """What happens to what is left, once the order above is filled."""
+    if (verdict or "").lower() != "trim":
+        return ""
+    keep = f"Keep the other {100 - trim_pct:.0f}%" if trim_pct else "Keep the remainder"
+    if applied_target_pct:
+        was = f" (was +{old_target_pct:.0f}%)" if old_target_pct else ""
+        return f"{keep}; its target is now +{applied_target_pct:.0f}%{was}."
+    # No level moved: a stop-review trim often has no take-profit to speak of,
+    # and "at its current target" would invent one.
+    return f"{keep} as it is."
 
 
 def votes_str(votes: dict[str, int], n: int) -> str:

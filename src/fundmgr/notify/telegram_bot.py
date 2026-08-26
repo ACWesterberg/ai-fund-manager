@@ -568,6 +568,18 @@ async def cmd_target(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
     await _run_cli_bg(update, context, "review-target", "--no-notify", timeout=REVIEW_TIMEOUT)
 
 
+async def cmd_decisions(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/decisions [all] — review verdicts still waiting on an order from you.
+
+    A stop or target review's alert scrolls away; the instruction in it does not
+    stop being owed. This reads the same list back on demand.
+    """
+    args = context.args or []
+    extra = ["--all"] if args and args[0].lower() in ("all", "--all") else []
+    output = _run_cli("decisions", *extra, timeout=30)
+    await _send(update, output)
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -582,6 +594,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
         "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
+        "/decisions [all] — review verdicts still waiting on an order from you\n"
         "/setcash AMOUNT — correct the cash balance (SEK)\n"
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"
@@ -924,6 +937,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
     app.add_handler(CommandHandler("review",   cmd_review))
     app.add_handler(CommandHandler("target",   cmd_target))
+    app.add_handler(CommandHandler("decisions", cmd_decisions))
     app.add_handler(CommandHandler("setcash",  cmd_setcash))
     app.add_handler(CommandHandler("plist",    cmd_plist))
     app.add_handler(CommandHandler("ptarget",  cmd_ptarget))

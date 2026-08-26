@@ -1167,6 +1167,74 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
             click.echo("\n  (sent to Telegram)")
 
 
+@cli.command("decisions")
+@click.option("--all", "show_all", is_flag=True,
+              help="Include reviews already actioned, dismissed or superseded.")
+@click.option("--done", "done_ticker", default=None, metavar="TICKER",
+              help="Mark that name's open decision as actioned (you placed the order).")
+@click.option("--dismiss", "dismiss_ticker", default=None, metavar="TICKER",
+              help="Mark that name's open decision as not being acted on.")
+def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | None):
+    """Review verdicts still waiting on an order from you.
+
+    A stop or take-profit review decides — EXIT, SELL, TRIM, ADD — and then needs
+    a human to place the trade. This is the list of those that haven't been
+    ticked off, the same one the dashboard shows.
+    """
+    from fundmgr.web.views import review_row
+
+    cfg, store = _get_store()
+    positions = {p.ticker: p for p in store.get_positions()}
+
+    for ticker, status in ((done_ticker, "done"), (dismiss_ticker, "dismissed")):
+        if not ticker:
+            continue
+        tk = ticker.upper()
+        openrows = store.get_open_reviews()
+        match = next(
+            (r for r in openrows if r["ticker"] == tk
+             or r["ticker"].split(".")[0] == tk
+             or r["ticker"].startswith(tk + ".")),
+            None,
+        )
+        if match is None:
+            waiting = ", ".join(r["ticker"] for r in openrows) or "(none)"
+            click.echo(f"No open decision for {tk}. Waiting: {waiting}", err=True)
+            sys.exit(1)
+        store.resolve_review(match["review_id"], status)
+        click.echo(f"{match['ticker']}: {match['verdict'].upper()} marked {status}.")
+
+    def _pos(ticker: str) -> dict | None:
+        p = positions.get(ticker)
+        # No price: a share count is the part that is certain offline, and a
+        # SEK figure taken from cost basis would be wrong for a name at target.
+        return None if p is None else {
+            "ticker": p.ticker, "name": p.ticker, "shares": p.shares,
+            "current_price": None,
+        }
+
+    raw = (store.get_recent_reviews(limit=20) if show_all
+           else store.get_open_reviews(tickers=list(positions)))
+    rows = [review_row(r, _pos(r["ticker"])) for r in raw]
+    if not rows:
+        click.echo("Nothing waiting — every review verdict has been actioned.")
+        return
+
+    click.echo(f"\n─── {cfg.display_name} — decisions ─────────────────────────")
+    for r in rows:
+        tail = f"  [{r['status']}]" if show_all else ""
+        click.echo(f"\n  {r['verdict_label']}  {r['ticker']}  ({r['source_label']}, {r['when']}){tail}")
+        click.echo(f"    {r['instruction']}")
+        if r["follow_up"]:
+            click.echo(f"    {r['follow_up']}")
+        if r["target_line"]:
+            click.echo(f"    {r['target_line']}")
+        if r["rationale"]:
+            click.echo(f"    Why: {r['rationale']}")
+    if not show_all:
+        click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
+
+
 @cli.command("check-news")
 @click.option("--auto-run/--no-auto-run", default=True, show_default=True,
               help="Automatically trigger 'fund run' when a high-severity event fires")

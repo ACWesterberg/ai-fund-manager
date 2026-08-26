@@ -22,6 +22,7 @@ from fundmgr.engine.review_common import (
     majority,
     run_consensus,
     technicals_block,
+    todo_line,
     votes_str,
 )
 from fundmgr.engine.schema import StopReview
@@ -167,7 +168,8 @@ def review_position(
     system, user, native_price = built
     consensus, votes = _vote(run_consensus(system, user, cfg, StopReview, "stop-review"))
     if log_decision:
-        log_review(consensus, store, "stop_review", native_price)
+        log_review(consensus, store, "stop_review", native_price,
+                   votes=votes, n_samples=max(1, cfg.llm.n_samples))
     return consensus, votes
 
 
@@ -179,6 +181,7 @@ def format_review_text(r: StopReview, votes: dict[str, int], n: int) -> str:
     return (
         f"{_REC_EMOJI.get(r.recommendation,'')} STOP REVIEW {r.ticker}: "
         f"{r.recommendation.upper()}{trim}  (conf {r.confidence:.2f}; consensus {votes_str(votes, n)})\n"
+        f"  Do: {todo_line(r.recommendation, r.trim_pct)}\n"
         f"  What changed: {r.what_changed}\n"
         f"  Rationale: {r.rationale}"
     )
@@ -189,6 +192,7 @@ def format_review_html(r: StopReview, votes: dict[str, int], n: int) -> str:
     return (
         f"{_REC_EMOJI.get(r.recommendation,'')} <b>Stop review {html.escape(r.ticker)}: "
         f"{r.recommendation.upper()}{trim}</b>  <i>(conf {r.confidence:.2f}; {votes_str(votes, n)})</i>\n"
+        f"<i>Do:</i> {html.escape(todo_line(r.recommendation, r.trim_pct))}\n"
         f"<i>Changed:</i> {html.escape(r.what_changed)}\n"
         f"<i>Why:</i> {html.escape(r.rationale)}"
     )

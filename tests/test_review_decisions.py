@@ -90,10 +90,15 @@ def test_a_review_is_written_as_a_decision(store):
     assert "SELL" in rows[0]["thesis"]
 
 
-def test_a_priceless_review_is_not_logged(store):
-    """The evaluator skips outcomes with no decision price — don't write a dud."""
-    assert log_review(_target(), store, "target_review", native_price=None) is None
+def test_a_priceless_review_is_not_scored(store):
+    """The evaluator skips outcomes with no decision price — don't write a dud.
+
+    The verdict is still recorded: an instruction the human has to act on cannot
+    be dropped because there was no price to score it against later.
+    """
+    review_id = log_review(_target(), store, "target_review", native_price=None)
     assert store.get_decisions_for_ticker("TRUE-B.ST") == []
+    assert [r["review_id"] for r in store.get_recent_reviews()] == [review_id]
 
 
 def test_the_logged_price_is_the_one_passed_in(store):

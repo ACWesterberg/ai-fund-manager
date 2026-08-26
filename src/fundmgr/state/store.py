@@ -167,6 +167,39 @@ CREATE TABLE IF NOT EXISTS position_alerts (
     PRIMARY KEY (ticker, alert_date, kind)
 );
 
+-- Single-position review verdicts (stop breach / take-profit hit), kept in full.
+-- decision_outcomes records these too, but only as an action + thesis string for
+-- scoring: it cannot say how much to sell, where the target moved to, or whether
+-- the human has acted yet. Without that the dashboard had no way to show a
+-- verdict at all, and a TRIM that reached Telegram and nowhere else was invisible
+-- the moment the notification was swiped away.
+CREATE TABLE IF NOT EXISTS position_reviews (
+    review_id       TEXT PRIMARY KEY,   -- {date}-{source}-{TICKER}: one per name per day
+    ticker          TEXT NOT NULL,
+    source          TEXT NOT NULL,      -- stop_review | target_review
+    verdict         TEXT NOT NULL,      -- exit | sell | trim | raise | hold | add
+    confidence      REAL,
+    trim_pct        REAL,               -- % of the position the verdict says to sell
+    votes_json      TEXT,               -- {"trim": 3} — the consensus behind it
+    n_samples       INTEGER,
+    old_target_pct  REAL,               -- take-profit level in force when it fired
+    new_target_pct  REAL,               -- level the review proposed
+    applied_target_pct REAL,            -- level actually written back (NULL = none was)
+    price_at_review REAL,               -- native currency, as decision_outcomes stores it
+    what_changed    TEXT,
+    rationale       TEXT,
+    created_at      TEXT NOT NULL,
+    -- open      = needs a trade from the human, still outstanding
+    -- done      = the human said they acted on it
+    -- dismissed = the human said they will not
+    -- noted     = nothing to execute (RAISE/HOLD); kept for the record only
+    -- superseded= a later review of the same name replaced it
+    status          TEXT NOT NULL DEFAULT 'open',
+    resolved_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_position_reviews_open
+    ON position_reviews (status, created_at);
+
 -- Small key-value store for fund-level flags (e.g. one-shot reminders).
 CREATE TABLE IF NOT EXISTS app_meta (
     key     TEXT PRIMARY KEY,
@@ -178,6 +211,21 @@ CREATE TABLE IF NOT EXISTS app_meta (
 # Regime bucket for runs whose snapshot predates the key being asked about —
 # distinct from None, which means the run carried none of whatever it is.
 NOT_RECORDED = "(not recorded)"
+
+
+# Verdicts that only a human can carry out — the review engine never trades.
+# RAISE and HOLD change the plan without asking anything of anyone.
+ACTIONABLE_VERDICTS = frozenset({"exit", "sell", "trim", "add"})
+
+
+def review_run_id(ticker: str, source: str, date: str) -> str:
+    """The id a review is filed under — the same key in decision_outcomes and
+    position_reviews, so the record and the score refer to one another.
+
+    The day is the unit: re-reviewing a name on the same day overwrites, rather
+    than stacking a second verdict on top of the first.
+    """
+    return f"{date}-{source}-{ticker.upper()}"
 
 
 class Store:
@@ -884,7 +932,7 @@ class Store:
         UNIQUE(run_id, ticker) constraint makes the day the unit of record.
         """
         date = decision_date or datetime.utcnow().strftime("%Y-%m-%d")
-        run_id = f"{date}-{source}-{ticker.upper()}"
+        run_id = review_run_id(ticker, source, date)
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO decision_outcomes "
@@ -897,6 +945,138 @@ class Store:
                  thesis, source, date),
             )
         return run_id
+
+    # ── Position reviews (what a stop / target verdict actually asks of you) ──
+
+    def record_review(
+        self,
+        ticker: str,
+        source: str,
+        verdict: str,
+        confidence: float | None = None,
+        trim_pct: float | None = None,
+        votes: dict[str, int] | None = None,
+        n_samples: int | None = None,
+        old_target_pct: float | None = None,
+        new_target_pct: float | None = None,
+        price_at_review: float | None = None,
+        what_changed: str = "",
+        rationale: str = "",
+        review_date: str | None = None,
+    ) -> str:
+        """Store a review verdict in full and return its review_id.
+
+        A verdict that asks the human for a trade lands as 'open' and stays on
+        the dashboard until they say what they did with it; RAISE and HOLD land
+        as 'noted', because there is nothing to act on. Any earlier open review
+        of the same name is superseded — the newest read of a position is the
+        one to act on, and two contradictory instructions is worse than none.
+        """
+        date = review_date or datetime.utcnow().strftime("%Y-%m-%d")
+        ticker = ticker.upper()
+        review_id = review_run_id(ticker, source, date)
+        status = "open" if verdict in ACTIONABLE_VERDICTS else "noted"
+        now = datetime.utcnow().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE position_reviews SET status = 'superseded', resolved_at = ? "
+                "WHERE ticker = ? AND status = 'open' AND review_id != ?",
+                (now, ticker, review_id),
+            )
+            conn.execute(
+                "INSERT INTO position_reviews "
+                "(review_id, ticker, source, verdict, confidence, trim_pct, votes_json, "
+                " n_samples, old_target_pct, new_target_pct, price_at_review, what_changed, "
+                " rationale, created_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(review_id) DO UPDATE SET "
+                "verdict = excluded.verdict, confidence = excluded.confidence, "
+                "trim_pct = excluded.trim_pct, votes_json = excluded.votes_json, "
+                "n_samples = excluded.n_samples, old_target_pct = excluded.old_target_pct, "
+                "new_target_pct = excluded.new_target_pct, "
+                "price_at_review = excluded.price_at_review, "
+                "what_changed = excluded.what_changed, rationale = excluded.rationale, "
+                "created_at = excluded.created_at, status = excluded.status, "
+                "resolved_at = NULL",
+                (review_id, ticker, source, verdict, confidence, trim_pct,
+                 json.dumps(votes) if votes else None, n_samples, old_target_pct,
+                 new_target_pct, price_at_review, what_changed, rationale, now, status),
+            )
+        return review_id
+
+    def set_review_applied_target(
+        self, review_id: str, old_pct: float | None, new_pct: float
+    ) -> None:
+        """Record the take-profit level a review actually wrote back.
+
+        Separate from new_target_pct, which is only what the review proposed: a
+        proposal below the standing level is refused, and the dashboard has to be
+        able to tell "target moved" from "target argued for and declined".
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE position_reviews SET applied_target_pct = ?, old_target_pct = "
+                "COALESCE(?, old_target_pct) WHERE review_id = ?",
+                (new_pct, old_pct, review_id),
+            )
+
+    def latest_review_id(self, ticker: str, source: str) -> str | None:
+        """The most recent review of this name from this source, if there is one."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT review_id FROM position_reviews WHERE ticker = ? AND source = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (ticker.upper(), source),
+            ).fetchone()
+        return row["review_id"] if row else None
+
+    def get_open_reviews(self, tickers: list[str] | None = None) -> list[dict]:
+        """Review verdicts still waiting on a trade from the human, newest first.
+
+        `tickers` restricts to names still held — an EXIT that was carried out
+        leaves no position behind, so the instruction should stop being shown
+        whether or not anyone remembered to tick it off.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM position_reviews WHERE status = 'open' "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+        held = {t.upper() for t in tickers} if tickers is not None else None
+        return [
+            self._review_row(r) for r in rows
+            if held is None or r["ticker"] in held
+        ]
+
+    def get_recent_reviews(self, limit: int = 20) -> list[dict]:
+        """Every review verdict, newest first — the log behind the open ones."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM position_reviews ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._review_row(r) for r in rows]
+
+    def resolve_review(self, review_id: str, status: str = "done") -> bool:
+        """Close an open review. Returns False if there was nothing open to close."""
+        if status not in ("done", "dismissed"):
+            raise ValueError(f"unknown review status: {status}")
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE position_reviews SET status = ?, resolved_at = ? "
+                "WHERE review_id = ? AND status = 'open'",
+                (status, datetime.utcnow().isoformat(), review_id),
+            )
+            return cur.rowcount > 0
+
+    @staticmethod
+    def _review_row(r: sqlite3.Row) -> dict:
+        d = dict(r)
+        try:
+            d["votes"] = json.loads(d.pop("votes_json") or "{}")
+        except (TypeError, ValueError):
+            d["votes"] = {}
+        return d
 
     def get_evaluated_outcomes(self) -> list["DecisionOutcome"]:
         """Return all retrospectively evaluated outcomes with their run dates (optimizer training data).

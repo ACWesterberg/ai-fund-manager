@@ -23,6 +23,7 @@ from fundmgr.engine.review_common import (
     majority,
     run_consensus,
     technicals_block,
+    todo_line,
     votes_str,
 )
 from fundmgr.engine.schema import TargetReview
@@ -180,7 +181,13 @@ def review_position(
     system, user, native_price = built
     consensus, votes = _vote(run_consensus(system, user, cfg, TargetReview, "target-review"))
     if log_decision:
-        log_review(consensus, store, "target_review", native_price)
+        log_review(
+            consensus, store, "target_review", native_price,
+            votes=votes, n_samples=max(1, cfg.llm.n_samples),
+            # The level that fired, captured before apply_new_target moves it —
+            # afterwards there is nothing left to say what the target used to be.
+            old_target_pct=store.get_effective_stops().get(ticker, {}).get("take_profit_pct"),
+        )
     return consensus, votes
 
 
@@ -209,6 +216,11 @@ def apply_new_target(review: TargetReview, store: Store) -> tuple[float, float] 
         stop_pct=prior.get("stop_pct"),
         take_profit_pct=new_pct,
     )
+    # Tie the move to the review that made it, so the dashboard can show a target
+    # that actually shifted rather than one that was merely argued for.
+    review_id = store.latest_review_id(review.ticker, "target_review")
+    if review_id:
+        store.set_review_applied_target(review_id, old_pct, new_pct)
     return (old_pct, new_pct) if old_pct is not None else (0.0, new_pct)
 
 
@@ -229,6 +241,17 @@ def _detail(r: TargetReview, moved: tuple[float, float] | None) -> str:
     return ("  " + ", ".join(bits)) if bits else ""
 
 
+def _todo(r: TargetReview, moved: tuple[float, float] | None) -> str:
+    """The order to place, and what becomes of what is left after placing it.
+
+    The verdict alone reads as commentary — "TRIM, target +50% → +65%" says what
+    was concluded, not what anyone should now do. This is the sentence that does.
+    """
+    new_tp = moved[1] if moved else None
+    old_tp = moved[0] if moved else None
+    return todo_line(r.recommendation, r.trim_pct, new_tp, old_tp)
+
+
 def format_review_text(
     r: TargetReview, votes: dict[str, int], n: int, moved: tuple[float, float] | None = None
 ) -> str:
@@ -236,6 +259,7 @@ def format_review_text(
         f"{_REC_EMOJI.get(r.recommendation,'')} TARGET REVIEW {r.ticker}: "
         f"{r.recommendation.upper()}{_detail(r, moved)}  "
         f"(conf {r.confidence:.2f}; consensus {votes_str(votes, n)})\n"
+        f"  Do: {_todo(r, moved)}\n"
         f"  What changed: {r.what_changed}\n"
         f"  Rationale: {r.rationale}"
     )
@@ -248,6 +272,7 @@ def format_review_html(
         f"{_REC_EMOJI.get(r.recommendation,'')} <b>Target review {html.escape(r.ticker)}: "
         f"{r.recommendation.upper()}{html.escape(_detail(r, moved))}</b>  "
         f"<i>(conf {r.confidence:.2f}; {votes_str(votes, n)})</i>\n"
+        f"<i>Do:</i> {html.escape(_todo(r, moved))}\n"
         f"<i>Changed:</i> {html.escape(r.what_changed)}\n"
         f"<i>Why:</i> {html.escape(r.rationale)}"
     )

@@ -1215,6 +1215,40 @@ class Store:
                 (verdict, evidence, outcome_id),
             )
 
+    def get_thesis_coverage(self) -> dict:
+        """Where evaluated outcomes are lost on the way to a thesis verdict.
+
+        Two filters stand in the way — a recorded thesis, and news in the
+        holding window to judge it against — and a verdict-only readout cannot
+        tell "never audited" from "audited and inconclusive". They need
+        different fixes: the first is about what the decision recorded, the
+        second about what the news cache covers.
+
+        Derived from the table rather than stored per run, so it reads back over
+        all history including outcomes evaluated before this existed.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS evaluated, "
+                "SUM(CASE WHEN TRIM(COALESCE(thesis, '')) <> '' THEN 1 ELSE 0 END) AS with_thesis, "
+                "SUM(CASE WHEN thesis_verdict IS NOT NULL THEN 1 ELSE 0 END) AS audited "
+                "FROM decision_outcomes WHERE outperformed IS NOT NULL "
+                "AND (source IS NULL OR source = 'run')"
+            ).fetchone()
+
+        evaluated = row["evaluated"] or 0
+        with_thesis = row["with_thesis"] or 0
+        audited = row["audited"] or 0
+        return {
+            "evaluated": evaluated,
+            "with_thesis": with_thesis,
+            "audited": audited,
+            # A thesis that was never audited had no news in its window — that
+            # is the only other filter, so the subtraction is exact.
+            "no_evidence": with_thesis - audited,
+            "no_thesis": evaluated - with_thesis,
+        }
+
     def get_thesis_stats(self) -> dict:
         """Cross-tab of whether the reasoning held against whether the price obliged.
 

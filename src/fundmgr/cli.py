@@ -237,11 +237,14 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     if evaluated:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
-        verdicts = verify_theses(store, evaluated, cfg, lookback_days=horizon)
-        if verdicts:
-            click.echo("\n[*] Thesis check: " + ", ".join(
-                f"{n} {v}" for v, n in sorted(verdicts.items())
-            ))
+        funnel = verify_theses(store, evaluated, cfg, lookback_days=horizon)
+        verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
+        click.echo(
+            f"\n[*] Thesis check: {funnel['outcomes']} outcome(s) → "
+            f"{funnel['with_thesis']} with a thesis → "
+            f"{funnel['with_evidence']} with news to judge → "
+            f"{verdicts or 'no verdicts'}"
+        )
         stat_learnings = generate_learnings(store, horizon_days=horizon)
         qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
         total_learnings = len(stat_learnings) + len(qual_learnings)
@@ -1628,7 +1631,16 @@ def thesis_report():
     cfg, store = _get_store()
     stats = store.get_thesis_stats()
 
+    cov = store.get_thesis_coverage()
     click.echo(f"\n─── Thesis vs outcome — {cfg.display_name} ───────────")
+    click.echo(f"\n  Coverage: {cov['evaluated']} evaluated outcome(s)")
+    click.echo(f"    no thesis recorded:      {cov['no_thesis']}")
+    click.echo(f"    thesis, no news to judge: {cov['no_evidence']}")
+    click.echo(f"    audited:                 {cov['audited']}")
+    if cov["no_evidence"] > cov["audited"]:
+        click.echo("    ⚠ most theses are lost to missing news, not to being")
+        click.echo("      unfalsifiable — widen what the news fetch covers.")
+
     if not stats["n"]:
         click.echo("  No checked theses yet. Verdicts are written when outcomes")
         click.echo("  mature (~4 weeks after each run).")

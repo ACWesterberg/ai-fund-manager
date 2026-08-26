@@ -1420,11 +1420,13 @@ def track_portfolio(slug: str) -> list[str]:
     horizon = AppConfig().evaluation_horizon_days
     evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
     if evaluated:
-        verdicts = verify_theses(store, evaluated, lookback_days=horizon)
-        if verdicts:
-            log.append("Thesis check: " + ", ".join(
-                f"{n} {v}" for v, n in sorted(verdicts.items())
-            ))
+        funnel = verify_theses(store, evaluated, lookback_days=horizon)
+        verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
+        log.append(
+            f"Thesis check: {funnel['outcomes']} outcome(s) → "
+            f"{funnel['with_thesis']} with a thesis → "
+            f"{funnel['with_evidence']} with news → {verdicts or 'no verdicts'}"
+        )
         stat = generate_learnings(store, horizon_days=horizon)
         # A paper book has no fund config of its own: the lesson writer comes
         # from the default config, the book's own benchmark from its meta.

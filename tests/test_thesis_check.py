@@ -60,8 +60,8 @@ def test_verdict_is_persisted_and_counted(store, monkeypatch):
     _news(store, "AAA.ST", "Q3 order intake up 18% year on year")
     _patch_call(monkeypatch, _reply(("AAA.ST", "held", "Q3 order intake up 18%")))
 
-    counts = verify_theses(store, [outcome], cfg=AppConfig())
-    assert counts == {"held": 1}
+    funnel = verify_theses(store, [outcome], cfg=AppConfig())
+    assert funnel["verdicts"] == {"held": 1}
 
     stored = [o for o in store.get_all_outcomes() if o.ticker == "AAA.ST"][0]
     assert stored.thesis_verdict == "held"
@@ -102,7 +102,7 @@ def test_no_news_means_no_verdict(store, monkeypatch):
 
     monkeypatch.setattr(thesis_check, "_call_for_checks", _fake)
 
-    assert verify_theses(store, [outcome], cfg=AppConfig()) == {}
+    assert verify_theses(store, [outcome], cfg=AppConfig())["verdicts"] == {}
     assert called["n"] == 0
     stored = [o for o in store.get_all_outcomes() if o.ticker == "AAA.ST"][0]
     assert stored.thesis_verdict is None
@@ -112,7 +112,7 @@ def test_decisions_without_a_thesis_are_not_judged(store, monkeypatch):
     outcome = _seed(store, thesis="")
     _news(store, "AAA.ST", "Something happened")
     _patch_call(monkeypatch, _reply(("AAA.ST", "held", "x")))
-    assert verify_theses(store, [outcome], cfg=AppConfig()) == {}
+    assert verify_theses(store, [outcome], cfg=AppConfig())["verdicts"] == {}
 
 
 def test_verdicts_for_tickers_outside_the_batch_are_dropped(store, monkeypatch):
@@ -120,7 +120,7 @@ def test_verdicts_for_tickers_outside_the_batch_are_dropped(store, monkeypatch):
     _news(store, "AAA.ST", "Orders up")
     _patch_call(monkeypatch, _reply(("ZZZ.ST", "held", "not in this batch")))
 
-    assert verify_theses(store, [outcome], cfg=AppConfig()) == {}
+    assert verify_theses(store, [outcome], cfg=AppConfig())["verdicts"] == {}
 
 
 def test_verification_survives_an_llm_failure(store, monkeypatch):
@@ -128,7 +128,7 @@ def test_verification_survives_an_llm_failure(store, monkeypatch):
     _news(store, "AAA.ST", "Orders up")
     from fundmgr.engine import thesis_check
     monkeypatch.setattr(thesis_check, "_call_for_checks", lambda cfg, msg, horizon: None)
-    assert verify_theses(store, [outcome], cfg=AppConfig()) == {}
+    assert verify_theses(store, [outcome], cfg=AppConfig())["verdicts"] == {}
 
 
 def test_review_message_keeps_each_company_to_its_own_evidence():
@@ -215,3 +215,62 @@ def test_the_fund_s_horizon_reaches_the_auditor(store, monkeypatch):
     cfg.evaluation_horizon_days = 90
     verify_theses(store, [outcome], cfg=cfg)
     assert captured["horizon"] == 90
+
+
+# ── Funnel instrumentation ────────────────────────────────────────────────────
+
+def test_funnel_separates_no_thesis_from_no_evidence(store, monkeypatch):
+    """"Never audited" and "audited, inconclusive" need different fixes; a
+    verdict-only readout could not tell them apart."""
+    outcome = _seed(store)
+    no_thesis = DecisionOutcome(run_id="r1", ticker="BBB.ST", action="buy",
+                                thesis="", decision_date="2026-07-01", id=99)
+    _news(store, "AAA.ST", "Orders up 18%")
+    _patch_call(monkeypatch, _reply(("AAA.ST", "held", "orders up 18%")))
+
+    funnel = verify_theses(store, [outcome, no_thesis], cfg=AppConfig())
+    assert funnel["outcomes"] == 2
+    assert funnel["with_thesis"] == 1      # the empty-thesis row is dropped here
+    assert funnel["with_evidence"] == 1
+    assert funnel["verdicts"] == {"held": 1}
+
+
+def test_funnel_reports_theses_lost_to_missing_news(store, monkeypatch):
+    outcome = _seed(store)  # has a thesis, no news seeded
+    from fundmgr.engine import thesis_check
+    monkeypatch.setattr(thesis_check, "_call_for_checks",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("must not call")))
+
+    funnel = verify_theses(store, [outcome], cfg=AppConfig())
+    assert funnel["with_thesis"] == 1
+    assert funnel["with_evidence"] == 0
+    assert funnel["verdicts"] == {}
+
+
+def test_coverage_reads_back_over_all_history(store):
+    """Derived from the table, so it covers outcomes evaluated before this existed."""
+    with store._conn() as conn:
+        for ticker, thesis, verdict in [
+            ("A.ST", "recovers", "held"),        # audited
+            ("B.ST", "expands", None),           # thesis, never audited -> no news
+            ("C.ST", "", None),                  # no thesis recorded
+            ("D.ST", None, None),                # no thesis recorded
+        ]:
+            conn.execute(
+                "INSERT INTO decision_outcomes (run_id, ticker, action, thesis, "
+                "thesis_verdict, outperformed, source) VALUES ('r1', ?, 'buy', ?, ?, 1, 'run')",
+                (ticker, thesis, verdict),
+            )
+
+    cov = store.get_thesis_coverage()
+    assert cov["evaluated"] == 4
+    assert cov["with_thesis"] == 2
+    assert cov["audited"] == 1
+    assert cov["no_evidence"] == 1   # had a thesis, no news to judge it
+    assert cov["no_thesis"] == 2
+
+
+def test_coverage_on_an_empty_book(store):
+    cov = store.get_thesis_coverage()
+    assert cov == {"evaluated": 0, "with_thesis": 0, "audited": 0,
+                   "no_evidence": 0, "no_thesis": 0}

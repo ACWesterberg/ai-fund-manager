@@ -66,15 +66,30 @@ def verify_theses(
     outcomes: list[DecisionOutcome],
     cfg: "AppConfig | None" = None,
     lookback_days: int | None = None,
-) -> dict[str, str]:
+) -> dict:
     """Judge each matured decision's thesis and persist the verdict.
 
-    Returns {verdict: count} for logging. Outcomes with no recorded thesis, or
-    with no news to judge against, are left unchecked rather than guessed at.
+    Returns the funnel, not just the verdicts:
+
+        {"outcomes", "with_thesis", "with_evidence", "verdicts": {...}}
+
+    Two filters stand between an evaluated outcome and a verdict — a recorded
+    thesis, and news in the holding window to judge it against — and they fail
+    for entirely different reasons needing entirely different fixes. Reporting
+    only the verdicts hid that: a batch where nine of eleven outcomes were never
+    audited looked identical to one where they were all judged unresolved.
     """
+    funnel: dict = {
+        "outcomes": len(outcomes),
+        "with_thesis": 0,
+        "with_evidence": 0,
+        "verdicts": {},
+    }
+
     judgeable = [o for o in outcomes if (o.thesis or "").strip() and o.id]
+    funnel["with_thesis"] = len(judgeable)
     if not judgeable:
-        return {}
+        return funnel
 
     if cfg is None:
         from fundmgr.config import load_config
@@ -86,18 +101,23 @@ def verify_theses(
     # Nothing to judge against is not a verdict — say nothing rather than let the
     # model fall back on what it knows about the company in general.
     judgeable = [o for o in judgeable if evidence.get(o.ticker)]
+    funnel["with_evidence"] = len(judgeable)
     if not judgeable:
-        logger.info("Thesis check: no news in the holding window for any decision — skipped")
-        return {}
+        logger.info(
+            "Thesis check: %d outcome(s), %d with a thesis, none with news in the "
+            "holding window — nothing audited",
+            funnel["outcomes"], funnel["with_thesis"],
+        )
+        return funnel
 
     parsed = _call_for_checks(
         cfg, _review_message(judgeable, evidence), lookback_days
     )
     if parsed is None:
-        return {}
+        return funnel
 
     by_ticker = {o.ticker.upper(): o for o in judgeable}
-    counts: dict[str, str] = {}
+    counts: dict[str, int] = {}
     for check in parsed.checks:
         outcome = by_ticker.get(check.ticker)
         if outcome is None or not outcome.id:
@@ -107,7 +127,13 @@ def verify_theses(
         outcome.thesis_evidence = check.evidence
         counts[check.verdict] = counts.get(check.verdict, 0) + 1
 
-    return counts
+    funnel["verdicts"] = counts
+    logger.info(
+        "Thesis check: %d outcome(s) -> %d with a thesis -> %d with evidence -> %s",
+        funnel["outcomes"], funnel["with_thesis"], funnel["with_evidence"],
+        ", ".join(f"{n} {v}" for v, n in sorted(counts.items())) or "no verdicts",
+    )
+    return funnel
 
 
 def _news_window(store: Store, outcome: DecisionOutcome, lookback_days: int) -> list[dict]:

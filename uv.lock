@@ -798,8 +798,25 @@ wheels = [
 
 [[package]]
 name = "financedata"
-version = "0.0.0"
+version = "0.2.0"
 source = { editable = "../FinanceData" }
+dependencies = [
+    { name = "feedparser" },
+    { name = "httpx" },
+    { name = "pandas" },
+    { name = "yfinance" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "feedparser", specifier = ">=6.0" },
+    { name = "httpx", specifier = ">=0.25" },
+    { name = "pandas", specifier = ">=2.0" },
+    { name = "torch", marker = "extra == 'sentiment'", specifier = ">=2.0" },
+    { name = "transformers", marker = "extra == 'sentiment'", specifier = ">=4.30" },
+    { name = "yfinance", specifier = ">=0.2" },
+]
+provides-extras = ["sentiment"]
 
 [[package]]
 name = "frozenlist"

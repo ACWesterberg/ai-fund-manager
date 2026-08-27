@@ -1,0 +1,1079 @@
+"""
+Per-position watch plan: kill criteria and time horizons.
+
+A holding carries three kinds of pre-registered exit condition, all optional
+and all editable from the live dashboard:
+
+  • **Kill criterion (text)** — the observable fact that would falsify the
+    thesis ("loses the Apple socket", "capex guide cut"). Judged daily against
+    fresh headlines by `paper.check_kill_criteria`.
+  • **Kill rules (numeric)** — hard lines that need no interpretation: a max
+    drawdown, a price floor, a price ceiling. Checked here, against prices,
+    deterministically. Drawdown is measured from the **review anchor** — the
+    price on the day the line was set — not from cost: a position bought in
+    2021 and reviewed last month should be judged on the month. Rules written
+    before anchors existed keep measuring from cost, and say so, because
+    silently re-anchoring an armed kill line would disarm it.
+  • **Time horizon** — the date the thesis is supposed to have played out by.
+    Nearing it is the cue to run fresh analysis rather than to sell, so the
+    alerts escalate as it approaches (30 / 14 / 7 / 1 days, then on the day).
+
+Everything lives in the portfolio's own `app_meta`, alongside the plan keys
+`paper_kill_criteria` / `paper_target_weights` that the JSON import writes, so
+a book imported from a structured answer and one built from a photo end up in
+exactly the same shape.
+"""
+from __future__ import annotations
+
+import json
+import os
+from datetime import date, datetime, timezone
+
+from fundmgr.state.store import Store
+
+# app_meta keys
+KILL_TEXT_KEY = "paper_kill_criteria"      # {ticker: "text"} — shared with the JSON import
+KILL_RULES_KEY = "paper_kill_rules"        # {ticker: {max_drawdown_pct, price_below, price_above, fundamentals[], currency, anchor_price_sek, anchor_date}}
+HORIZONS_KEY = "paper_horizons"            # {ticker: {review_date, label, note, set_at}}
+ANALYSIS_KEY = "paper_killanalysis"        # {ticker: {logic, conditions[], criterion}} — per-ticker key
+ADD_TEXT_KEY = "paper_add_criteria"        # {ticker: "text"} — the thesis-still-true test
+ADD_ANALYSIS_KEY = "paper_addanalysis"     # {ticker: {logic, conditions[], criterion}} — per-ticker key
+
+# Days-remaining buckets for horizon alerts. One alert per bucket per horizon:
+# the tightest bucket the date falls into fires, so a horizon set 10 days out
+# opens at "14 days" rather than replaying every earlier stage.
+HORIZON_STAGES = (30, 14, 7, 1, 0)
+
+# A drawdown kill re-arms only after the position recovers this many
+# percentage points above its kill line — stops a position sitting exactly on
+# the line from alerting every single day.
+_KILL_RESET_BUFFER = 2.0
+
+# Upper bound on a rule's `quarters`. Beyond a couple of years the snapshot
+# series has been trimmed anyway, so a larger number would be a rule that can
+# never fire rather than a stricter one.
+_MAX_QUARTERS = 8
+
+
+# ── Reading / writing the plan ────────────────────────────────────────────────
+
+def _load(store: Store, key: str) -> dict:
+    try:
+        data = json.loads(store.get_meta(key) or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_kill_text(store: Store) -> dict[str, str]:
+    return {t: str(v or "") for t, v in _load(store, KILL_TEXT_KEY).items()}
+
+
+def get_add_text(store: Store) -> dict[str, str]:
+    """The ADD criterion per ticker — what must be true for the thesis to still
+    be working, written the same way a kill criterion is."""
+    return {t: str(v or "") for t, v in _load(store, ADD_TEXT_KEY).items()}
+
+
+def set_add_text(store: Store, ticker: str, criterion: str) -> str:
+    """Store (or clear) one position's ADD criterion. Returns what was stored."""
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("Ticker is required.")
+    texts = get_add_text(store)
+    cleaned = (criterion or "").strip()
+    if cleaned:
+        texts[ticker] = cleaned
+    else:
+        texts.pop(ticker, None)
+    store.set_meta(ADD_TEXT_KEY, json.dumps(texts))
+    return cleaned
+
+
+def save_add_analysis(store: Store, ticker: str, analysis: dict | None) -> None:
+    store.set_meta(f"{ADD_ANALYSIS_KEY}:{ticker.upper()}",
+                   json.dumps(analysis) if analysis else "")
+
+
+def get_add_analysis(store: Store, ticker: str) -> dict | None:
+    """The stored decomposition, or None if it no longer matches the text."""
+    raw = store.get_meta(f"{ADD_ANALYSIS_KEY}:{ticker.upper()}")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # A stale analysis of a since-reworded criterion is worse than none.
+    if data.get("criterion") != get_add_text(store).get(ticker.upper(), ""):
+        return None
+    return data
+
+
+def evaluate_add_criterion(store: Store, ticker: str) -> dict | None:
+    """Check an ADD criterion's conditions against the cached figures.
+
+    Returns None when no criterion is set. Otherwise
+    {satisfied, checked[], manual[], unread[], failed[], criterion, logic}.
+
+    An ADD criterion reads as a conjunction — "organic growth ≥6% AND adj. EBIT
+    margin ≥9%, cash generation intact" — so every checkable condition must pass.
+    Three outcomes are kept apart, because collapsing them is how a gate opens
+    on no evidence:
+
+      • **failed**  a figure we have is below the line — the thesis is not working
+      • **unread**  the metric is offered but nothing is cached — unknown, and
+                    unknown never counts as passing
+      • **manual**  no feed settles it ("cash generation intact", "no adverse
+                    reimbursement change") — these need the human confirmation
+                    that `proof_confirmed` already is
+
+    `satisfied` therefore means: at least one condition was actually checked,
+    none failed, none unread, and nothing manual is outstanding.
+    """
+    from fundmgr.evidence import current_metric, field_meta, sustained_breach
+
+    known = field_meta(store)
+    criterion = get_add_text(store).get(ticker.upper(), "")
+    if not criterion:
+        return None
+    analysis = get_add_analysis(store, ticker)
+    conditions = (analysis or {}).get("conditions") or []
+
+    checked, manual, unread, failed = [], [], [], []
+    for cond in conditions:
+        if cond.get("checkable") != "fundamentals" or not cond.get("metric"):
+            manual.append(cond)
+            continue
+        metric, op, value = cond["metric"], cond["op"], cond["value"]
+        meta = known.get(metric, {})
+        label = meta.get("label", metric)
+        unit = "%" if meta.get("is_fraction") else meta.get("unit", "")
+        actual = current_metric(store, ticker, metric)
+        quarters = int(cond.get("quarters") or 1)
+
+        # An ADD condition is written as the state that must HOLD, so it passes
+        # when the metric is on the named side of the line — the mirror image of
+        # a kill rule, which fires when it crosses.
+        if actual is None:
+            unread.append({**cond, "label": label, "unit": unit})
+            continue
+        holds = actual >= value if op == "above" else actual <= value
+        if holds and quarters > 1:
+            run = sustained_breach(store, ticker, metric, op, value, quarters)
+            holds = run["hit"]
+        row = {**cond, "label": label, "unit": unit, "actual": actual, "holds": holds}
+        (checked if holds else failed).append(row)
+
+    return {
+        "criterion": criterion,
+        "logic": (analysis or {}).get("logic", ""),
+        "checked": checked,
+        "failed": failed,
+        "unread": unread,
+        "manual": manual,
+        "satisfied": bool(checked) and not failed and not unread and not manual,
+        "analysed": analysis is not None,
+    }
+
+
+def get_kill_rules(store: Store) -> dict[str, dict]:
+    return {t: v for t, v in _load(store, KILL_RULES_KEY).items() if isinstance(v, dict)}
+
+
+def get_horizons(store: Store) -> dict[str, dict]:
+    return {t: v for t, v in _load(store, HORIZONS_KEY).items() if isinstance(v, dict)}
+
+
+def _num(value) -> float | None:
+    """Positive-or-None float coercion for user-entered rule fields.
+
+    Price floors, targets and drawdown percentages are all positive by
+    construction, so a 0 or a negative is a typo rather than a line.
+    """
+    out = _signed_num(value)
+    return out if out is not None and out > 0 else None
+
+
+def _signed_num(value) -> float | None:
+    """Any-sign float coercion — for thresholds where 0 and negatives are real
+    (free cash flow below 0, margin above -5)."""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return float(str(value).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def drawdown_for(rule: dict, *, price_sek: float | None,
+                 avg_cost_sek: float | None) -> dict:
+    """How far a position is down, and from what.
+
+    One definition, shared by the daily watch and the dashboard panel — they
+    used to compute this separately, so a drawdown line could read "breached"
+    in one and clear in the other the moment the two anchors diverged.
+
+    Returns {pct, basis, anchor_price_sek, anchor_date, from_cost_pct}:
+
+      basis "review"  measured from the price when the line was set — what a
+                      kill line is actually about, since the thesis it tests
+                      dates from the review, not from the purchase
+      basis "cost"    the fallback, for rules predating the anchor and for
+                      positions whose price was unknown when the line was set
+    """
+    anchor = _signed_num(rule.get("anchor_price_sek"))
+    cost = _signed_num(avg_cost_sek)
+    basis_price = anchor if (anchor and anchor > 0) else (cost if cost and cost > 0 else None)
+
+    def _pct(reference):
+        if not reference or not price_sek:
+            return None
+        return (price_sek / reference - 1) * 100
+
+    return {
+        "pct": _pct(basis_price),
+        "basis": "review" if (anchor and anchor > 0) else "cost",
+        "anchor_price_sek": anchor,
+        "anchor_date": rule.get("anchor_date") or "",
+        "from_cost_pct": _pct(cost),
+    }
+
+
+def _current_price_sek(store: Store, ticker: str) -> float | None:
+    """Cached SEK price for one ticker, or None.
+
+    Never makes a network call: an anchor is only worth recording if the price
+    is already known, and saving a plan must not block on a quote feed. No
+    anchor simply means the rule keeps measuring from cost.
+    """
+    try:
+        rows = store.get_prices(ticker)
+        if not rows or not rows[-1].get("close"):
+            return None
+        from fundmgr import paper
+        native = {ticker: float(rows[-1]["close"])}
+        return paper.sek_prices_for(
+            store, [ticker], _load(store, "paper_currency_map"), native).get(ticker)
+    except Exception:
+        return None
+
+
+def parse_horizon(review_date: str = "", months: str | float | None = None,
+                  today: date | None = None) -> tuple[str, str] | None:
+    """Turn user input into (ISO review date, label).
+
+    Accepts an explicit YYYY-MM-DD, or a number of months from today, or both
+    (the explicit date wins). Returns None when neither is usable.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    text = (review_date or "").strip()
+    if text:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        months_out = round((parsed - today).days / 30.44)
+        label = f"{months_out} months" if months_out >= 2 else f"{max(0, (parsed - today).days)} days"
+        return parsed.isoformat(), label
+
+    n = _num(months)
+    if not n:
+        return None
+    total = today.month - 1 + int(round(n))
+    year = today.year + total // 12
+    month = total % 12 + 1
+    # Clamp to the last valid day of the target month (31 Jan + 1 month → 28/29 Feb).
+    day = today.day
+    while day > 28:
+        try:
+            return date(year, month, day).isoformat(), f"{int(round(n))} months"
+        except ValueError:
+            day -= 1
+    return date(year, month, day).isoformat(), f"{int(round(n))} months"
+
+
+def set_position_plan(
+    store: Store,
+    ticker: str,
+    *,
+    kill_criterion: str | None = None,
+    max_drawdown_pct=None,
+    price_below=None,
+    price_above=None,
+    fundamentals: list[dict] | None = None,
+    currency: str | None = None,
+    review_date: str | None = None,
+    horizon_months=None,
+    horizon_note: str | None = None,
+    re_anchor: bool = False,
+    anchor_price_sek=None,
+    today: date | None = None,
+) -> dict:
+    """Set (or clear) one position's kill criterion, kill rules and horizon.
+
+    Every field is optional and independent: passing None leaves that part of
+    the plan untouched, passing "" (or 0) clears it. Returns the resulting plan
+    row for that ticker.
+
+    Editing a rule re-arms its alert, so a tightened line can fire again today
+    instead of staying suppressed by the previous rule's state.
+
+    A new drawdown line anchors to today's price. Editing an existing one does
+    **not** move that anchor — tightening a line from 25% to 20% is a change of
+    mind about the threshold, not a fresh review, and re-anchoring there would
+    quietly reset a position already halfway to its kill. Moving the anchor is
+    its own deliberate act: `re_anchor=True`, after you have actually re-run
+    the analysis.
+    """
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("Ticker is required.")
+
+    if kill_criterion is not None:
+        texts = get_kill_text(store)
+        cleaned = kill_criterion.strip()
+        if cleaned:
+            texts[ticker] = cleaned
+        else:
+            texts.pop(ticker, None)
+        store.set_meta(KILL_TEXT_KEY, json.dumps(texts))
+
+    if re_anchor or any(v is not None for v in (max_drawdown_pct, price_below,
+                                                price_above, fundamentals)):
+        rules = get_kill_rules(store)
+        rule = dict(rules.get(ticker) or {})
+        for field, value in (("max_drawdown_pct", max_drawdown_pct),
+                             ("price_below", price_below),
+                             ("price_above", price_above)):
+            if value is None:
+                continue
+            parsed = _num(value)
+            if parsed is None:
+                rule.pop(field, None)
+            else:
+                rule[field] = parsed
+        if fundamentals is not None:
+            cleaned = _clean_fundamental_rules(fundamentals, store)
+            if cleaned:
+                rule["fundamentals"] = cleaned
+            else:
+                rule.pop("fundamentals", None)
+        if currency:
+            rule["currency"] = currency.strip().upper()
+
+        # Anchor a drawdown line to the price it was set at — but only when
+        # there isn't one yet, or when a re-anchor was asked for explicitly.
+        if rule.get("max_drawdown_pct"):
+            if re_anchor or not rule.get("anchor_price_sek"):
+                anchored = _signed_num(anchor_price_sek)
+                if anchored is None:
+                    anchored = _current_price_sek(store, ticker)
+                if anchored is None:
+                    # The add plan already records a review price — the same
+                    # idea, kept for the dislocation gate. Reuse it rather than
+                    # leave the line on cost, so the two halves of a position's
+                    # monitoring measure from the same day.
+                    try:
+                        from fundmgr import addsignal
+                        anchored = _signed_num(
+                            addsignal.get_plan(store, ticker).get("review_price"))
+                    except Exception:
+                        anchored = None
+                if anchored and anchored > 0:
+                    rule["anchor_price_sek"] = round(float(anchored), 6)
+                    rule["anchor_date"] = (
+                        today or datetime.now(timezone.utc).date()).isoformat()
+        else:
+            # No drawdown line, no anchor to keep.
+            rule.pop("anchor_price_sek", None)
+            rule.pop("anchor_date", None)
+
+        rule = {k: v for k, v in rule.items() if k == "currency" or v is not None}
+        if any(k in rule for k in ("max_drawdown_pct", "price_below", "price_above",
+                                   "fundamentals")):
+            rule["set_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            rules[ticker] = rule
+        else:
+            rules.pop(ticker, None)
+        store.set_meta(KILL_RULES_KEY, json.dumps(rules))
+        # Re-arm: a changed line deserves a fresh look today.
+        store.set_meta(f"paper_killrule_state:{ticker}", "clear")
+
+    if review_date is not None or horizon_months is not None or horizon_note is not None:
+        horizons = get_horizons(store)
+        current = dict(horizons.get(ticker) or {})
+        if review_date is not None or horizon_months is not None:
+            parsed = parse_horizon(review_date or "", horizon_months, today=today)
+            if parsed is None:
+                horizons.pop(ticker, None)
+                store.set_meta(f"paper_horizon_stage:{ticker}", "")
+                current = {}
+            else:
+                iso, label = parsed
+                if current.get("review_date") != iso:
+                    store.set_meta(f"paper_horizon_stage:{ticker}", "")  # re-arm on a new date
+                current.update({
+                    "review_date": iso,
+                    "label": label,
+                    "set_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                })
+        if horizon_note is not None and current:
+            current["note"] = horizon_note.strip()
+        if current:
+            horizons[ticker] = current
+        store.set_meta(HORIZONS_KEY, json.dumps(horizons))
+
+    return plan_for(store, ticker)
+
+
+def _clean_fundamental_rules(rules: list[dict], store: Store | None = None) -> list[dict]:
+    """Keep only well-formed {metric, op, value, quarters} entries.
+
+    `quarters` is how many consecutive *reported periods* must breach before the
+    rule fires — 1 (the default) is the old behaviour, a single reading.
+    """
+    from fundmgr.evidence import field_meta
+
+    known = field_meta(store)
+    out, seen = [], set()
+    for entry in rules or []:
+        if not isinstance(entry, dict):
+            continue
+        metric = str(entry.get("metric") or "").strip()
+        op = str(entry.get("op") or "").strip().lower()
+        value = _signed_num(entry.get("value"))
+        if metric not in known or op not in ("below", "above") or value is None:
+            continue
+        key = (metric, op)
+        if key in seen:
+            continue
+        seen.add(key)
+        quarters = _num(entry.get("quarters"))
+        out.append({"metric": metric, "op": op, "value": value,
+                    "quarters": max(1, min(_MAX_QUARTERS, int(quarters or 1))),
+                    "note": str(entry.get("note") or "").strip()})
+    return out
+
+
+def clear_position_plan(store: Store, ticker: str) -> None:
+    """Remove every watch-plan entry for one ticker."""
+    ticker = (ticker or "").strip().upper()
+    for key, loader in ((KILL_TEXT_KEY, get_kill_text),
+                        (KILL_RULES_KEY, get_kill_rules),
+                        (HORIZONS_KEY, get_horizons)):
+        data = loader(store)
+        if ticker in data:
+            data.pop(ticker)
+            store.set_meta(key, json.dumps(data))
+    store.set_meta(f"paper_killrule_state:{ticker}", "")
+    store.set_meta(f"paper_horizon_stage:{ticker}", "")
+    save_analysis(store, ticker, None)
+
+
+def plan_for(store: Store, ticker: str) -> dict:
+    ticker = ticker.upper()
+    horizon = get_horizons(store).get(ticker) or {}
+    return {
+        "ticker": ticker,
+        "kill_criterion": get_kill_text(store).get(ticker, ""),
+        "kill_rules": get_kill_rules(store).get(ticker) or {},
+        "horizon": horizon,
+        "days_left": days_left(horizon.get("review_date")),
+    }
+
+
+def days_left(review_date: str | None, today: date | None = None) -> int | None:
+    if not review_date:
+        return None
+    try:
+        target = datetime.strptime(str(review_date), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (target - (today or datetime.now(timezone.utc).date())).days
+
+
+def plan_tickers(store: Store) -> set[str]:
+    """Every ticker carrying any part of a watch plan."""
+    return set(get_kill_text(store)) | set(get_kill_rules(store)) | set(get_horizons(store))
+
+
+# ── Reading a criterion back at you ───────────────────────────────────────────
+
+# The ADD criterion is the mirror of the kill: conditions that must HOLD for the
+# thesis to still be working, rather than conditions that falsify it. Same
+# schema, same metric menu — only the direction of `op` differs, and getting
+# that backwards would turn "growth at least 6%" into a rule that fires when
+# growth is healthy.
+_ADD_FRAMING = """\
+You take a pre-registered ADD criterion for a stock position — the conditions \
+the investor requires to still be TRUE before putting more money in — and report \
+how it decomposes, so the investor can see how it will be read before relying on \
+it.
+
+These are conditions that must HOLD, not conditions that break the thesis. \
+"Organic growth at least 6%" is metric revenue_growth, op "above", value 6. \
+"Cost/income no worse than 45%" is op "below", value 45. Never invert them: an \
+ADD criterion read as a kill criterion would open the gate exactly when the \
+business is deteriorating.
+"""
+
+_KILL_FRAMING = """\
+You take a pre-registered kill criterion for a stock position — one sentence \
+written by an investor — and report how it decomposes, so the investor can see \
+how it will be read before relying on it.
+"""
+
+# Body shared by both framings. Kept separate and concatenated rather than
+# formatted: the template is mostly a JSON example, and str.format treats every
+# brace in it as a field.
+_ANALYSIS_BODY = """\
+
+Split it into its separate conditions and describe how they combine. Then, for
+each condition, say how it could be checked:
+
+  "fundamentals" - it is a threshold on ONE of the metrics listed below, and
+                   that metric genuinely measures what the condition is about.
+                   Fill in metric, op and value.
+  "news"         - it is an observable event or disclosure that could plausibly
+                   appear in news coverage or an earnings write-up.
+  "manual"       - it needs the full report, a private figure, or a judgement
+                   no feed will settle (segment-level detail, deal-level
+                   returns, management intent).
+
+Rules:
+- Only use "fundamentals" for a metric in the list. Never invent a metric key.
+- If the available metric is only an approximation of what was written, still
+  use it, and say exactly how it differs in `note`. Example: a criterion about
+  *recurring* revenue growth can use total revenue growth as a proxy — note it.
+- Values are plain numbers in the unit shown: percentages as 8 (not 0.08).
+  Cash-flow and debt figures are in the company's own reporting currency, so
+  prefer a sign test ("free cash flow below 0") over an absolute amount unless
+  the criterion names one.
+- `op` is "below" or "above".
+- `quarters` is how many consecutive reported quarters the condition must hold
+  before it counts. Read it from the wording: "two quarters running", "for two
+  consecutive quarters", "sustained over a year" (4). Default to 1 when the
+  criterion names no duration — do not invent one. A duration written in the
+  criterion and dropped here turns a patient rule into a hair trigger.
+- Do not soften a "manual" condition into "news" to look useful. An honest
+  "manual" is the point of this exercise.
+
+Reply with a JSON object only:
+{"logic": "<how the conditions combine, e.g. '(A and B) or C'>",
+ "conditions": [
+   {"id": "A", "text": "<the condition in the investor's own words>",
+    "checkable": "fundamentals"|"news"|"manual",
+    "metric": "<key from the list, or null>",
+    "op": "below"|"above"|null,
+    "value": <number or null>,
+    "quarters": <integer, 1 unless the criterion says otherwise>,
+    "note": "<how the check differs from what was written, or ''>"}
+ ]}\
+"""
+
+
+def analyse_criterion(criterion: str, model: str | None = None, *,
+                      kind: str = "kill", store: Store | None = None) -> dict | None:
+    """Decompose a criterion into its conditions and how each can be checked.
+
+    `kind` is "kill" (conditions that falsify the thesis) or "add" (conditions
+    that must hold before adding). Same schema and metric menu either way; the
+    framing differs because reading one as the other inverts every threshold.
+
+    Runs once when a criterion is saved, so the investor sees the reading at
+    entry time rather than discovering it from a verdict a day later. Returns
+    None when it can't run (no API key, call failed) — the criterion is still
+    saved and still judged; only the preview is missing.
+    """
+    criterion = (criterion or "").strip()
+    if not criterion or not os.getenv("OPENAI_API_KEY"):
+        return None
+
+    from fundmgr.evidence import field_meta
+
+    # The menu includes this book's own metrics, so a criterion may name
+    # `organic_growth` — a figure no provider carries and the investor supplies
+    # from the report — exactly as it names revenue_growth.
+    known = field_meta(store)
+    catalogue = "\n".join(
+        f"  {key} — {meta['label']}"
+        + ("  (you supply this from the report)" if meta.get("custom") else "")
+        for key, meta in known.items())
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        kwargs = {
+            "model": model or os.getenv("FUND_KILL_MODEL", "gpt-4o-mini"),
+            "messages": [
+                {"role": "system", "content": (
+                    (_ADD_FRAMING if kind == "add" else _KILL_FRAMING)
+                    + _ANALYSIS_BODY)},
+                {"role": "user", "content": (
+                    f"Available fundamentals metrics:\n{catalogue}\n\n"
+                    f"{'ADD' if kind == 'add' else 'Kill'} criterion:\n{criterion}")},
+            ],
+            "max_tokens": 700,
+            "temperature": 0.0,
+        }
+        try:
+            resp = client.chat.completions.create(
+                response_format={"type": "json_object"}, **kwargs)
+        except Exception:
+            resp = client.chat.completions.create(**kwargs)
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return None
+
+    return _parse_analysis(raw, criterion, known)
+
+
+def _parse_analysis(raw: str, criterion: str,
+                    known: dict | None = None) -> dict | None:
+    """Validate the analyser's reply, dropping anything malformed."""
+    from fundmgr.evidence import field_meta
+    from fundmgr.paper import extract_json_object
+
+    known = field_meta() if known is None else known
+
+    data = None
+    for candidate in (raw, extract_json_object(raw or "")):
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    if not isinstance(data, dict) or not isinstance(data.get("conditions"), list):
+        return None
+
+    conditions = []
+    for i, cond in enumerate(data["conditions"]):
+        if not isinstance(cond, dict):
+            continue
+        text = str(cond.get("text") or "").strip()
+        if not text:
+            continue
+        checkable = str(cond.get("checkable") or "manual").strip().lower()
+        if checkable not in ("fundamentals", "news", "manual"):
+            checkable = "manual"
+
+        metric = cond.get("metric")
+        metric = str(metric).strip() if metric else None
+        op = str(cond.get("op") or "").strip().lower()
+        value = _signed_num(cond.get("value"))
+        # A fundamentals condition is only trustworthy if every part of the
+        # comparison survived validation — otherwise it degrades to "news".
+        if checkable == "fundamentals" and not (
+                metric in known and op in ("below", "above") and value is not None):
+            checkable = "news" if metric else "manual"
+            metric, op, value = None, None, None
+
+        quarters = _num(cond.get("quarters"))
+        conditions.append({
+            "id": str(cond.get("id") or chr(65 + i))[:2],
+            "text": text,
+            "checkable": checkable,
+            "metric": metric if checkable == "fundamentals" else None,
+            "op": op if checkable == "fundamentals" else None,
+            "value": value if checkable == "fundamentals" else None,
+            "quarters": (max(1, min(_MAX_QUARTERS, int(quarters or 1)))
+                         if checkable == "fundamentals" else None),
+            "note": str(cond.get("note") or "").strip(),
+        })
+
+    if not conditions:
+        return None
+    return {
+        "criterion": criterion,
+        "logic": str(data.get("logic") or "").strip(),
+        "conditions": conditions,
+        "analysed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def save_analysis(store: Store, ticker: str, analysis: dict | None) -> None:
+    key = f"{ANALYSIS_KEY}:{ticker.upper()}"
+    store.set_meta(key, json.dumps(analysis) if analysis else "")
+
+
+def get_analysis(store: Store, ticker: str) -> dict | None:
+    raw = store.get_meta(f"{ANALYSIS_KEY}:{ticker.upper()}")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # A stale analysis of a since-reworded criterion is worse than none.
+    if data.get("criterion") != get_kill_text(store).get(ticker.upper(), ""):
+        return None
+    return data
+
+
+def suggested_rules(analysis: dict | None, store: Store | None = None) -> list[dict]:
+    """The fundamentals conditions an analysis found, ready to become rules."""
+    if not analysis:
+        return []
+    from fundmgr.evidence import field_meta
+
+    FUND_FIELD_META = field_meta(store)
+    out = []
+    for cond in analysis["conditions"]:
+        if cond["checkable"] != "fundamentals":
+            continue
+        out.append({
+            "metric": cond["metric"],
+            "label": FUND_FIELD_META[cond["metric"]]["label"],
+            "op": cond["op"],
+            "value": cond["value"],
+            "quarters": int(cond.get("quarters") or 1),
+            "note": cond["note"],
+        })
+    return out
+
+
+# ── Numeric kill-rule watch ───────────────────────────────────────────────────
+
+def _latest_native_prices(store: Store, tickers: list[str]) -> dict[str, float]:
+    """Latest cached close per ticker, falling back to a live quote.
+
+    track_portfolio refreshes the price cache before the watches run, so the
+    cache is the normal path; the live fallback covers a ticker whose history
+    hasn't been fetched yet (e.g. a plan entry that isn't held).
+    """
+    out: dict[str, float] = {}
+    missing: list[str] = []
+    for t in tickers:
+        rows = store.get_prices(t)
+        if rows and rows[-1].get("close"):
+            out[t] = float(rows[-1]["close"])
+        else:
+            missing.append(t)
+    if missing:
+        try:
+            from fundmgr.data.quotes import live_prices
+            out.update({t: p for t, p in live_prices(missing).items() if p})
+        except Exception:
+            pass
+    return out
+
+
+def evaluate_kill_rules(store: Store) -> list[dict]:
+    """Evaluate every numeric kill rule against current prices.
+
+    Returns one row per rule-carrying ticker: {ticker, hit, reasons, drawdown_pct,
+    price_native, price_sek, currency, rules}. Pure — no alerts, no state
+    writes — so the dashboard and the watch share one implementation.
+    """
+    rules = get_kill_rules(store)
+    if not rules:
+        return []
+
+    from fundmgr import paper
+
+    currency_map = _load(store, "paper_currency_map")
+    positions = {p.ticker: p for p in store.get_positions()}
+    tickers = sorted(rules)
+    native = _latest_native_prices(store, tickers)
+    prices_sek = paper.sek_prices_for(store, tickers, currency_map, native)
+
+    rows: list[dict] = []
+    for ticker in tickers:
+        rule = rules[ticker]
+        pos = positions.get(ticker)
+        price_native = native.get(ticker)
+        price_sek = prices_sek.get(ticker)
+        currency = rule.get("currency") or currency_map.get(ticker) or "SEK"
+
+        dd = drawdown_for(rule, price_sek=price_sek,
+                          avg_cost_sek=pos.avg_cost_sek if pos else None)
+        drawdown = dd["pct"]
+
+        reasons: list[str] = []
+        fundamental_reasons: list[str] = []
+        drawdown_breached = False
+        max_dd = rule.get("max_drawdown_pct")
+        if max_dd and drawdown is not None and drawdown <= -abs(max_dd):
+            drawdown_breached = True
+            # Name the anchor in the alert: "down 22% from cost" and "down 22%
+            # since the review" call for different responses.
+            since = (f"the {dd['anchor_date']} review price" if dd["anchor_date"]
+                     else "the review price") if dd["basis"] == "review" else "cost"
+            reasons.append(
+                f"down {drawdown:+.1f}% from {since} — past the -{abs(max_dd):.0f}% kill line")
+        floor = rule.get("price_below")
+        if floor and price_native is not None and price_native <= floor:
+            reasons.append(f"price {price_native:,.2f} {currency} at/below the {floor:,.2f} floor")
+        ceiling = rule.get("price_above")
+        if ceiling and price_native is not None and price_native >= ceiling:
+            reasons.append(f"price {price_native:,.2f} {currency} at/above the {ceiling:,.2f} target")
+
+        # Fundamentals lines — the thresholds lifted out of the text criterion.
+        # A metric with nothing cached is reported as unread, never as passing.
+        from fundmgr.evidence import current_metric, field_meta, sustained_breach
+        known = field_meta(store)
+        fundamental_rows = []
+        for f_rule in rule.get("fundamentals") or []:
+            meta = known.get(f_rule["metric"], {})
+            label = meta.get("label", f_rule["metric"])
+            actual = current_metric(store, ticker, f_rule["metric"])
+            unit = "%" if meta.get("is_fraction") else meta.get("unit", "")
+            quarters = int(f_rule.get("quarters") or 1)
+            breached_now = actual is not None and (
+                actual <= f_rule["value"] if f_rule["op"] == "below"
+                else actual >= f_rule["value"])
+
+            # A single-quarter rule is the current reading, as before. A rule
+            # asking for more has to be answered from the reported periods on
+            # file, not from how many days we happen to have been watching.
+            streak = periods_seen = None
+            if quarters > 1:
+                run = sustained_breach(store, ticker, f_rule["metric"],
+                                       f_rule["op"], f_rule["value"], quarters)
+                hit = run["hit"]
+                streak, periods_seen = run["streak"], run["periods_seen"]
+            else:
+                hit = breached_now
+
+            if hit:
+                span = f" for {quarters} straight quarters" if quarters > 1 else ""
+                text = (f"{label} {actual:,.1f}{unit} is {f_rule['op']} the "
+                        f"{f_rule['value']:,.1f}{unit} line{span}")
+                reasons.append(text)
+                fundamental_reasons.append(text)
+            fundamental_rows.append({
+                **f_rule, "label": label, "actual": actual, "unit": unit,
+                "hit": hit, "unread": actual is None,
+                "quarters": quarters, "streak": streak, "periods_seen": periods_seen,
+                # Breaching today but short of the required run — the state the
+                # old code had no way to express, and reported as a hit.
+                "pending": bool(quarters > 1 and breached_now and not hit),
+                "thin_history": bool(quarters > 1 and periods_seen is not None
+                                     and periods_seen < quarters),
+            })
+
+        # A price fall and a fundamental breach are different events and must not
+        # be pooled. A −25% drawdown with the business intact is a reason to
+        # re-read the evidence — possibly an ADD — while the same fall alongside
+        # deteriorating figures is a red review. Pooling them made every drop
+        # suppress the add signals, which is precisely backwards.
+        price_reasons = [r for r in reasons if r not in fundamental_reasons]
+        rows.append({
+            "ticker": ticker,
+            "hit": bool(reasons),
+            "reasons": reasons,
+            "price_reasons": price_reasons,
+            "fundamental_reasons": fundamental_reasons,
+            "drawdown_hit": drawdown_breached,
+            "fundamentals_hit": bool(fundamental_reasons),
+            "drawdown_pct": round(drawdown, 1) if drawdown is not None else None,
+            "drawdown_basis": dd["basis"],
+            "drawdown_from_cost_pct": (round(dd["from_cost_pct"], 1)
+                                       if dd["from_cost_pct"] is not None else None),
+            "anchor_price_sek": dd["anchor_price_sek"],
+            "anchor_date": dd["anchor_date"],
+            "price_native": price_native,
+            "price_sek": price_sek,
+            "currency": currency,
+            "held": pos is not None,
+            "rules": rule,
+            "fundamentals": fundamental_rows,
+        })
+    return rows
+
+
+def _recovered(row: dict) -> bool:
+    """True when a previously-hit position has cleared its lines with buffer.
+
+    The buffer keeps a position hovering on its kill line from re-alerting the
+    moment it ticks back and forth across it.
+    """
+    rule = row["rules"]
+    max_dd = rule.get("max_drawdown_pct")
+    if max_dd and row["drawdown_pct"] is not None:
+        if row["drawdown_pct"] <= -abs(max_dd) + _KILL_RESET_BUFFER:
+            return False
+    floor = rule.get("price_below")
+    if floor and row["price_native"] is not None:
+        if row["price_native"] <= floor * (1 + _KILL_RESET_BUFFER / 100):
+            return False
+    ceiling = rule.get("price_above")
+    if ceiling and row["price_native"] is not None:
+        if row["price_native"] >= ceiling * (1 - _KILL_RESET_BUFFER / 100):
+            return False
+    # Fundamentals move quarterly, not tick by tick, so no buffer is needed —
+    # but a still-breached metric must keep the watch armed.
+    if any(f["hit"] for f in row.get("fundamentals") or []):
+        return False
+    return True
+
+
+def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
+    """Alert when a position crosses one of its numeric kill lines.
+
+    Transition-based like the drift watch: fires on the crossing, then re-arms
+    once the position recovers past the line by a small buffer. Needs no LLM,
+    so it works with no API keys configured at all.
+    """
+    if store is None:
+        from fundmgr.paper import open_portfolio
+        meta, store = open_portfolio(slug)
+        name = meta["name"]
+    else:
+        name = store.get_meta("paper_name") or slug
+
+    rows = evaluate_kill_rules(store)
+    if not rows:
+        return []
+
+    log: list[str] = []
+    fired: list[dict] = []
+    for row in rows:
+        ticker = row["ticker"]
+        state = store.get_meta(f"paper_killrule_state:{ticker}") or "clear"
+        if row["hit"] and state != "hit":
+            store.set_meta(f"paper_killrule_state:{ticker}", "hit")
+            store.set_meta(
+                f"paper_killhit:{ticker}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                "; ".join(row["reasons"]))
+            fired.append(row)
+            mark = "🚨" if row["fundamentals_hit"] else "🟡"
+            what = "kill rule hit" if row["fundamentals_hit"] else "max drop reached"
+            log.append(f"{mark} {ticker}: {what} — {'; '.join(row['reasons'])}")
+        elif state == "hit" and _recovered(row):
+            store.set_meta(f"paper_killrule_state:{ticker}", "clear")
+            log.append(f"✓ {ticker}: back above its kill line — watch re-armed")
+
+    if fired:
+        from fundmgr.notify.send import send_telegram
+        texts = get_kill_text(store)
+        # A price fall and a fundamental breach call for different actions, so
+        # they get different headlines. "Kill criterion hit" on a −25% with the
+        # business intact reads as "sell", which is the opposite of the policy.
+        red = [r for r in fired if r["fundamentals_hit"]]
+        amber = [r for r in fired if not r["fundamentals_hit"]]
+        lines = [f"<b>🚨 {name} — kill criterion hit</b>" if red
+                 else f"<b>🟡 {name} — max drop reached, review not sell</b>"]
+        for row in red + amber:
+            held = "" if row["held"] else " (plan only — not held)"
+            flag = "" if row["fundamentals_hit"] else "  🟡 price only"
+            lines.append(f"\n<b>{row['ticker']}</b>{held}{flag}")
+            for reason in row["reasons"]:
+                lines.append(f"  • {reason}")
+            if not row["fundamentals_hit"]:
+                lines.append("  Fundamentals show no breach — re-read the evidence "
+                             "before acting; this may be an add, not an exit.")
+            if texts.get(row["ticker"]):
+                lines.append(f"  Thesis kill: {texts[row['ticker']]}")
+        lines.append("\nRun fresh analysis before acting.")
+        send_telegram("\n".join(lines))
+    return log
+
+
+# ── Time-horizon watch ────────────────────────────────────────────────────────
+
+def _stage_for(days: int) -> int | None:
+    """The tightest alert bucket a days-remaining value falls into.
+
+    None when the horizon is further out than the widest bucket — nothing to
+    say yet, which is the normal state for most of a horizon's life.
+    """
+    for stage in sorted(HORIZON_STAGES):
+        if days <= stage:
+            return stage
+    return None
+
+
+def horizon_rows(store: Store, today: date | None = None) -> list[dict]:
+    """Every horizon with its days remaining and urgency, soonest first."""
+    today = today or datetime.now(timezone.utc).date()
+    held = {p.ticker for p in store.get_positions()}
+    rows = []
+    for ticker, horizon in get_horizons(store).items():
+        left = days_left(horizon.get("review_date"), today)
+        if left is None:
+            continue
+        rows.append({
+            "ticker": ticker,
+            "review_date": horizon.get("review_date"),
+            "label": horizon.get("label", ""),
+            "note": horizon.get("note", ""),
+            "days_left": left,
+            "due": left <= 0,
+            "near": 0 < left <= 30,
+            "held": ticker in held,
+        })
+    rows.sort(key=lambda r: r["days_left"])
+    return rows
+
+
+def check_horizons(slug: str, store: Store | None = None,
+                   today: date | None = None) -> list[str]:
+    """Alert as each position's time horizon approaches, then on the day.
+
+    Escalates through the 30/14/7/1-day buckets and fires once per bucket, so a
+    horizon set months out produces four nudges total rather than a daily
+    countdown. The message asks for fresh analysis — a horizon reached is a
+    review trigger, not a sell signal.
+    """
+    if store is None:
+        from fundmgr.paper import open_portfolio
+        meta, store = open_portfolio(slug)
+        name = meta["name"]
+    else:
+        name = store.get_meta("paper_name") or slug
+
+    today = today or datetime.now(timezone.utc).date()
+    rows = horizon_rows(store, today)
+    if not rows:
+        return []
+
+    log: list[str] = []
+    fired: list[tuple[dict, int]] = []
+    for row in rows:
+        ticker = row["ticker"]
+        stage = _stage_for(row["days_left"])
+        if stage is None:
+            continue  # still further out than the first nudge
+        raw = store.get_meta(f"paper_horizon_stage:{ticker}")
+        try:
+            already = int(raw) if raw else None
+        except ValueError:
+            already = None
+        if already is not None and stage >= already:
+            continue  # this bucket (or a tighter one) has already fired
+        store.set_meta(f"paper_horizon_stage:{ticker}", str(stage))
+        fired.append((row, stage))
+        left = row["days_left"]
+        when = "due today" if left == 0 else (f"overdue by {-left}d" if left < 0
+                                              else f"in {left}d")
+        log.append(f"⏳ {ticker}: horizon {when} ({row['review_date']}) — fresh analysis due")
+
+    if fired:
+        from fundmgr.notify.send import send_telegram
+        texts = get_kill_text(store)
+        lines = [f"<b>⏳ {name} — time horizon check</b>"]
+        for row, _stage in fired:
+            left = row["days_left"]
+            if left > 0:
+                headline = f"{left} day{'s' if left != 1 else ''} left"
+            elif left == 0:
+                headline = "horizon reached today"
+            else:
+                headline = f"{-left} day{'s' if left != -1 else ''} past horizon"
+            held = "" if row["held"] else " (plan only — not held)"
+            lines.append(f"\n<b>{row['ticker']}</b>{held}: {headline} "
+                         f"({row['review_date']}{', ' + row['label'] if row['label'] else ''})")
+            if row["note"]:
+                lines.append(f"  Note: {row['note']}")
+            if texts.get(row["ticker"]):
+                lines.append(f"  Kill criterion: {texts[row['ticker']]}")
+        lines.append("\nTime to re-run the thesis: does it still hold, or has it played out?")
+        send_telegram("\n".join(lines))
+    return log

@@ -9,7 +9,13 @@
     <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Learnings</h1>
     <p class="text-sm text-slate-500 mt-1">
       {{ fund_label }} · {{ total }} active lesson{{ '' if total == 1 else 's' }}
-      distilled from this fund's own outcomes and injected into every prompt
+      distilled from this fund's own outcomes.
+      {% if total > injected %}
+      Only the {{ injected }} strongest-evidence reach the prompt (cap {{ prompt_limit }});
+      the rest are retained but not injected.
+      {% else %}
+      All of them are injected into every prompt (cap {{ prompt_limit }}).
+      {% endif %}
     </p>
   </div>
 </div>
@@ -34,9 +40,14 @@
   </div>
   <div class="space-y-3">
     {% for l in by_category[category] %}
-    <div class="border-l-2 border-slate-700 pl-3">
-      <p class="text-sm text-slate-300 leading-relaxed">{{ l.body }}</p>
+    <div class="border-l-2 {{ 'border-blue-500' if l.injected else 'border-slate-800' }} pl-3">
+      <p class="text-sm {{ 'text-slate-300' if l.injected else 'text-slate-500' }} leading-relaxed">{{ l.body }}</p>
       <p class="text-[10px] text-slate-600 mt-1">
+        {% if l.injected %}
+        <span class="text-blue-400">in prompt</span> ·
+        {% else %}
+        <span class="text-slate-700">not injected</span> ·
+        {% endif %}
         {{ l.created }}{% if l.run_count %} · from {{ l.run_count }} run{{ '' if l.run_count == 1 else 's' }}{% endif %}
       </p>
     </div>

@@ -7,7 +7,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import yfinance as yf
 
@@ -25,12 +25,12 @@ def _logo_domain(website: str | None) -> str | None:
     except Exception:
         return None
 
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Form, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
 
 from fundmgr.config import load_config, load_universe
-from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 from fundmgr.state.store import Store
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -152,6 +152,10 @@ def index(request: Request):
         for ticker, fdata in cached_fund.items():
             fund_domains[ticker] = _logo_domain(fdata.get("website"))
 
+    # The stop / take-profit levels each position is measured against. A target
+    # review moves these, and until now the move was visible only in Telegram.
+    levels = store.get_effective_stops()
+
     positions_data = []
     for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
         live = live_prices.get(p.ticker)
@@ -172,6 +176,8 @@ def index(request: Request):
             "pnl_pct": pnl_pct,
             "weight_pct": round(weight_val / nav * 100, 1) if nav > 0 else 0,
             "logo_domain": fund_domains.get(p.ticker),
+            "stop_pct": levels.get(p.ticker, {}).get("stop_pct"),
+            "take_profit_pct": levels.get(p.ticker, {}).get("take_profit_pct"),
         })
 
     cash_pct = round(cash / nav * 100, 1) if nav > 0 else 100.0
@@ -211,8 +217,19 @@ def index(request: Request):
     pnl_sek = round(nav - cfg.capital_sek, 0)
     pnl_pct = round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0
 
+    from fundmgr.web.views import open_reviews_context, recent_reviews_context
+
+    flash = None
+    if request.query_params.get("msg"):
+        flash = {"msg": request.query_params["msg"], "ok": request.query_params.get("ok") == "1"}
+
     return _render("index.html", {
         "request": request,
+        "reviews": open_reviews_context(store, positions_data),
+        "recent_reviews": recent_reviews_context(store, positions_data),
+        "review_resolve_action": "/reviews",
+        "flash": flash,
+        "show_levels": True,
         "positions": positions_data,
         "cash": cash,
         "cash_pct": cash_pct,
@@ -224,7 +241,29 @@ def index(request: Request):
         "pnl_sek": pnl_sek,
         "pnl_pct": pnl_pct,
         "active_page": "portfolio",
+        "benchmark_label": benchmark_label(cfg.benchmark),
     })
+
+
+@app.post("/reviews/{review_id}/resolve")
+async def resolve_review(review_id: str, status: str = Form("done")):
+    """Tick off a review verdict — 'done' once you have placed the order, or
+    'dismissed' if you decided against it.
+
+    Nothing here trades or changes a level: it records that the instruction has
+    been dealt with, so the dashboard stops asking. A verdict that is neither
+    done nor dismissed stays on the page, which is the whole point — a decision
+    that only ever existed in a notification was a decision nobody could track.
+    """
+    if status not in ("done", "dismissed"):
+        raise HTTPException(status_code=400, detail="status must be 'done' or 'dismissed'")
+    _, store = _get_deps()
+    ok = store.resolve_review(review_id, status)
+    msg = (f"Review marked {status}." if ok
+           else "That review was already closed — nothing to do.")
+    return RedirectResponse(
+        url=f"/?msg={quote_plus(msg)}&ok={1 if ok else 0}#decisions", status_code=303
+    )
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -322,7 +361,7 @@ async def transactions(request: Request):
 async def api_nav():
     cfg, store = _get_deps()
     nav_history = store.get_nav_history()
-    return json.loads(nav_chart_json(nav_history))
+    return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark)))
 
 
 @app.get("/api/stats")
@@ -410,6 +449,19 @@ async def api_kiosk():
             "logo_domain": fund_domains.get(p.ticker),
         })
 
+    # Outstanding review verdicts — the wall display's whole job is to show what
+    # the fund is asking of you, and an unactioned TRIM is exactly that.
+    from fundmgr.web.views import open_reviews_context
+    decisions = open_reviews_context(store, [
+        {
+            "ticker": p.ticker,
+            "name": name_map.get(p.ticker, p.ticker),
+            "shares": p.shares,
+            "current_price": live_prices.get(p.ticker),
+        }
+        for p in positions
+    ])["rows"]
+
     return {
         "nav": round(nav, 0),
         "currency": "SEK",
@@ -417,6 +469,16 @@ async def api_kiosk():
         "pnl_sek": round(nav - cfg.capital_sek, 0),
         "pnl_pct": round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0,
         "holdings": holdings,
+        "decisions": [
+            {
+                "ticker": d["ticker"],
+                "verdict": d["verdict_label"],
+                "trigger": d["source_label"],
+                "instruction": d["instruction"],
+                "date": d["when"],
+            }
+            for d in decisions
+        ],
     }
 
 

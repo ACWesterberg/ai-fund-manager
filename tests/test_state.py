@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from fundmgr.state.models import Transaction
-from fundmgr.state.store import Store
+from fundmgr.state.store import NOT_RECORDED, Store
 
 
 @pytest.fixture
@@ -98,3 +98,84 @@ def test_total_fees(store):
         price_sek=200.0, fee_sek=1.0, source="fill", timestamp=datetime.utcnow()
     ))
     assert store.total_fees_paid() == pytest.approx(4.0)
+
+
+# ── Learnings retention ───────────────────────────────────────────────────────
+
+def _lrn(store, category, body, created):
+    from fundmgr.state.models import Learning
+    store.save_learning(Learning(category=category, body=body,
+                                 created_at=datetime.fromisoformat(created)))
+
+
+def test_prune_learnings_by_category(store):
+    _lrn(store, "qualitative", "Anecdote.", "2026-08-17T10:00:00")
+    _lrn(store, "calibration", "Hit rate 40%.", "2026-08-17T09:00:00")
+
+    assert len(store.find_active_learnings(category="qualitative")) == 1
+    assert store.deactivate_learnings(category="qualitative") == 1
+
+    remaining = store.get_active_learnings()
+    assert [lrn.category for lrn in remaining] == ["calibration"]
+
+
+def test_prune_learnings_before_date(store):
+    _lrn(store, "qualitative", "Old.", "2026-08-10T10:00:00")
+    _lrn(store, "qualitative", "New.", "2026-08-17T10:00:00")
+
+    # A bare date compares as an ISO prefix: 08-17 itself is not "before 08-17".
+    assert store.deactivate_learnings(before="2026-08-17") == 1
+    assert [lrn.body for lrn in store.get_active_learnings()] == ["New."]
+
+
+def test_prune_learnings_retires_rather_than_deletes(store):
+    _lrn(store, "qualitative", "Anecdote.", "2026-08-17T10:00:00")
+    store.deactivate_learnings()
+    assert store.get_active_learnings() == []
+    # Still on disk, just inactive — past runs stay reconstructible.
+    with store._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM learnings").fetchone()[0] == 1
+
+
+def test_score_by_regime_separates_the_unguided_arm(store):
+    import json as _json
+
+    from fundmgr.state.models import RecommendationLog
+
+    def _run(run_id, learnings_hash, score):
+        snap = {"regime": {"learnings_hash": learnings_hash}} if learnings_hash is not False else {}
+        store.save_recommendation(RecommendationLog(
+            run_id=run_id, timestamp=datetime(2026, 6, 1),
+            prompt_snapshot=_json.dumps(snap),
+            llm_response="{}", guardrail_log="{}", actions_json="[]",
+        ))
+        with store._conn() as conn:
+            conn.execute("UPDATE recommendations SET score = ? WHERE run_id = ?", (score, run_id))
+
+    _run("r1", "abc123", 0.02)
+    _run("r2", "abc123", 0.04)
+    _run("r3", None, -0.01)      # ran with no lessons — the comparison arm
+    _run("r4", False, 0.00)      # snapshot predates the key entirely
+
+    buckets = {b["value"]: b for b in store.score_by_regime("learnings_hash")}
+    assert buckets["abc123"]["runs"] == 2
+    assert buckets["abc123"]["mean_score"] == pytest.approx(0.03)
+
+    # The baseline arm is only the run that demonstrably carried nothing. A
+    # snapshot written before the key existed carried whatever was live then —
+    # folding it in here would average guided runs into the unguided arm and
+    # label the result "unguided".
+    assert buckets[None]["runs"] == 1
+    assert buckets[None]["mean_score"] == pytest.approx(-0.01)
+    assert buckets[NOT_RECORDED]["runs"] == 1
+    assert buckets[NOT_RECORDED]["mean_score"] == pytest.approx(0.0)
+
+
+def test_score_by_regime_ignores_unscored_runs(store):
+    from fundmgr.state.models import RecommendationLog
+
+    store.save_recommendation(RecommendationLog(
+        run_id="unscored", timestamp=datetime(2026, 6, 1),
+        prompt_snapshot="{}", llm_response="{}", guardrail_log="{}", actions_json="[]",
+    ))
+    assert store.score_by_regime("learnings_hash") == []

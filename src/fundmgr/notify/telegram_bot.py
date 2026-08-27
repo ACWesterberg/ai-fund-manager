@@ -11,7 +11,9 @@ Commands:
   /universe      — list enabled tickers
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
+  /target [TICKER] — take-profit review (no ticker = every position at target)
   /setcash AMOUNT — correct the cash balance (SEK)
+  /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
   /help          — show this message
 
 Photo messages:
@@ -131,6 +133,32 @@ def _name_to_ticker(company_name: str) -> tuple[str | None, str]:
     return None, ""
 
 
+def _env_timeout(name: str, default: int) -> int:
+    """Read a timeout override from the environment, falling back to `default`."""
+    try:
+        val = int(os.getenv(name, "") or default)
+        return val if val > 0 else default
+    except ValueError:
+        return default
+
+
+# The weekly pipeline fetches prices, fundamentals, macro and then runs the LLM
+# consensus — on a Pi that is tens of minutes, not the few the old 300s default
+# allowed. Cron gives `fund run` well over an hour, so the bot should too.
+RUN_TIMEOUT      = _env_timeout("FUND_RUN_TIMEOUT", 2700)        # /run  — 45 min
+RUN_FULL_TIMEOUT = _env_timeout("FUND_RUN_FULL_TIMEOUT", 5400)   # /run_full — 90 min
+REVIEW_TIMEOUT   = _env_timeout("FUND_REVIEW_TIMEOUT", 900)      # /review scan — 15 min
+# /prun runs the same pipeline as a weekly fund run — features, then an LLM
+# consensus over the sleeve — so it needs the same order of time, not /review's.
+PRUN_TIMEOUT     = _env_timeout("FUND_PRUN_TIMEOUT", 2700)       # /prun — 45 min
+
+
+def _tail(text: str, lines: int = 12) -> str:
+    """Last `lines` non-empty lines of `text` — the tail of a stalled run."""
+    kept = [ln for ln in (text or "").splitlines() if ln.strip()]
+    return "\n".join(kept[-lines:])
+
+
 def _run_cli(*args: str, timeout: int = 300) -> str:
     """Run a fund CLI command and return its stdout as a string."""
     cmd = [str(FUND_BIN), *args]
@@ -140,10 +168,74 @@ def _run_cli(*args: str, timeout: int = 300) -> str:
         if result.returncode != 0 and result.stderr:
             output += f"\n\nError: {result.stderr.strip()[:500]}"
         return output or "(no output)"
-    except subprocess.TimeoutExpired:
-        return f"⏱ Command timed out after {timeout}s"
+    except subprocess.TimeoutExpired as e:
+        # Surface where it stalled — TimeoutExpired carries whatever the command
+        # printed before it was killed, which names the step that hung.
+        partial = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        spent = f"{timeout // 60} min" if timeout >= 60 else f"{timeout}s"
+        msg = f"⏱ Command timed out after {spent} and was killed."
+        tail = _tail(partial)
+        if tail:
+            msg += f"\n\nLast output before the timeout:\n{tail}"
+        msg += (
+            "\n\nThe pipeline was cut off mid-flight, so no decision was saved. "
+            "Raise the limit with FUND_RUN_TIMEOUT (seconds) in .env if the run "
+            "legitimately needs longer."
+        )
+        return msg
     except Exception as e:
         return f"❌ Failed to run command: {e}"
+
+
+# Background CLI runs, kept referenced so the event loop can't garbage-collect
+# a task mid-run (asyncio only holds a weak reference to scheduled tasks).
+_bg_tasks: set = set()
+
+
+async def _run_cli_bg(
+    update: "Update",
+    context: "ContextTypes.DEFAULT_TYPE",
+    *args: str,
+    timeout: int,
+    done_msg: str | None = None,
+) -> None:
+    """
+    Run a long CLI command off the event loop and report back when it finishes.
+
+    `subprocess.run` blocks the whole bot for the duration, so anything that can
+    take minutes goes through here — the bot keeps answering /status, alerts and
+    other commands while the pipeline works.
+
+    On success the command's own output is posted, unless `done_msg` is given —
+    use that for commands like `fund run` that send their own notification.
+    """
+    import asyncio
+    import time
+
+    chat_id = update.effective_chat.id
+    bot = context.bot
+
+    async def _run_and_notify() -> None:
+        started = time.monotonic()
+        loop = asyncio.get_running_loop()
+        try:
+            output = await loop.run_in_executor(None, lambda: _run_cli(*args, timeout=timeout))
+        except Exception as e:  # executor died — still tell the user
+            await bot.send_message(chat_id=chat_id, text=f"❌ Run failed to start: {e}")
+            return
+        mins = (time.monotonic() - started) / 60
+        if "Error" in output or "Traceback" in output or "timed out" in output:
+            body = f"⚠️ Run finished with errors after {mins:.0f} min:\n\n{output}"
+        elif done_msg:
+            body = f"{done_msg} ({mins:.0f} min)"
+        else:
+            body = output
+        for chunk in _chunk(body):
+            await bot.send_message(chat_id=chat_id, text=chunk)
+
+    task = asyncio.ensure_future(_run_and_notify())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 def _chunk(text: str, max_len: int = 4000) -> list[str]:
@@ -164,35 +256,31 @@ async def _send(update: "Update", text: str) -> None:
 # ── Command handlers ──────────────────────────────────────────────────────────
 
 async def cmd_run(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    await update.message.reply_text("⏳ Running weekly decision pipeline (skipping news)…")
-    output = _run_cli("run", "--skip-news", timeout=300)
-    # fund run sends its own formatted Telegram notification on success;
-    # only echo output back here if something went wrong
-    if "Error" in output or "Traceback" in output or "timed out" in output:
-        await _send(update, f"⚠️ Run finished with errors:\n\n{output[:3000]}")
-    else:
-        await update.message.reply_text("✅ Done — decision summary sent above.")
+    await update.message.reply_text(
+        "⏳ Running weekly decision pipeline (skipping news)…\n"
+        "Prices, fundamentals, macro then the LLM consensus — usually 5-15 min "
+        "on the Pi. I'll message you when it's done; the bot stays usable "
+        "meanwhile."
+    )
+    # fund run sends its own formatted Telegram notification on success, so the
+    # completion note here just closes the loop.
+    await _run_cli_bg(
+        update, context, "run", "--skip-news",
+        timeout=RUN_TIMEOUT,
+        done_msg="✅ Done — decision summary sent above.",
+    )
 
 
 async def cmd_run_full(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    import asyncio
-    chat_id = update.effective_chat.id
-    bot = context.bot
     await update.message.reply_text(
         "⏳ Running full pipeline with news + FinBERT…\n"
         "This takes 10-20 min on Pi — I'll message you when it's done."
     )
-
-    async def _run_and_notify():
-        loop = asyncio.get_event_loop()
-        output = await loop.run_in_executor(None, lambda: _run_cli("run", timeout=1800))
-        if "Error" in output or "Traceback" in output or "timed out" in output:
-            for chunk in _chunk(f"⚠️ Run finished with errors:\n\n{output}"):
-                await bot.send_message(chat_id=chat_id, text=chunk)
-        else:
-            await bot.send_message(chat_id=chat_id, text="✅ Full run complete — decision summary sent above.")
-
-    asyncio.ensure_future(_run_and_notify())
+    await _run_cli_bg(
+        update, context, "run",
+        timeout=RUN_FULL_TIMEOUT,
+        done_msg="✅ Full run complete — decision summary sent above.",
+    )
 
 
 async def cmd_fill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -279,6 +367,11 @@ def _active_book_line(chat_id: int) -> str:
     return f"📋 Active book: {_book_name(slug) or slug} ({slug})"
 
 
+def _book_listing() -> str:
+    """Slug — name for every paper/live book, for the 'which book?' replies."""
+    return "\n".join(f"  {s} — {n}" for s, n in _all_books().items()) or "  (none yet — /plist)"
+
+
 async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/ptarget [SLUG] — route /pfill + Montrose screenshots into a paper book.
 
@@ -288,9 +381,6 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     chat_id = update.effective_chat.id
     books = _all_books()
 
-    def _listing() -> str:
-        return "\n".join(f"  {s} — {n}" for s, n in books.items()) or "  (none yet — /plist)"
-
     if not args:
         cur = _active_book.get(chat_id)
         if cur:
@@ -299,7 +389,7 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
                 f"/pfill and screenshots record here. /ptarget off to switch back.")
         else:
             await update.message.reply_text(
-                "No active book set. Aim at a sleeve with /ptarget <slug>:\n" + _listing())
+                "No active book set. Aim at a sleeve with /ptarget <slug>:\n" + _book_listing())
         return
 
     slug = args[0].strip().lower()
@@ -309,7 +399,7 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
         return
     if books and slug not in books:
         await update.message.reply_text(
-            f"No book '{slug}'. Available:\n{_listing()}")
+            f"No book '{slug}'. Available:\n{_book_listing()}")
         return
     _active_book[chat_id] = slug
     name = books.get(slug) or _book_name(slug) or slug
@@ -318,6 +408,35 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
         f"/pfill and Montrose screenshots now record here.\n"
         f"/ptarget off to switch back to the main fund.",
         parse_mode="HTML",
+    )
+
+
+async def cmd_prun(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/prun [SLUG] — re-decide a live sleeve against what it holds now.
+
+    The sleeve equivalent of /run: hold, trim, exit, add to a name, or bring in
+    something new, funded from within the book. Nothing is executed — record the
+    fills you actually make with /pfill.
+    """
+    args = context.args or []
+    slug = args[0] if args else _active_book.get(update.effective_chat.id)
+    if not slug:
+        await update.message.reply_text(
+            "No active book — /prun <slug>, or set one with /ptarget <slug> "
+            f"first.\n{_book_listing()}")
+        return
+
+    name = _book_name(slug) or slug
+    await update.message.reply_text(
+        f"⏳ Reviewing <b>{name}</b> against its current positions…\n"
+        "Prices, then the LLM — usually 5-15 min on the Pi. I'll message you "
+        "when it's done; the bot stays usable meanwhile.",
+        parse_mode="HTML",
+    )
+    await _run_cli_bg(
+        update, context, "paper-review", slug,
+        timeout=PRUN_TIMEOUT,
+        done_msg=f"✅ Review complete — see it on /live/{slug}.",
     )
 
 
@@ -389,6 +508,40 @@ async def cmd_psetcost(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
 
 
+async def cmd_proof(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/proof [SLUG] TICKER yes|no — answer the post-earnings proof question.
+
+    The post-earnings alert asks whether the print confirmed the thesis; this
+    is how it gets answered, in the same place the question arrived. The slug
+    is optional when a book is already active, but the alert quotes it in full
+    so the reply works from a cold chat.
+    """
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    verdict = args[-1].lower() if args else ""
+    if verdict not in ("yes", "y", "no", "n") or len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /proof [SLUG] TICKER yes|no\n"
+            "Example: /proof kf-chokepoint-satellite SYSR.ST yes\n"
+            "'yes' records the fundamental proof as met at this report; "
+            "'no' withdraws it.")
+        return
+
+    if len(args) >= 3:
+        slug, ticker = args[0].lower(), args[1].upper()
+    else:
+        slug = _active_book.get(update.effective_chat.id)
+        ticker = args[0].upper()
+        if not slug:
+            await update.message.reply_text(
+                "No active book — either /ptarget <slug> first, or give it "
+                "explicitly: /proof <slug> TICKER yes|no")
+            return
+
+    flag = "--confirm-proof" if verdict in ("yes", "y") else "--drop-proof"
+    output = _run_cli("paper-add-plan", slug, ticker, flag, timeout=45)
+    await _send(update, f"📋 {_book_name(slug) or slug}\n{output}")
+
+
 async def cmd_pstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/pstatus — snapshot of the active paper book."""
     chat_id = update.effective_chat.id
@@ -418,9 +571,46 @@ async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
     if args:
         await update.message.reply_text(f"⏳ Reviewing {args[0].upper()} (consensus)… ~1 min")
         output = _run_cli("review-stop", args[0], "--no-notify", timeout=180)
-    else:
-        await update.message.reply_text("⏳ Scanning holdings for stop-loss breaches and reviewing… may take a few min")
-        output = _run_cli("review-stop", "--no-notify", timeout=600)
+        await _send(update, output)
+        return
+
+    # A full scan reviews every breached position — too long to block the loop.
+    await update.message.reply_text(
+        "⏳ Scanning holdings for stop-loss breaches and reviewing… may take a "
+        "few min. I'll post the result here when it's done."
+    )
+    await _run_cli_bg(update, context, "review-stop", "--no-notify", timeout=REVIEW_TIMEOUT)
+
+
+async def cmd_target(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/target [TICKER] — take-profit review; no ticker = every position at target.
+
+    Returns SELL / TRIM / RAISE / HOLD, and writes back a raised target so the
+    alert re-arms at the new level instead of repeating the old one.
+    """
+    args = context.args or []
+    if args:
+        await update.message.reply_text(f"⏳ Take-profit review for {args[0].upper()} (consensus)… ~1 min")
+        output = _run_cli("review-target", args[0], "--no-notify", timeout=180)
+        await _send(update, output)
+        return
+
+    await update.message.reply_text(
+        "⏳ Reviewing every position at its take-profit target… may take a few "
+        "min. I'll post the result here when it's done."
+    )
+    await _run_cli_bg(update, context, "review-target", "--no-notify", timeout=REVIEW_TIMEOUT)
+
+
+async def cmd_decisions(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/decisions [all] — review verdicts still waiting on an order from you.
+
+    A stop or target review's alert scrolls away; the instruction in it does not
+    stop being owed. This reads the same list back on demand.
+    """
+    args = context.args or []
+    extra = ["--all"] if args and args[0].lower() in ("all", "--all") else []
+    output = _run_cli("decisions", *extra, timeout=30)
     await _send(update, output)
 
 
@@ -437,14 +627,18 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/universe — list all enabled tickers\n"
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
+        "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
+        "/decisions [all] — review verdicts still waiting on an order from you\n"
         "/setcash AMOUNT — correct the cash balance (SEK)\n"
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"
         "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
+        "/prun [SLUG] — re-decide a sleeve against what it holds now\n"
         "/pfill TICKER SHARES PRICE FEE [side] — fill into the active book\n"
         "/pretag OLD [NEW] — fix a mis-tagged holding (e.g. ENR → ENR.DE)\n"
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
         "/pstatus — snapshot of the active book\n"
+        "/proof [SLUG] TICKER yes|no — answer the post-earnings proof question\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -777,13 +971,17 @@ def main() -> None:
     app.add_handler(CommandHandler("universe", cmd_universe))
     app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
     app.add_handler(CommandHandler("review",   cmd_review))
+    app.add_handler(CommandHandler("target",   cmd_target))
+    app.add_handler(CommandHandler("decisions", cmd_decisions))
     app.add_handler(CommandHandler("setcash",  cmd_setcash))
     app.add_handler(CommandHandler("plist",    cmd_plist))
     app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
+    app.add_handler(CommandHandler("prun",     cmd_prun))
     app.add_handler(CommandHandler("pfill",    cmd_pfill))
     app.add_handler(CommandHandler("pretag",   cmd_pretag))
     app.add_handler(CommandHandler("psetcost", cmd_psetcost))
     app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
+    app.add_handler(CommandHandler("proof",    cmd_proof))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

@@ -5,6 +5,441 @@ as a paper "mirror" portfolio tracked at real Yahoo prices, with four Telegram
 watches running daily. The monitor never touches the broker — you execute in
 Montrose, then record fills so the mirror stays honest.
 
+## 1a. Create a sleeve from a photo of your portfolio
+
+The fastest path from "what I actually hold" to "a watched book" — no JSON, no
+typing. On the **Live** section (`/live`), the **Import from a photo of your
+portfolio** panel takes one or more screenshots of a broker holdings screen
+(Montrose, Avanza, Nordnet, IBKR, Degiro…) and turns them into positions:
+
+1. **Read.** Each image goes through local OCR (free, `tesseract`) *and* a
+   vision model, together in one prompt — the OCR transcript is the numeric
+   cross-check, the image preserves the table layout. Set `FUND_VISION_MODEL`
+   to change the model (default `gpt-4o-mini`, needs `OPENAI_API_KEY`).
+   Multiple screenshots of a scrolled list are merged and de-duplicated.
+2. **Resolve.** Each row is matched to a Yahoo symbol: ISIN from
+   `universe.csv` → broker→Yahoo map (`KOG`→`KOG.OL`) → company-name alias →
+   Yahoo symbol search. Rows that don't resolve come back with an amber ticker
+   box for you to fill in or untick.
+3. **Review.** Everything lands in an editable table — ticker, shares, cost
+   basis, plus a **kill criterion**, a **max drop** and a **time horizon** per
+   stock. *Nothing is written until you press Import.*
+4. **Seed.** Each holding is booked at the share count and SEK cost basis you
+   confirmed (fee 0 — those were paid at the real broker), so P&L runs from
+   your actual entry rather than today's price. No orders are placed anywhere.
+
+Cost basis is read as **Inköpsvärde ÷ antal** where the screen shows it, since
+that is the SEK you actually paid; a native GAV is used only when the row is
+already in SEK. A row where neither was visible falls back to market value and
+is flagged in amber — check those against the broker before importing.
+
+## 1b. Kill criteria and time horizons
+
+Every position carries up to three pre-registered exit conditions, set on the
+photo review table, in the dashboard's **Set a kill criterion & time horizon**
+editor (the pencil on any Watch-status row pre-fills it), or from the CLI:
+
+```bash
+fund paper-plan kf-chokepoint-satellite NVDA \
+    --kill "loses the Apple socket" --max-drop 25 --months 12
+fund paper-plan kf-chokepoint-satellite NVDA --clear
+```
+
+| Condition | Set with | Checked by |
+|-----------|----------|------------|
+| **Kill criterion** (text) | what would falsify the thesis | daily judge (gpt-4o-mini) over an evidence pack |
+| **ADD criterion** (text) | what must still be true to put more money in | the same decomposition, checked against cached figures every run |
+| **Kill rules** (numeric) | max % drop from the review anchor, price floor, price target | prices, every run — no API key needed |
+| **Time horizon** | a date, or N months out | days remaining, every run |
+
+### The ADD criterion
+
+Written in the same box as the kill criterion, one line below it, in the same
+plain English:
+
+> Organic growth ≥6% AND adj. EBIT margin ≥9%, cash generation intact
+
+It is the mirror of a kill criterion — conditions that must **hold**, not ones
+that falsify — and it goes through the same analyser with that framing, because
+reading one as the other inverts every threshold and would open the gate exactly
+when the business is deteriorating. Each condition comes back as a figure check
+or as a judgement no feed settles, and the panel shows which is which under the
+criterion text.
+
+The result feeds the **proof** leg of the add signal, which previously had only
+one route: a manual yes/no you set after reading a report. Now:
+
+| | |
+|---|---|
+| every checkable condition holds, nothing manual outstanding | proof is **automatic** |
+| a figure is below its line | not proof — the panel names the condition that fell short |
+| a metric has nothing cached | **unread**, never a pass |
+| a condition needs judgement ("cash generation intact") | falls back to the dated human confirmation |
+
+So writing a criterion can only tighten the gate, never loosen it. `/proof` and
+the panel's *Proof confirmed* button remain, for the legs no feed will settle.
+
+#### Max drop is a review trigger, not a sell
+
+A −25% with the business intact can be an **add**, not an exit, so the price
+line no longer counts as a kill on its own:
+
+| Situation | State |
+|---|---|
+| max drop hit **+ fundamentals deteriorating** | 🔴 **KILL** — do not average down |
+| max drop hit **+ fundamentals unchanged** | 🟡 **ADD-WATCH** — "valuation review, not a sell" |
+| max drop hit **+ ADD criterion satisfied** | 🟢 **STRONG ADD** candidate, still subject to valuation and weight |
+
+`evaluate_kill_rules` therefore reports `drawdown_hit` and `fundamentals_hit`
+separately, and only the second suppresses add signals. The Telegram alert
+changes headline to match: 🚨 *kill criterion hit* when the figures broke, 🟡
+*max drop reached, review not sell* when only the price did — with the line
+"Fundamentals show no breach — this may be an add, not an exit."
+
+#### What a drawdown line is measured from
+
+Not cost. A max-drop line anchors to the price **on the day you set it**, because
+that is when the thesis it tests was written. Bought at 40, reviewed at 100, now
+70: that is −30% against a −25% line — a kill — even though the position is still
++75% on cost and would look untouched from there. The anchor is the same idea the
+add plan's **review price** already uses for dislocation, and a new drawdown line
+falls back to it when no price is cached yet.
+
+Three rules keep the anchor honest:
+
+- **Editing the threshold does not move it.** Tightening 25% → 20% is a change of
+  mind about the line, not a fresh review; re-anchoring there would quietly reset
+  a position already halfway to its kill.
+- **Moving it is a deliberate act** — the *Re-anchor to today* button, or
+  `fund paper-plan <slug> <TICKER> --re-anchor`. Do it after you have actually
+  re-run the analysis.
+- **Rules written before anchors existed keep measuring from cost**, and say so
+  in the badge and in the alert text. Silently re-anchoring an armed kill line
+  would have disarmed it.
+
+The badge on the Watch panel carries both the line and the live number against
+it (`−25% from review · −12%`), and the P&L column stays measured from cost — two
+different questions, so they are no longer mixed in one cell. Panel and daily
+watch both call `watchplan.drawdown_for`, so a line cannot read breached in one
+and clear in the other.
+
+### How your criterion text is read
+
+The software never parses the string itself — it is stored verbatim and handed
+to the model. To make that reading visible, saving a criterion runs **one
+analysis call** and shows how it decomposed, right in the Watch panel:
+
+```
+Recurring growth falls below 8% while EBITA/FCF deteriorates, or
+acquisitions begin generating clearly weaker returns
+▸ read as (A and B) or C
+   [figure] recurring growth falls below 8%   → revenue growth below 8
+            ⚠ total revenue growth, not recurring specifically
+   [figure] EBITA/FCF deteriorates            → profit margin below 9
+            ⚠ net margin — EBITA and FCF are not in the data set
+   [manual] acquisitions begin generating clearly weaker returns
+            ⚠ deal-level returns are not disclosed in any feed
+```
+
+Each condition is tagged **figure** (a threshold on a metric we cache),
+**news** (an event that could show up in coverage) or **manual** (needs the
+full report). The ⚠ lines are the analyser stating how the available metric
+differs from what you wrote — a proxy is used, but never silently.
+
+**The metric menu is what financedata fetches and Yahoo actually populates:**
+
+| Group | Metrics |
+|-------|---------|
+| Growth | revenue growth, earnings growth |
+| Margins | gross, operating, EBITDA, net |
+| Returns | ROE, ROA |
+| Cash & debt | free cash flow, operating cash flow, total cash, total debt, debt/equity |
+| Capital structure | equity/assets, net debt/assets, interest coverage, cost/income, FCF/net income |
+| Valuation | EV/EBITDA, P/E, forward P/E, price/book, dividend yield |
+
+Cash and debt figures are in the company's own reporting currency, so prefer a
+sign test ("free cash flow below 0") over an absolute amount.
+
+The **capital structure** row is not in `.info` at all — that payload is a
+normalised snapshot with nothing about leverage or solvency, so a criterion
+phrased "net debt/assets below 50%" had no field behind it. Those five are
+derived from the full statements (`fundmgr/data/statements.py`), taking balance
+-sheet stocks from the interim sheet and flows from the annual one, and merged
+into the same fundamentals cache. Everything downstream reads them without
+knowing the difference.
+
+Two more are derived but deliberately **not** offered, because a derived figure
+is not automatically the company's figure:
+
+| Metric | Derived | Balder reports | Offered? |
+|--------|---------|----------------|----------|
+| equity/assets | 37.0% | 37.0% | yes — exact |
+| net debt/assets | 52.8% | 50.4% | yes, +2.4pp — reads leverage high, which kills early rather than late |
+| net debt/EBITDA | 10.4x | 12.8x | **no** — property-company EBITDA carries revaluation gains the company excludes; it flatters |
+| cash runway | — | — | no — only defined while operations burn cash |
+
+Set a leverage gate more than ~3pp away from the current ratio, or it will trip
+on the debt definition rather than on the business.
+
+#### The figures no provider carries
+
+Organic growth, ARR, adjusted EBITA, cash conversion, order backlog — none of
+these are in Yahoo, EODHD or any other standardised feed, and no better feed
+will fix that. They are **company-defined measures, not accounting standards**:
+each company sets its own definition, which is precisely why nothing normalises
+them and why the number has to come from the company's own report.
+
+So the book keeps its own metrics alongside the provider's:
+
+```bash
+fund paper-metric my-sleeve organic_growth  --label "Organic growth"   --unit %
+fund paper-metric my-sleeve adj_ebit_margin --label "Adj. EBIT margin" --unit %
+fund paper-metric my-sleeve                                  # list what is defined
+
+fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \
+    --set organic_growth=6.4 --set adj_ebit_margin=9.3
+```
+
+Once defined, a custom metric is offered to the criterion analyser like any
+other, so *"organic growth ≥6% AND adj. EBIT margin ≥9%"* becomes two real
+checks rather than two manual legs. The figures land in the same cache the
+provider's do, so the kill rules, the ADD criterion, the snapshots and the
+`quarters` machinery all read them without knowing the difference.
+
+Three rules make this safe rather than merely convenient:
+
+- **`--period` is the quarter the figures describe**, never the day you typed
+  them. That is what lets a late entry still count as its own quarter, and what
+  stops one report's numbers counting as two quarters of evidence. A restated
+  figure replaces its period rather than adding one.
+- **A custom key can never shadow a built-in one.** A rule written against
+  `revenue_growth` must not change meaning because a metric was defined with
+  that name, so the provider's definition wins and the attempt is refused.
+- **Values are entered as printed** — 6.4 for 6.4%, not 0.064. The provider's
+  0–1 fractions are its own convention, and applying it to a figure you read off
+  a page would be a factor-of-100 trap.
+
+#### Finding the figures instead of typing them
+
+`fund paper-read` locates coverage of a company's report, fetches it, and pulls
+out the metrics this book tracks:
+
+```bash
+fund paper-read my-sleeve SYSR.ST --period 2026-06-30          # show
+fund paper-read my-sleeve SYSR.ST --period 2026-06-30 --apply  # record
+```
+
+```
+─── Found in the coverage (2) ───
+  Organic growth                    6.40%   conf 1.0
+      "Organic growth was 6.4 per cent in the quarter"
+  Adj. EBIT margin                  9.30%   conf 0.9
+      "The adjusted EBIT margin came in at 9.3 per cent"
+```
+
+It reuses what the monitor already had: the earnings calendar knows when a
+report landed, `news_items` finds what was published within ten days of it, and
+`fetch_article` pulls the body. Only the extraction step is new.
+
+Three properties do the real work:
+
+- **A figure not stated is absent, never inferred.** No computing a margin from
+  a revenue line, no currency conversion, no rounding to a neat number. A
+  missing figure leaves the criterion honestly unread, which is a correct
+  answer.
+- **Every value must appear in the source text**, checked here rather than
+  asked for in the prompt — a model told not to invent can still invent. A
+  figure whose number is nowhere in the text it claims to quote is discarded and
+  *shown as discarded*, because dropping it silently would read as "nothing
+  found". Nordic decimal commas and space-separated thousands count as present.
+- **Nothing is stored without `--apply`.** Extraction produces a review table;
+  you confirm. A number that gates money should not enter the book on a model's
+  say-so, and automation here removes the hunting, not the checking.
+
+Only book-defined metrics are looked for. A provider field like `revenue_growth`
+is deliberately excluded from the menu, so a journalist's paraphrase can never
+overwrite a figure that has a real source.
+
+The post-earnings alert runs this too, so the message that asks "did this print
+confirm the thesis?" arrives with the figures already in it.
+
+**Fidelity caveat:** coverage is not the report. A write-up may quote organic
+growth or may not, and it is a journalist's reading either way. Reading the
+company's own *Nyckeltal* table from the report PDF would be better, and is the
+natural next step — the storage and criterion sides are already done, so what
+remains is locating and parsing the PDF.
+
+#### SEC EDGAR, for the US filers
+
+A US company's XBRL facts are free, keyless and stamped with the fiscal period
+they cover — the shape this codebase already stores. Map a metric to a us-gaap
+concept and pull every quarter the company has filed:
+
+```bash
+fund paper-metric kf segment_revenue --unit USD --edgar Revenues
+fund paper-edgar  kf NVDA            # show
+fund paper-edgar  kf NVDA --apply    # record
+```
+
+`FUND_SEC_USER_AGENT="Your Name you@example.com"` is required — the SEC refuses
+requests without a caller identity, and the command says so rather than
+returning an empty result that looks like "no data".
+
+It is wired to **custom metrics only**, never to a built-in field. Two providers
+behind one key would give a series that changes definition halfway through,
+which is worse than one that is merely incomplete: a "two consecutive quarters"
+rule would compare one source's number against another's.
+
+Three parsing rules, each because the alternative fails quietly:
+
+- **Only quarterly durations count.** One concept's fact list mixes three-month,
+  nine-month and full-year facts under the same name. Reading a year-to-date
+  revenue as a quarter shows growth that never happened.
+- **A later filing supersedes an earlier one** for the same period. A
+  restatement is the company correcting itself, and the correction is the figure
+  to hold.
+- **Values are keyed by the period they cover**, so a criterion asking for two
+  consecutive quarters works on filings the moment they are pulled.
+- **The filing's own currency travels with the figures**, and a metric declared
+  in a different one is refused rather than recorded. NVIDIA files in USD; its
+  revenue displayed under a metric declared in SEK is a right number with a
+  lying label, and every threshold written against it would mean something else.
+  Units may be `%`, `x`, empty, or any three-letter currency code.
+
+Coverage is US filers only. A foreign private issuer files a 20-F annually, and
+Nordic small caps are not in EDGAR at all — those go through `paper-read` or by
+hand.
+
+Custom metrics stay out of `_FUND_FIELDS` deliberately. That table is guarded by
+tests asserting every entry is genuinely fetched from a provider; a figure
+fetched from a PDF by a human is a different kind of thing, and mixing them
+would either break those guards or dilute them into meaninglessness.
+
+Two rules keep the built-in list honest, both enforced in `tests/test_evidence.py`:
+every metric offered must exist in financedata's `_FIELD_MAP`, and a mapped key
+that Yahoo returns null for does **not** belong here — `price_to_sales` is
+mapped but omitted for exactly that reason. Verify with:
+
+```bash
+fund fundamentals-check VOLV-B.ST
+```
+
+It forces a refresh and reports drift in both directions: metrics offered but
+missing from the payload (broken — a rule on one could never evaluate), and
+fields the data layer returns that no criterion can use yet. Run it after any
+change to `_FIELD_MAP`: yfinance `.info` is a passthrough of Yahoo's payload,
+so a mis-mapped key name fails silently rather than raising.
+
+Where it finds a real threshold, the panel offers **"Also check N of these as
+a hard rule"**. One click lifts them into deterministic fundamentals rules
+(`metric` + `below`/`above` + value + `quarters`) checked against the cached
+figures every run — no LLM, no interpretation. The text criterion is left
+exactly as written, so the same line is both judged in context *and* compared
+against a number.
+
+#### "for two consecutive quarters" is part of the rule
+
+A criterion written *"growth below 8% two quarters running"* used to become a
+rule that fired on **one** weak print — the duration was read, understood, and
+then dropped. `quarters` carries it through: the analyser reads the duration
+from your wording, and the rule only fires once that many consecutive **reported
+periods** have breached. The badge shows it (`revenue growth below 8 ×2q`), and
+one good quarter resets the run.
+
+This is why snapshots are keyed by fiscal period rather than by the day we read
+them. A cache read daily produces ~90 identical rows per quarter, and no amount
+of counting those tells you how many times the *company* reported. Each snapshot
+now carries the period end from the interim statements, rows sharing a period
+collapse onto the newest reading (a restatement is a revision, not a second
+quarter), and `evidence.metric_history` returns one row per period.
+
+Three things follow, all deliberate:
+
+- **Thin history never passes.** A two-quarter rule with one period on file is
+  `thin_history`, not a pass — same principle as *unread*.
+- **Breaching-but-short is its own state.** `pending` means the line is breached
+  today but the run isn't long enough yet. The old code had no way to say this
+  and reported it as a hit.
+- **Two metrics arm immediately; the rest arm as history accumulates.**
+  `equity_to_assets` and `net_debt_to_assets` are back-filled from every column
+  on the interim balance sheet, so a two-quarter leverage rule works the day you
+  set it. Everything else counts only periods this system has observed, and a
+  multi-quarter rule on those needs that many reporting cycles before it can
+  fire — reporting `thin_history` until then, never a pass.
+
+**Why only those two.** A back-filled value gets compared against a live one, so
+it has to be the *same statistic*, not a lookalike. Both of those read a single
+balance-sheet column and nothing else, so an older column runs identical logic.
+The other statement ratios (`interest_coverage`, `cost_to_income`,
+`fcf_to_net_income`) take their flows from the **annual** statements — a
+per-quarter version would be a different measure under the same name. The
+`.info` metrics carry no per-period history at all: `profit_margin` there is
+TTM, and mixing a TTM reading with single-quarter ones in a streak counts two
+different things. `statements.BACKFILLABLE` is the enforced list, and
+`test_back_fill_only_covers_metrics_computed_the_same_way` pins it.
+
+An observed reading always beats a recomputation of the same period, so
+back-filling can only add history, never revise what was actually seen.
+
+Set the same thing from the CLI with repeated `--fundamental`-style entries via
+the dashboard, or inspect what is stored with `fund paper-plan <slug> <TICKER>`.
+The analysis needs `OPENAI_API_KEY`; without it the criterion still saves and is
+still judged, only the preview is missing.
+
+A metric with nothing cached is reported as **unread**, never as passing.
+
+### What the text judge reads
+
+A criterion is only as good as the evidence it's judged against, so the judge
+gets an **evidence pack** (`fundmgr/evidence.py`), not just headlines:
+
+- **News with substance** — headline, publisher, date and the article
+  *summary*, plus a best-effort fetch of the article body for the items whose
+  summary is thin. Set `FUND_KILL_FETCH_ARTICLES=0` to skip body fetching.
+- **Fundamentals with a trend** — the cached growth/margin/cash figures and how
+  they've moved since the oldest snapshot on file, so "deteriorates" is
+  measurable. `fund paper-track` refreshes and snapshots these; a snapshot
+  taken *today* is never used as the earlier reference, so day one reports "no
+  history" rather than a false "flat".
+- **The position** — shares and cost basis.
+
+The judge decomposes a compound criterion first (`A while B, or C` → all of
+A and B, *or* C) and returns one of three verdicts:
+
+| Verdict | Meaning |
+|---------|---------|
+| **YES** | evidence positively shows it met — Telegram alert, recorded as a kill hit |
+| **NO** | the evidence covers the question and the thesis is intact |
+| **INSUFFICIENT** | the criterion needs facts this evidence can't settle |
+
+That third verdict is the point. A criterion like *"recurring growth falls
+below 8% while EBITA/FCF deteriorates, or acquisitions begin generating clearly
+weaker returns"* has legs that only the quarterly report settles. Previously
+that returned NO — indistinguishable from a healthy thesis. Now it's reported
+as unverifiable: flagged **not auto-checkable** on the dashboard with the
+specific conditions it couldn't check, and pushed to Telegram **once per
+wording** (rewording re-notifies, since a new phrasing may be checkable).
+Those criteria still get quoted back at you around each earnings print.
+
+Kill-rule alerts are transition-based: one Telegram push when a line is
+crossed, then silence until the position recovers past it by 2 points — a
+name sitting on its line doesn't nag daily. Editing a rule re-arms it.
+
+Horizons escalate through **30 / 14 / 7 / 1 days and the day itself**, one
+alert per stage, so a 12-month horizon produces five nudges over its life
+rather than a daily countdown. A horizon reached is a prompt to **re-run the
+thesis**, not a sell signal — the message says so.
+
+Check them on demand (both also run inside `fund paper-track`):
+
+```bash
+fund paper-watch                 # kill lines + horizons, all books
+fund paper-watch --slug my-sleeve
+```
+
+The dashboard's Watch-status panel shows the live drop against each drawdown line
+and the days left on each horizon, most urgent first.
+
 ## 1. Create the mirror from a structured LLM answer
 
 Save the picks JSON (the Fable answer, with its `positions[]`,
@@ -46,13 +481,16 @@ Telegram only when something fires:
 | Watch | Fires when |
 |-------|-----------|
 | Per-position kill criteria | Recent news plausibly meets a position's pre-registered kill line |
+| **Numeric kill rules** | A position drops past its max-drop line from the review anchor, or through a price floor / up to a price target |
+| **Time horizons** | A position's review date is 30 / 14 / 7 / 1 days out, or has arrived — time for fresh analysis |
 | **Portfolio capex kill** | 1 of the 5 largest hyperscalers guides 2027 capex flat/down → **warning**; 2+ → **KILL: halve the compute cluster** |
 | **Earnings calendar** | Day before/of a holding's report → heads-up (quotes its `watch` + kill lines); day after → check-the-print reminder |
 | **Weight drift** | A position appreciates past **1.5× its target weight** (rebalance rule); re-arms after it falls back below 1.4× |
 
 The news/capex judges need `OPENAI_API_KEY` (gpt-4o-mini); they skip cleanly
-without it. All watches no-op on portfolios that don't carry the relevant
-config, so they're safe to run across every paper book.
+without it. The numeric kill rules and the horizon watch need no API key at
+all. All watches no-op on portfolios that don't carry the relevant config, so
+they're safe to run across every paper book.
 
 ## 3. Record fills as you execute the tranches
 
@@ -94,3 +532,185 @@ purchase price converted at *today's* FX instead of the SEK you actually paid.
 Set it to the broker's **Inköpsvärde ÷ shares** (SEK/share):
 `fund paper-setcost <slug> GOOGL 3429` or Telegram `/psetcost GOOGL 3429`. Cash
 is adjusted by the difference so NAV stays consistent.
+
+## Learned ticker aliases
+
+Photo import resolves each row through ISIN → broker→Yahoo map → name alias →
+symbol search, and any of those can miss. When you fix a ticker in the review
+table, the correction is recorded against every identifier that row carried —
+its ISIN, the broker's own ticker, and the company name — and consulted **first**
+on every future import, in any sleeve. Fix `4HY` → `VSSAB-B.ST` once and the
+next screenshot resolves it silently.
+
+Aliases live in `data/ticker_aliases.json` (outside the repo, alongside the
+databases) and always beat automatic resolution, since a human entered them
+while looking at the actual position.
+
+```bash
+fund aliases                                   # what has been learned
+fund aliases --set SE0000115446 VOLV-B.ST      # teach one by hand
+fund aliases --forget 4HY                      # remove a bad one
+```
+
+KEY may be an ISIN, a broker ticker or a company name. An ISIN is the strongest
+key — it survives renames and re-listings — and is tried before the others.
+
+## Add signals — the other half of monitoring
+
+A kill criterion asks *"has the thesis become materially worse?"*. An add
+criterion asks a different question: *"has the probability-weighted return
+become materially better?"* — which happens when the business improves, when
+the price falls while the business does not, or both.
+
+The naive version of each is a trap. "Good news → buy" adds to an already
+expensive stock; "price down 20% → buy" automates catching falling knives. So a
+signal is never a trigger on its own:
+
+```
+(proof OR dislocation) AND valuation AND weight AND NOT killed
+```
+
+| Input | Meaning |
+|-------|---------|
+| **Proof** | the company-specific fundamental test — organic growth, ARR, adjusted margins. Almost none of it is in any price feed, so it's a **human-confirmed flag with a date**, refreshed at each report. |
+| **Dislocation** | price fall since the last **thesis-confirmed review price** — never since original cost. A winner down 15% from its review price is dislocated; measured from cost it looks untouched. |
+| **Valuation** | `(target / price) ^ (12 / months_left) − 1` against the book's gate. |
+| **Weight** | is there room for a tranche below the ceiling. |
+
+Gates are set per risk book:
+
+| Book | Dislocation | Min expected return |
+|------|-------------|---------------------|
+| A | −12% | 15%/yr |
+| A/B | −15% | 20%/yr |
+| B | −20% | 25%/yr |
+
+### States
+
+**HOLD** nothing actionable · **ADD-WATCH** dislocation without proof, or a
+valuation that needs recalculating · **ADD** proof confirmed and every gate
+clear · **STRONG ADD** proof *and* dislocation together · **KILL** overrides
+everything. ADD and KILL never coexist.
+
+Alerts are transition-based: an ADD that stays ADD for six weeks is one
+message, not forty.
+
+### Staleness — the safeguard that matters most
+
+The dangerous failure mode is a stock halving because intrinsic value halved,
+while the engine compares the new price with a target set before the news and
+declares it cheap. So a target price carries the date it was set, and any
+thesis-changing event recorded after that date — an earnings report, a kill hit
+— marks it **STALE**. A stale valuation suppresses every add signal until fair
+value is recalculated. Staleness reads the breadcrumbs the earnings and kill
+watches already leave, so noticing a report landed needs no new bookkeeping.
+
+**Proof expires the same way.** A confirmation is a human reading of a report,
+so it is only ever true *of that report* — once the next print lands, it is a
+statement about a superseded quarter, and an ADD resting on it rests on a
+judgement nobody has made about the current numbers. Proof used to be a plain
+boolean, so a confirmation from Q1 still opened the gate after Q3 had reported.
+It now carries `proof_status`: **unset**, **fresh**, or **stale**, on the same
+event scan as the target.
+
+Proof and target expire together but are cleared separately, deliberately: *"the
+thesis still holds"* is not *"and 145 is still the right number"*. Answering the
+proof question after a report leaves the valuation gate asking to be
+recalculated, and the position sits at ADD-WATCH until both are done.
+
+#### The post-earnings prompt
+
+The day-after-earnings alert used to say "check the print against the thesis"
+and stop there — the one thing it never did was *ask*. The same report that
+invalidates a proof is the report that should prompt a new answer, so for any
+position with an add plan the alert now carries the question, the current proof
+state, the figures that moved since the last snapshot, and a reply that answers
+it from the phone:
+
+```
+📊 KF Chokepoint Satellite — SYSR.ST reported yesterday (2026-08-20)
+Check the print against the thesis:
+Watch: order intake in the defence segment
+Kill criterion: recurring growth below 8% two quarters running
+
+Proof check — did this print confirm the thesis?
+Currently confirmed (2026-08-12); this report supersedes it.
+• Revenue growth (yoy): +7.1%  (was +12.0% on 2026-05-20 — down)
+• Operating margin: +18.2%  (was +21.0% on 2026-05-20 — down)
+Reply /proof kf-chokepoint-satellite SYSR.ST yes — or no to clear it.
+```
+
+`/proof [SLUG] TICKER yes|no` is a Telegram command; the slug is optional when a
+book is already active via `/ptarget`, and the alert quotes it in full so the
+reply works from a cold chat.
+
+### Three weights, not one
+
+Target is the normal allocation, current is where you are, **max** is the
+ceiling justified by an active positive thesis. Passing the gates suggests one
+tranche toward max; drifting *above* max is a concentration review, not an add.
+
+```bash
+fund paper-add-plan my-sleeve SYSR.ST --book A --max-weight 13 \
+    --tranche 1 --target 145 --review-price live
+fund paper-add-plan my-sleeve SYSR.ST --confirm-proof   # after a good report
+fund paper-adds                                          # current signals
+```
+
+### The Add signals panel
+
+On a live sleeve, below Watch status. One row per position carrying an add
+plan, most actionable first, with each gate shown as **actual / gate** so a
+HOLD explains itself: dislocation against the book's threshold, expected annual
+return against the book's minimum, weight against the ceiling, and proof as
+**confirmed / stale / —**. The `why` column is the engine's own sentence — the
+same one `fund paper-adds` prints. The panel is absent entirely until some
+position has a plan, since an empty table on every sleeve is just noise.
+
+The editor sets book, ceiling, tranche, target and review anchor. Three actions
+are **separate submits rather than fields**, because each stamps a date:
+*Anchor review at today's price*, *Proof confirmed*, *Withdraw proof*. A dated
+confirmation that happens as a side effect of saving an unrelated field is
+exactly how a stale anchor starts looking fresh, so saving the form never
+touches them. Confirming proof while the target still predates the last report
+says so in the flash message rather than leaving you to wonder why the state
+didn't move.
+
+Both run inside `fund paper-track`, after the kill watches so a position that
+has just tripped a kill can never also be suggested.
+
+---
+
+## Data sources considered and rejected
+
+### MFN (Modular Finance) — investigated 2026-08-13, not built
+
+Most of the criterion coverage gap is language only a company's own release
+carries: order intake, segment detail, guidance changes. MFN distributes Nordic
+regulatory disclosures, so it looked like the way to close it. It is not, at
+least not cheaply, and the reasons are worth keeping so this doesn't get
+re-derived from scratch:
+
+- **`feed.mfn.se/v1` is a WebSub hub**, not a REST archive — it answers
+  `https://feed.mfn.se/v1 - WebSub hub server`. Every `GET` returns 400 because
+  a hub expects `POST hub.mode=subscribe&hub.topic=…&hub.callback=…`. Consuming
+  it means **push**: a publicly reachable inbound HTTPS callback, which the Pi
+  deliberately does not have — `poll-deploy.sh` exists precisely so nothing has
+  to reach in. A tunnel plus a receiver plus subscription renewal is real
+  infrastructure for one feed.
+- **The website is slug-addressed**, not id-addressed: `/all/a/castellum` is the
+  company page, `/a/<company>/<article>` the release. The UUIDs on those pages
+  are per-document storage keys, not company ids. Link count is a sound slug
+  test — Castellum returns 48, a nonsense slug returns 0.
+- **`mfn.se/robots.txt` disallows `*.json$`, `*.rss$`, `*.xml$`, `*.atom$`** for
+  every agent, while leaving the HTML pages open. `feed.mfn.se` serves no
+  robots.txt at all, which is an absence of direction rather than a permission.
+- **Issuer coverage is unverified.** Site search is client-side JavaScript, so a
+  server-side `?query=` proves nothing either way — the probes that appeared to
+  show a name missing were simply incapable of answering. No single distributor
+  covers the Swedish market (Cision and Nasdaq carry the rest), so coverage has
+  to be checked holding by holding before this is worth building.
+
+If it is revisited, the order is: ask Modular Finance whether a documented feed
+exists for this use, then check slug coverage across the actual book, and only
+then choose between WebSub and reading the HTML company pages.

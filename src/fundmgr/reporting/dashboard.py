@@ -56,8 +56,19 @@ def compute_stats(nav_history: list[NavPoint], initial_capital: float) -> dict:
     }
 
 
-def nav_chart_json(nav_history: list[NavPoint]) -> str:
-    """Return Plotly-compatible JSON for the NAV vs benchmark chart."""
+def benchmark_label(symbol: str | None) -> str:
+    """Display form of a benchmark symbol — Yahoo's index caret is noise."""
+    return (symbol or "").strip().lstrip("^").upper() or "Benchmark"
+
+
+def nav_chart_json(nav_history: list[NavPoint],
+                   benchmark_label: str = "OMXSPI") -> str:
+    """Return Plotly-compatible JSON for the NAV vs benchmark chart.
+
+    The label must be passed by every caller that isn't the Nordic fund:
+    the sims run against URTH and each sleeve carries its own benchmark, so
+    a hardcoded name silently mislabels most of the charts in the app.
+    """
     if not nav_history:
         return json.dumps({"data": [], "layout": {}})
 
@@ -97,7 +108,7 @@ def nav_chart_json(nav_history: list[NavPoint]) -> str:
             "y": bench_indexed,
             "type": "scatter",
             "mode": "lines",
-            "name": "OMXSPI",
+            "name": benchmark_label,
             "line": {"color": "#9ca3af", "width": 1.5, "dash": "dot"},
             "connectgaps": True,
         })

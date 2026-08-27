@@ -34,7 +34,9 @@
                 data-universe="{{ p.universe }}" data-mandate="{{ p.mandate }}"
                 data-benchmark="{{ p.benchmark }}" data-capital="{{ p.capital_sek }}"
                 data-default-model="{{ p.default_provider }}/{{ p.default_model }}"
-                data-default-n="{{ p.default_n_samples }}">
+                data-default-n="{{ p.default_n_samples }}"
+                data-min-amount="{{ p.min_amount_sek }}"
+                data-staged-pct="{{ p.staged_turnover_pct }}">
           {{ p.name }}
         </option>
         {% endfor %}
@@ -63,14 +65,71 @@
       <p class="text-[10px] text-slate-600 mt-1.5">N parallel samples; a ticker needs &gt;half the runs to agree</p>
     </div>
 
-    <div class="flex flex-col justify-between">
-      <label class="flex items-center gap-2 mt-5 text-sm text-slate-300 select-none cursor-pointer">
+    <div>
+      <label class="kpi-label block">Amount to place (SEK)</label>
+      <div class="flex gap-2">
+        <!-- step="any": with a numeric step the browser validates against
+             min + n*step, so a step of 1000 off a min of 1 rejects every round
+             amount (90000, 1000000, …) with "enter a valid value". Bounds are
+             enforced server-side; this field just takes the number. -->
+        <input id="f-amount" type="number" min="1" step="any" inputmode="numeric"
+               class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200">
+        <button id="f-amount-reset" type="button" title="Reset to the profile's own capital"
+                class="shrink-0 px-2 text-slate-500 hover:text-slate-300 border border-slate-700/60 rounded-lg">
+          <span class="material-symbols-outlined" style="font-size:16px">restart_alt</span>
+        </button>
+      </div>
+      <p id="amount-hint" class="text-[10px] text-slate-600 mt-1.5"></p>
+    </div>
+
+    <!-- ── Deployment mode ── -->
+    <div class="md:col-span-2 lg:col-span-3 border-t border-slate-800/60 pt-4">
+      <label class="kpi-label block mb-2">Deployment</label>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <label class="deploy-opt flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-700/60
+                      cursor-pointer hover:bg-white/[.02] transition-colors">
+          <input type="radio" name="deploy" value="full" checked
+                 class="mt-0.5 bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
+          <span>
+            <span class="block text-sm text-slate-200 font-medium">Place it all now</span>
+            <span class="block text-[10px] text-slate-500 leading-snug mt-0.5">
+              The full amount deployed in this one run, no cash held back —
+              lifts the turnover cap to 100% and the cash floor to 0%.
+            </span>
+          </span>
+        </label>
+        <label class="deploy-opt flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-700/60
+                      cursor-pointer hover:bg-white/[.02] transition-colors">
+          <input type="radio" name="deploy" value="staged"
+                 class="mt-0.5 bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
+          <span>
+            <span class="block text-sm text-slate-200 font-medium">Stage it in</span>
+            <span class="block text-[10px] text-slate-500 leading-snug mt-0.5">
+              First tranche only, under the mandate's normal cold-start cap
+              (<span id="staged-pct">50</span>% of NAV) and cash floor — what a real run would do.
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <div class="flex flex-col justify-end border-t border-slate-800/60 pt-4">
+      <label class="flex items-center gap-2 mb-3 text-sm text-slate-300 select-none cursor-pointer">
         <input id="f-macro" type="checkbox" checked
                class="rounded bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
         Include fresh macro context
       </label>
+      <label class="flex items-center gap-2 mb-3 text-sm text-slate-300 select-none cursor-pointer">
+        <input id="f-refresh" type="checkbox" checked
+               class="rounded bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
+        <span>Refetch candidate prices
+          <span class="block text-[10px] text-slate-500 leading-snug">
+            Otherwise the run uses this profile's caches, filled at its last weekly run.
+          </span>
+        </span>
+      </label>
       <button id="f-submit" type="submit"
-              class="mt-3 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed
+              class="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed
                      text-white text-sm font-semibold rounded-lg px-4 py-2 transition-colors">
         Generate portfolio
       </button>
@@ -120,17 +179,50 @@
   };
 
   // ── Form hints ──────────────────────────────────────────────────────────
+  const profileOpt = () => $('f-profile').selectedOptions[0];
+
+  function refreshAmountHint() {
+    const opt = profileOpt();
+    if (!opt) return;
+    const min = Number(opt.dataset.minAmount);
+    const val = Number($('f-amount').value);
+    const hint = $('amount-hint');
+    if (val && val < min) {
+      // Below this, a position at the max single-name weight still lands under
+      // the mandate's min trade size — the book collapses to a couple of names.
+      hint.textContent = `⚠ below ${min.toLocaleString()} SEK a full-weight position ` +
+        `falls under this profile's min trade size`;
+      hint.className = 'text-[10px] text-amber-400 mt-1.5';
+    } else {
+      hint.textContent = `profile default ${Number(opt.dataset.capital).toLocaleString()} SEK · ` +
+        `min sensible ${min.toLocaleString()} SEK`;
+      hint.className = 'text-[10px] text-slate-600 mt-1.5';
+    }
+  }
+
+  function resetAmount() {
+    const opt = profileOpt();
+    if (opt) $('f-amount').value = opt.dataset.capital;
+    refreshAmountHint();
+  }
+
   function refreshHints() {
-    const opt = $('f-profile').selectedOptions[0];
+    const opt = profileOpt();
     if (!opt) return;
     $('profile-hint').textContent =
       `universe ${opt.dataset.universe} · mandate ${opt.dataset.mandate} · ` +
       `vs ${opt.dataset.benchmark} · ${Number(opt.dataset.capital).toLocaleString()} SEK`;
     $('model-hint').textContent = $('f-model').value === ''
       ? `profile default: ${opt.dataset.defaultModel}` : '';
+    $('staged-pct').textContent = opt.dataset.stagedPct;
+    refreshAmountHint();
   }
-  $('f-profile').addEventListener('change', refreshHints);
+
+  $('f-profile').addEventListener('change', () => { resetAmount(); refreshHints(); });
   $('f-model').addEventListener('change', refreshHints);
+  $('f-amount').addEventListener('input', refreshAmountHint);
+  $('f-amount-reset').addEventListener('click', resetAmount);
+  resetAmount();
   refreshHints();
 
   // ── Result rendering (DOM-built; theses are model output, never innerHTML) ─
@@ -178,8 +270,15 @@
       if (sub) k.appendChild(el('p', 'kpi-sub', sub));
       return k;
     };
+    // Older stored results predate the deployment block
+    const dep = r.deployment || {
+      placed_sek: r.profile.capital_sek, full_deploy: null, undersized: false,
+    };
     kpis.appendChild(kpi('Positions', String(r.buy_count), `${r.invested_pct}% invested`));
-    kpis.appendChild(kpi('Cash target', `${r.cash_target_pct}%`, `of ${Number(r.profile.capital_sek).toLocaleString()} SEK`));
+    kpis.appendChild(kpi('Placed', `${Number(dep.placed_sek).toLocaleString()} SEK`,
+      dep.full_deploy === null ? `cash target ${r.cash_target_pct}%`
+        : (dep.full_deploy ? 'all at once · no cash floor'
+                           : `staged · cap ${dep.turnover_cap_pct}% · cash ${r.cash_target_pct}%`)));
     kpis.appendChild(kpi('Consensus', r.consensus ? `${r.model.n_runs}-run vote` : 'single shot',
       r.consensus ? 'ticker needs >half the runs' : ''));
     kpis.appendChild(kpi('Data', `${r.data.candidates_to_llm} candidates`,
@@ -187,6 +286,19 @@
       (r.data.stale_count ? ` · ${r.data.stale_count} stale` : '') +
       (r.data.macro_included ? ' · macro ✓' : ' · no macro')));
     body.appendChild(kpis);
+
+    if (dep.undersized) {
+      const warn = el('div', 'mb-4 text-xs text-amber-400 flex items-start gap-2');
+      const icon = el('span', 'material-symbols-outlined', 'warning');
+      icon.style.fontSize = '15px';
+      warn.appendChild(icon);
+      warn.appendChild(el('span', '',
+        `${Number(dep.placed_sek).toLocaleString()} SEK is below ` +
+        `${Number(dep.comfortable_floor_sek).toLocaleString()} SEK, so a position at the max ` +
+        `single-name weight lands under this profile's min trade size — expect few names ` +
+        `and some guardrail rejections.`));
+      body.appendChild(warn);
+    }
 
     // Market summary
     if (r.market_summary) {
@@ -282,11 +394,15 @@
     $('job-error').classList.add('hidden');
     const modelVal = $('f-model').value;
     const [provider, model_id] = modelVal ? modelVal.split('|') : [null, null];
+    const amount = parseFloat($('f-amount').value);
     const payload = {
       profile: $('f-profile').value,
       provider, model_id,
       n_runs: parseInt($('f-runs').value, 10),
       include_macro: $('f-macro').checked,
+      capital_sek: Number.isFinite(amount) && amount > 0 ? amount : null,
+      deploy_full: document.querySelector('input[name="deploy"]:checked').value === 'full',
+      refresh_prices: $('f-refresh').checked,
     };
     setBusy(true, 'Starting…');
     try {

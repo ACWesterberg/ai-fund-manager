@@ -346,3 +346,235 @@ def test_snapshot_regime_records_guidance_hash(cfg, store):
     _write_guidance(cfg, "Prefer momentum entries.")
     guided = json.loads(snapshot_to_dict(snap, "sys", "user", {}, cfg))
     assert guided["regime"]["guidance_hash"] == guidance_fingerprint(cfg)
+
+
+# ── Prompt learning selection ─────────────────────────────────────────────────
+
+def _l(category, body, run_ids=(), created="2026-08-17T10:00:00"):
+    from fundmgr.state.models import Learning
+    return Learning(category=category, body=body, run_ids=list(run_ids),
+                    created_at=datetime.fromisoformat(created))
+
+
+def test_calibration_survives_a_flood_of_newer_anecdotes():
+    """generate_learnings runs first, so calibration always carries the older
+    timestamp — recency ranking dropped the only aggregate-derived lesson."""
+    from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT, select_prompt_learnings
+
+    calib = _l("calibration", "Hit rate 40% over 5.", created="2026-08-17T09:00:00")
+    anecdotes = [
+        _l("qualitative", f"Anecdote {i}.", run_ids=["r1"],
+           created=f"2026-08-17T10:{i:02d}:00")
+        for i in range(PROMPT_LEARNING_LIMIT + 4)
+    ]
+
+    selected = select_prompt_learnings([*anecdotes, calib])
+    assert len(selected) == PROMPT_LEARNING_LIMIT
+    assert selected[0] is calib
+
+
+def test_repeated_lessons_outrank_one_off_anecdotes():
+    from fundmgr.engine.prompt import select_prompt_learnings
+
+    once = _l("qualitative", "Seen once.", run_ids=["r1"], created="2026-08-17T12:00:00")
+    thrice = _l("qualitative", "Seen thrice.", run_ids=["r1", "r2", "r3"],
+                created="2026-06-01T12:00:00")
+
+    assert select_prompt_learnings([once, thrice], limit=1) == [thrice]
+
+
+def test_selection_is_recency_ordered_within_a_tier():
+    from fundmgr.engine.prompt import select_prompt_learnings
+
+    older = _l("qualitative", "Older.", run_ids=["r1"], created="2026-06-01T12:00:00")
+    newer = _l("qualitative", "Newer.", run_ids=["r2"], created="2026-08-17T12:00:00")
+
+    assert select_prompt_learnings([older, newer]) == [newer, older]
+
+
+def test_learnings_block_renders_only_the_selection():
+    from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT, _learnings_block
+
+    block = _learnings_block([
+        _l("qualitative", f"Anecdote {i}.", created=f"2026-08-17T10:{i:02d}:00")
+        for i in range(PROMPT_LEARNING_LIMIT + 3)
+    ])
+    assert block.count("[QUALITATIVE]") == PROMPT_LEARNING_LIMIT
+    assert _learnings_block([]) == ""
+
+
+# ── Learnings regime fingerprint ──────────────────────────────────────────────
+
+def test_learnings_fingerprint_tracks_the_block_the_model_saw():
+    from fundmgr.engine.prompt import learnings_fingerprint
+
+    assert learnings_fingerprint("") is None
+    assert learnings_fingerprint("   ") is None
+
+    a = learnings_fingerprint("## Past Performance Reflections\n  [CALIBRATION] x")
+    b = learnings_fingerprint("## Past Performance Reflections\n  [CALIBRATION] x")
+    c = learnings_fingerprint("## Past Performance Reflections\n  [CALIBRATION] y")
+    assert a == b and a != c
+    assert len(a) == 12
+
+
+def test_learnings_count_matches_the_rendered_block():
+    from fundmgr.engine.prompt import _learnings_block, learnings_count
+
+    assert learnings_count("") == 0
+    block = _learnings_block([
+        _l("calibration", "Hit rate."),
+        _l("qualitative", "Repeated pattern.", run_ids=["r1", "r2"]),
+    ])
+    assert learnings_count(block) == 2
+
+
+def test_snapshot_regime_records_the_learnings_channel():
+    """Learnings reach every prompt; without a fingerprint their effect is unmeasurable."""
+    from fundmgr.engine.prompt import _learnings_block, snapshot_to_dict
+
+    cfg = AppConfig()
+    snap = PortfolioSnapshot(positions=[], cash_sek=150_000)
+
+    block = _learnings_block([_l("calibration", "Hit rate 40%.")])
+    regime = json.loads(
+        snapshot_to_dict(snap, "sys", "usr", fields={"learnings": block}, cfg=cfg)
+    )["regime"]
+    assert regime["learnings_hash"] is not None
+    assert regime["learnings_n"] == 1
+
+    # A run carrying no lessons is the unguided arm — it must be distinguishable.
+    unguided = json.loads(
+        snapshot_to_dict(snap, "sys", "usr", fields={"learnings": ""}, cfg=cfg)
+    )["regime"]
+    assert unguided["learnings_hash"] is None
+    assert unguided["learnings_n"] == 0
+
+
+# ── Thesis signal in the metric ───────────────────────────────────────────────
+
+def _ex(alphas, theses=None):
+    return SimpleNamespace(ticker_alphas=alphas, ticker_theses=theses or {})
+
+
+def _pred(*actions):
+    return SimpleNamespace(decision=SimpleNamespace(actions=[
+        SimpleNamespace(ticker=t, side=s) for t, s in actions
+    ]))
+
+
+def test_metric_unchanged_when_no_thesis_verdicts_exist():
+    """Degrades to the pure-alpha behaviour while verdicts are still sparse."""
+    ex = _ex({"AAA": 4.0, "BBB": -4.0})
+    assert decision_metric(ex, _pred(("AAA", "buy"))) > 0.5
+    assert decision_metric(ex, _pred(("BBB", "buy"))) < 0.5
+    # An unresolved verdict carries no information and must not change the score.
+    unresolved = _ex({"AAA": 4.0, "BBB": -4.0}, {"AAA": "unresolved", "BBB": "unresolved"})
+    assert decision_metric(unresolved, _pred(("AAA", "buy"))) == pytest.approx(
+        decision_metric(ex, _pred(("AAA", "buy")))
+    )
+
+
+def test_metric_rewards_buying_a_name_whose_thesis_held():
+    """The point of the blend: reward being right about the business, which is a
+    far less noisy signal than a 28-day price move."""
+    alphas = {"AAA": 0.0, "BBB": 0.0}   # price said nothing either way
+    held = _ex(alphas, {"AAA": "held"})
+    broke = _ex(alphas, {"AAA": "broke"})
+    assert decision_metric(held, _pred(("AAA", "buy"))) > 0.5
+    assert decision_metric(broke, _pred(("AAA", "buy"))) < 0.5
+
+
+def test_metric_rewards_selling_a_name_whose_thesis_broke():
+    alphas = {"AAA": 0.0}
+    broke = _ex(alphas, {"AAA": "broke"})
+    assert decision_metric(broke, _pred(("AAA", "sell"))) > 0.5
+
+
+def test_thesis_term_can_temper_a_lucky_win():
+    """A position that beat on a thesis that broke is luck; the metric should not
+    reward it as fully as the same win on a thesis that held."""
+    alphas = {"AAA": 6.0}
+    lucky = decision_metric(_ex(alphas, {"AAA": "broke"}), _pred(("AAA", "buy")))
+    earned = decision_metric(_ex(alphas, {"AAA": "held"}), _pred(("AAA", "buy")))
+    assert earned > lucky
+
+
+def test_metric_stays_bounded_with_thesis_signal():
+    alphas = {t: 50.0 for t in ("A", "B", "C")}
+    theses = {t: "held" for t in ("A", "B", "C")}
+    score = decision_metric(_ex(alphas, theses), _pred(*[(t, "buy") for t in alphas]))
+    assert 0.0 < score < 1.0
+
+
+# ── Pooled trainset ───────────────────────────────────────────────────────────
+
+def test_trainset_carries_thesis_verdicts(store):
+    _save_run(store, "2026-07-01-a", datetime(2026, 7, 1))
+    store.seed_outcomes_for_run("2026-07-01-a", json.dumps([
+        {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+    ]), prices={"AAA.ST": 100.0})
+    row = [o for o in store.get_all_outcomes() if o.ticker == "AAA.ST"][0]
+    with store._conn() as conn:
+        conn.execute(
+            "UPDATE decision_outcomes SET position_return_pct=8, benchmark_return_pct=2, "
+            "outperformed=1, thesis_verdict='held' WHERE id=?", (row.id,))
+
+    ex = build_trainset(store)
+    assert len(ex) == 1
+    assert ex[0]["ticker_theses"] == {"AAA.ST": "held"}
+
+
+def test_pooled_trainset_merges_funds_in_time_order(tmp_path, monkeypatch):
+    """Five funds accrue five examples a week between them; one accrues one."""
+    from fundmgr.engine.optimizer import build_pooled_trainset
+
+    def _fund(name, run_ids):
+        cfg = AppConfig()
+        cfg.db_path = tmp_path / f"{name}.db"
+        st = Store(cfg.db_path)
+        for rid in run_ids:
+            _save_run(st, rid, datetime.strptime(rid[:10], "%Y-%m-%d"))
+            st.seed_outcomes_for_run(rid, json.dumps([
+                {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+            ]), prices={"AAA.ST": 100.0})
+            with st._conn() as conn:
+                conn.execute(
+                    "UPDATE decision_outcomes SET position_return_pct=8, "
+                    "benchmark_return_pct=2, outperformed=1 WHERE run_id=?", (rid,))
+        return cfg
+
+    a = _fund("alpha", ["2026-07-06-a", "2026-07-20-a"])
+    b = _fund("beta", ["2026-07-13-b"])
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("fundmgr.config.load_config", lambda p=None: b)
+
+    a.optimizer.pool_configs = ["beta.yaml"]
+    pooled = build_pooled_trainset(a)
+
+    assert [e["run_id"] for e in pooled] == [
+        "2026-07-06-a", "2026-07-13-b", "2026-07-20-a",
+    ]
+    # Sources are labelled, so the artifact can record what it trained on.
+    assert {e["source"] for e in pooled} == {"alpha", "beta"}
+
+
+def test_pooling_survives_an_unreadable_sibling(tmp_path, monkeypatch):
+    """A missing sibling config must not stop this fund optimizing."""
+    from fundmgr.engine.optimizer import build_pooled_trainset
+
+    cfg = AppConfig()
+    cfg.db_path = tmp_path / "solo.db"
+    st = Store(cfg.db_path)
+    _save_run(st, "2026-07-06-a", datetime(2026, 7, 6))
+    st.seed_outcomes_for_run("2026-07-06-a", json.dumps([
+        {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
+    ]), prices={"AAA.ST": 100.0})
+    with st._conn() as conn:
+        conn.execute("UPDATE decision_outcomes SET position_return_pct=8, "
+                     "benchmark_return_pct=2, outperformed=1")
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path)
+    cfg.optimizer.pool_configs = ["does-not-exist.yaml"]
+    assert len(build_pooled_trainset(cfg)) == 1

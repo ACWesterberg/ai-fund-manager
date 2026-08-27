@@ -81,6 +81,107 @@
   {% endif %}
 </section>
 
+<!-- ── Photo import ── -->
+<section class="card mb-5" id="photo-import">
+  <div class="card-header">
+    <h2 class="card-title">Import from a photo of your portfolio</h2>
+    <span class="text-xs text-slate-600">screenshot → holdings → kill criteria</span>
+  </div>
+
+  <p class="text-xs text-slate-500 mb-3">
+    Upload one or more screenshots of your broker's holdings screen (Montrose, Avanza, Nordnet, IBKR…).
+    The rows are read out of the image, matched to Yahoo tickers, and put in a review table below —
+    set a kill criterion and a time horizon per stock, then import. Nothing is saved until you press
+    <b class="text-slate-400">Import</b>.
+  </p>
+
+  <div class="flex flex-wrap items-center gap-3">
+    <label for="pi-files"
+           class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-sm font-semibold text-slate-200 cursor-pointer flex items-center gap-2">
+      <span class="material-symbols-outlined" style="font-size:16px">add_a_photo</span>
+      Choose photos
+    </label>
+    <input id="pi-files" type="file" accept="image/*" multiple class="hidden" />
+    <span id="pi-filenames" class="text-xs text-slate-500">No files chosen</span>
+    <button type="button" id="pi-read-btn" disabled
+            class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold text-white">
+      Read holdings
+    </button>
+    <span id="pi-busy" class="hidden text-xs text-slate-500">Reading the screenshot…</span>
+  </div>
+
+  <div id="pi-error" class="hidden mt-3 px-4 py-2.5 rounded-xl border border-red-500/20 bg-red-500/5 text-red-400 text-xs font-semibold"></div>
+
+  <!-- Review table (populated by JS) -->
+  <div id="pi-review" class="hidden mt-5">
+    <div id="pi-notes" class="mb-3 text-xs text-slate-500"></div>
+
+    <div class="overflow-x-auto -mx-1">
+      <table class="data-table" style="font-size:12px">
+        <thead>
+          <tr>
+            <th style="width:28px"></th>
+            <th>Ticker</th>
+            <th>Name</th>
+            <th class="num">Shares</th>
+            <th class="num">Avg cost (SEK)</th>
+            <th class="num">Value</th>
+            <th>Kill criterion</th>
+            <th class="num">Max drop</th>
+            <th>Horizon</th>
+          </tr>
+        </thead>
+        <tbody id="pi-rows"></tbody>
+        <tfoot>
+          <tr style="border-top:1px solid rgba(148,163,184,.2)">
+            <td colspan="5" class="text-slate-400 font-semibold">Total at cost</td>
+            <td class="num font-semibold" id="pi-total">—</td>
+            <td colspan="3" class="text-slate-500" id="pi-total-note"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div id="pi-total-warning"
+         class="hidden mt-3 px-4 py-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 text-amber-400 text-xs font-semibold"></div>
+
+    <p class="text-[11px] text-slate-600 mt-2">
+      Cost basis is what you paid per share in SEK (Inköpsvärde ÷ antal) — check it against the broker;
+      a row read from market value instead is flagged in amber. Max drop is a hard kill line measured
+      from that cost; the horizon is when you want to re-run the thesis, not a sell date.
+    </p>
+
+    <form method="post" action="/live/create-from-photo" id="pi-form"
+          class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+      <input type="hidden" name="holdings_json" id="pi-holdings-json" />
+      <div class="md:col-span-2">
+        <label class="kpi-label" for="pi-name">Sleeve name</label>
+        <input id="pi-name" name="name" required placeholder="e.g. Montrose KF"
+               class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60" />
+      </div>
+      <div>
+        <label class="kpi-label" for="pi-cash">Free cash (SEK)</label>
+        <input id="pi-cash" name="cash_sek" type="number" step="1" min="0" value="0"
+               class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60" />
+      </div>
+      <div>
+        <label class="kpi-label" for="pi-benchmark">Benchmark (Yahoo)</label>
+        <input id="pi-benchmark" name="benchmark" value="URTH"
+               class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60" />
+      </div>
+      <div class="md:col-span-4 flex flex-wrap items-center gap-3">
+        <button type="submit" id="pi-import-btn"
+                class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white">
+          Import <span id="pi-count"></span> holdings
+        </button>
+        <span class="text-[11px] text-slate-600">
+          Seeded at the cost basis above — no trades are placed. Kill criteria and horizons are watched daily.
+        </span>
+      </div>
+    </form>
+  </div>
+</section>
+
 <!-- ── Import form ── -->
 <section class="card">
   <div class="card-header">
@@ -132,6 +233,284 @@
     document.getElementById('lf-create-btn').disabled = true;
     document.getElementById('lf-busy').classList.remove('hidden');
   });
+</script>
+
+<script>
+(() => {
+  const filesInput = document.getElementById('pi-files');
+  const readBtn    = document.getElementById('pi-read-btn');
+  const busy       = document.getElementById('pi-busy');
+  const errorBox   = document.getElementById('pi-error');
+  const review     = document.getElementById('pi-review');
+  const rowsBody   = document.getElementById('pi-rows');
+  const notesBox   = document.getElementById('pi-notes');
+  const nameInput  = document.getElementById('pi-name');
+  const cashInput  = document.getElementById('pi-cash');
+  const countSpan  = document.getElementById('pi-count');
+  let reportedTotal = null;
+
+  const INPUT = 'w-full bg-slate-950/60 border border-slate-700/60 rounded px-2 py-1 text-xs ' +
+                'text-slate-200 focus:outline-none focus:border-sky-500/60';
+
+  const fmt = (n) => (n === null || n === undefined || isNaN(n))
+    ? '—' : Number(n).toLocaleString('sv-SE', {maximumFractionDigits: 0});
+
+  const showError = (msg) => {
+    errorBox.textContent = msg;
+    errorBox.classList.remove('hidden');
+  };
+
+  cashInput.addEventListener('input', updateTotal);
+
+  filesInput.addEventListener('change', () => {
+    const names = [...filesInput.files].map(f => f.name);
+    document.getElementById('pi-filenames').textContent =
+      names.length ? names.join(', ') : 'No files chosen';
+    readBtn.disabled = names.length === 0;
+  });
+
+  readBtn.addEventListener('click', async () => {
+    if (!filesInput.files.length) return;
+    errorBox.classList.add('hidden');
+    readBtn.disabled = true;
+    busy.classList.remove('hidden');
+
+    const body = new FormData();
+    for (const file of filesInput.files) body.append('photos', file);
+
+    let payload;
+    try {
+      const resp = await fetch('/live/extract-photos', {method: 'POST', body});
+      payload = await resp.json();
+    } catch (e) {
+      payload = {ok: false, error: 'Upload failed: ' + e};
+    }
+    busy.classList.add('hidden');
+    readBtn.disabled = false;
+
+    if (!payload || !payload.ok) {
+      showError((payload && payload.error) || 'Could not read the photo.');
+      return;
+    }
+    render(payload);
+  });
+
+  function render(payload) {
+    rowsBody.innerHTML = '';
+    payload.holdings.forEach((h, i) => rowsBody.appendChild(buildRow(h, i)));
+    updateCount();
+
+    const bits = [];
+    bits.push(`${payload.holdings.length} holdings read by ${payload.model}` +
+              (payload.ocr_used ? ' (with local OCR cross-check)' : ''));
+    if (payload.unresolved) {
+      bits.push(`<span class="text-amber-400">${payload.unresolved} row(s) without a ticker — ` +
+                `type the Yahoo symbol, or untick to skip</span>`);
+    }
+    if (payload.notes) bits.push(payload.notes);
+    notesBox.innerHTML = bits.join(' · ') + renderWarnings(payload.warnings || []);
+
+    if (payload.account_name && !nameInput.value) nameInput.value = payload.account_name;
+    if (payload.cash_sek) cashInput.value = Math.round(payload.cash_sek);
+    reportedTotal = payload.total_value_sek || null;
+    updateTotal();
+    review.classList.remove('hidden');
+    review.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+
+
+  // The same issue on thirteen rows is one finding, not thirteen. Group by the
+  // message and name the rows, so the panel stays readable at any book size.
+  function renderWarnings(warnings) {
+    if (!warnings.length) return '';
+    const groups = new Map();
+    warnings.forEach(w => {
+      const at = w.indexOf(': ');
+      const who = at > 0 ? w.slice(0, at) : '';
+      const what = at > 0 ? w.slice(at + 2) : w;
+      if (!groups.has(what)) groups.set(what, []);
+      if (who) groups.get(what).push(who);
+    });
+    const items = [...groups.entries()].map(([what, who]) => {
+      const label = who.length > 3
+        ? `${who.length} rows (${who.slice(0, 3).join(', ')}…)`
+        : who.join(', ');
+      return `<li>${label ? `<b>${label}</b> — ` : ''}${what}</li>`;
+    });
+    return '<ul class="mt-2 space-y-1 text-amber-400 list-disc pl-4">' +
+           items.join('') + '</ul>';
+  }
+
+  function cell(row, child) {
+    const td = document.createElement('td');
+    if (child) td.appendChild(child);
+    row.appendChild(td);
+    return td;
+  }
+
+  function input(value, attrs = {}) {
+    const el = document.createElement('input');
+    el.className = INPUT;
+    el.value = (value === null || value === undefined) ? '' : value;
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    return el;
+  }
+
+  function buildRow(h, i) {
+    const tr = document.createElement('tr');
+    tr.dataset.index = i;
+    // Kept so a corrected ticker can be learned against what identified the row.
+    tr.dataset.isin = h.isin || '';
+    tr.dataset.rawTicker = h.raw_ticker || '';
+    tr.dataset.suggested = h.ticker || '';
+
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.checked = true;
+    include.className = 'pi-include accent-sky-500';
+    include.addEventListener('change', () => {
+      tr.style.opacity = include.checked ? '1' : '0.4';
+      updateCount();
+      updateTotal();
+    });
+    cell(tr, include);
+
+    const ticker = input(h.ticker || h.raw_ticker || '', {placeholder: 'NVDA'});
+    ticker.classList.add('pi-ticker', 'font-semibold');
+    if (!h.ticker) ticker.style.borderColor = 'rgba(251,191,36,.5)';
+    cell(tr, ticker);
+
+    const nameTd = cell(tr, null);
+    nameTd.className = 'text-slate-400';
+    nameTd.style.maxWidth = '160px';
+    nameTd.textContent = h.name || '';
+    if (h.resolved_via) nameTd.title = 'Matched via ' + h.resolved_via;
+
+    const shares = input(h.shares, {type: 'number', step: 'any', min: '0'});
+    shares.classList.add('pi-shares');
+    if (h.shares_basis === 'derived') {
+      shares.style.borderColor = 'rgba(251,191,36,.5)';
+      shares.title = 'Derived from market value ÷ price — no share count on the screenshot.';
+    }
+    shares.addEventListener('input', updateValue);
+    cell(tr, shares).className = 'num';
+
+    const cost = input(h.avg_cost_sek, {type: 'number', step: '0.01', min: '0'});
+    cost.classList.add('pi-cost');
+    cost.addEventListener('input', updateValue);
+    // A cost basis derived from market value is a guess, not the price paid.
+    if (h.avg_cost_basis === 'market_value_sek') {
+      cost.style.borderColor = 'rgba(251,191,36,.5)';
+      cost.title = 'Read from market value — no purchase price on the screenshot. Check it.';
+    }
+    cell(tr, cost).className = 'num';
+
+    const valueTd = cell(tr, null);
+    valueTd.className = 'num text-slate-500 pi-value';
+
+    const kill = input(h.kill_criterion || '', {placeholder: 'e.g. loses the Apple socket'});
+    kill.classList.add('pi-kill');
+    cell(tr, kill).style.minWidth = '200px';
+
+    const drop = input('', {type: 'number', step: '1', min: '1', max: '99', placeholder: '25'});
+    drop.classList.add('pi-drop');
+    cell(tr, drop).className = 'num';
+
+    const horizon = document.createElement('select');
+    horizon.className = INPUT + ' pi-horizon';
+    // Policy horizons in use are 12/15/18/24 months, so those are all offered
+    // rather than rounded to whichever option happens to exist.
+    [['', 'none'], ['3', '3 months'], ['6', '6 months'], ['9', '9 months'],
+     ['12', '12 months'], ['15', '15 months'], ['18', '18 months'],
+     ['21', '21 months'], ['24', '2 years'], ['36', '3 years']]
+      .forEach(([value, label]) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        horizon.appendChild(opt);
+      });
+    horizon.value = '12';
+    cell(tr, horizon);
+
+    updateValue.call(shares);
+    return tr;
+  }
+
+  function updateValue() {
+    const tr = this.closest ? this.closest('tr') : null;
+    (tr ? [tr] : [...rowsBody.querySelectorAll('tr')]).forEach(row => {
+      const shares = parseFloat(row.querySelector('.pi-shares').value);
+      const cost   = parseFloat(row.querySelector('.pi-cost').value);
+      row.querySelector('.pi-value').textContent =
+        (shares && cost) ? fmt(shares * cost) : '—';
+    });
+    updateTotal();
+  }
+
+  // One number you can check against the broker. A column read from the wrong
+  // place leaves every row individually plausible and only shows up here.
+  function updateTotal() {
+    let total = 0, missing = 0;
+    rowsBody.querySelectorAll('tr').forEach(row => {
+      if (!row.querySelector('.pi-include').checked) return;
+      const shares = parseFloat(row.querySelector('.pi-shares').value);
+      const cost   = parseFloat(row.querySelector('.pi-cost').value);
+      if (shares && cost) total += shares * cost; else missing++;
+    });
+    document.getElementById('pi-total').textContent = total ? fmt(total) + ' SEK' : '—';
+    document.getElementById('pi-total-note').textContent =
+      missing ? `${missing} row(s) without shares × cost are not counted` : '';
+
+    const warn = document.getElementById('pi-total-warning');
+    const cash = parseFloat(cashInput.value) || 0;
+    if (reportedTotal && total) {
+      const ratio = (total + cash) / reportedTotal;
+      if (ratio > 1.5 || ratio < 0.5) {
+        warn.textContent = `These rows add up to ${fmt(total + cash)} SEK including cash, ` +
+          `but the screenshot's own total reads ${fmt(reportedTotal)} SEK — ` +
+          `off by ${ratio.toFixed(1)}×. Check the Shares and Avg cost columns ` +
+          `against the broker before importing.`;
+        warn.classList.remove('hidden');
+        return;
+      }
+    }
+    warn.classList.add('hidden');
+  }
+
+  function updateCount() {
+    const n = rowsBody.querySelectorAll('.pi-include:checked').length;
+    countSpan.textContent = n;
+    document.getElementById('pi-import-btn').disabled = n === 0;
+  }
+
+  document.getElementById('pi-form').addEventListener('submit', (event) => {
+    const rows = [];
+    rowsBody.querySelectorAll('tr').forEach(tr => {
+      if (!tr.querySelector('.pi-include').checked) return;
+      const ticker = tr.querySelector('.pi-ticker').value.trim().toUpperCase();
+      if (!ticker) return;
+      rows.push({
+        ticker: ticker,
+        isin: tr.dataset.isin,
+        raw_ticker: tr.dataset.rawTicker,
+        suggested_ticker: tr.dataset.suggested,
+        name: tr.children[2].textContent.trim() || ticker,
+        shares: tr.querySelector('.pi-shares').value,
+        avg_cost_sek: tr.querySelector('.pi-cost').value,
+        kill_criterion: tr.querySelector('.pi-kill').value.trim(),
+        max_drawdown_pct: tr.querySelector('.pi-drop').value,
+        horizon_months: tr.querySelector('.pi-horizon').value,
+      });
+    });
+    if (!rows.length) {
+      event.preventDefault();
+      showError('Every row is unticked or missing a ticker — nothing to import.');
+      return;
+    }
+    document.getElementById('pi-holdings-json').value = JSON.stringify(rows);
+    document.getElementById('pi-import-btn').disabled = true;
+  });
+})();
 </script>
 
 {% endblock %}

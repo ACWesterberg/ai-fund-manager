@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
     outperformed        INTEGER,            -- 1=yes, 0=no, NULL=not yet evaluated
     evaluation_date     TEXT,
     thesis              TEXT,               -- LLM's stated thesis at time of decision
+    source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review'
+    decision_date       TEXT,               -- set for review rows; run rows read it off the recommendation
+    -- Did the reasoning hold, independently of whether the price obliged?
+    thesis_verdict      TEXT,               -- held | broke | unresolved | NULL=not checked
+    thesis_evidence     TEXT,               -- what the verdict was read off
+    -- Horizon this outcome was actually scored over. Per-fund and changeable,
+    -- so a row measured at 28 days must not be silently compared with one
+    -- measured at 90.
+    horizon_days        INTEGER,
     UNIQUE(run_id, ticker)
 );
 
@@ -147,12 +156,76 @@ CREATE TABLE IF NOT EXISTS daily_price_alerts (
     PRIMARY KEY (ticker, alert_date)
 );
 
+-- One row per ticker per day per alert kind ('stop', 'target'). Separate from
+-- daily_price_alerts because that table's primary key is (ticker, alert_date),
+-- which cannot hold two kinds for the same ticker on the same day — a stop
+-- alert would silently suppress that day's target alert, and vice versa.
+CREATE TABLE IF NOT EXISTS position_alerts (
+    ticker      TEXT NOT NULL,
+    alert_date  TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    PRIMARY KEY (ticker, alert_date, kind)
+);
+
+-- Single-position review verdicts (stop breach / take-profit hit), kept in full.
+-- decision_outcomes records these too, but only as an action + thesis string for
+-- scoring: it cannot say how much to sell, where the target moved to, or whether
+-- the human has acted yet. Without that the dashboard had no way to show a
+-- verdict at all, and a TRIM that reached Telegram and nowhere else was invisible
+-- the moment the notification was swiped away.
+CREATE TABLE IF NOT EXISTS position_reviews (
+    review_id       TEXT PRIMARY KEY,   -- {date}-{source}-{TICKER}: one per name per day
+    ticker          TEXT NOT NULL,
+    source          TEXT NOT NULL,      -- stop_review | target_review
+    verdict         TEXT NOT NULL,      -- exit | sell | trim | raise | hold | add
+    confidence      REAL,
+    trim_pct        REAL,               -- % of the position the verdict says to sell
+    votes_json      TEXT,               -- {"trim": 3} — the consensus behind it
+    n_samples       INTEGER,
+    old_target_pct  REAL,               -- take-profit level in force when it fired
+    new_target_pct  REAL,               -- level the review proposed
+    applied_target_pct REAL,            -- level actually written back (NULL = none was)
+    price_at_review REAL,               -- native currency, as decision_outcomes stores it
+    what_changed    TEXT,
+    rationale       TEXT,
+    created_at      TEXT NOT NULL,
+    -- open      = needs a trade from the human, still outstanding
+    -- done      = the human said they acted on it
+    -- dismissed = the human said they will not
+    -- noted     = nothing to execute (RAISE/HOLD); kept for the record only
+    -- superseded= a later review of the same name replaced it
+    status          TEXT NOT NULL DEFAULT 'open',
+    resolved_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_position_reviews_open
+    ON position_reviews (status, created_at);
+
 -- Small key-value store for fund-level flags (e.g. one-shot reminders).
 CREATE TABLE IF NOT EXISTS app_meta (
     key     TEXT PRIMARY KEY,
     value   TEXT NOT NULL
 );
 """
+
+
+# Regime bucket for runs whose snapshot predates the key being asked about —
+# distinct from None, which means the run carried none of whatever it is.
+NOT_RECORDED = "(not recorded)"
+
+
+# Verdicts that only a human can carry out — the review engine never trades.
+# RAISE and HOLD change the plan without asking anything of anyone.
+ACTIONABLE_VERDICTS = frozenset({"exit", "sell", "trim", "add"})
+
+
+def review_run_id(ticker: str, source: str, date: str) -> str:
+    """The id a review is filed under — the same key in decision_outcomes and
+    position_reviews, so the record and the score refer to one another.
+
+    The day is the unit: re-reviewing a name on the same day overwrites, rather
+    than stacking a second verdict on top of the first.
+    """
+    return f"{date}-{source}-{ticker.upper()}"
 
 
 class Store:
@@ -183,6 +256,18 @@ class Store:
             "ALTER TABLE recommendations ADD COLUMN sampling_log TEXT",
             "ALTER TABLE transactions ADD COLUMN currency TEXT",
             "ALTER TABLE news_cache ADD COLUMN summary TEXT",
+            # Review-sourced decisions (stop / take-profit) live in
+            # decision_outcomes alongside run decisions, but carry their own date
+            # instead of borrowing a recommendations row — writing to that table
+            # would put a single-ticker review into the dashboard's "Last
+            # Decision", the run counter, and the optimizer's training set.
+            "ALTER TABLE decision_outcomes ADD COLUMN source TEXT",
+            "ALTER TABLE decision_outcomes ADD COLUMN decision_date TEXT",
+            # Thesis verification: whether the claim made at entry came true, which
+            # is checkable in weeks and far denser than a 28-day price move.
+            "ALTER TABLE decision_outcomes ADD COLUMN thesis_verdict TEXT",
+            "ALTER TABLE decision_outcomes ADD COLUMN thesis_evidence TEXT",
+            "ALTER TABLE decision_outcomes ADD COLUMN horizon_days INTEGER",
         ]:
             with self._conn() as conn:
                 try:
@@ -415,6 +500,22 @@ class Store:
                 (ticker, date),
             )
 
+    def has_sent_position_alert(self, ticker: str, date: str, kind: str) -> bool:
+        """True if a `kind` alert ('stop' / 'target') already went out today."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM position_alerts WHERE ticker = ? AND alert_date = ? AND kind = ?",
+                (ticker, date, kind),
+            ).fetchone()
+            return row is not None
+
+    def record_position_alert(self, ticker: str, date: str, kind: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO position_alerts (ticker, alert_date, kind) VALUES (?, ?, ?)",
+                (ticker, date, kind),
+            )
+
     def total_fees_paid(self) -> float:
         with self._conn() as conn:
             row = conn.execute("SELECT COALESCE(SUM(fee_sek), 0) as total FROM transactions").fetchone()
@@ -612,6 +713,53 @@ class Store:
                 count += 1
         return count
 
+    def score_by_regime(self, key: str) -> list[dict]:
+        """Mean score of scored runs, grouped by one regime key from the snapshot.
+
+        The A/B readout for the two channels that silently shape every prompt:
+        `guidance_hash` (MIPRO's compiled instructions) and `learnings_hash`
+        (the lessons block). Runs that carried none of it group under None —
+        that is the unguided arm, and it is the comparison that matters. Runs
+        whose snapshot predates the key group under NOT_RECORDED instead, kept
+        apart because they carried whatever was live at the time.
+
+        Descriptive only: weekly runs are few and self-selected in time, so
+        treat a difference here as a prompt to look, not as an effect.
+        """
+        import json as _json
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT prompt_snapshot, score FROM recommendations WHERE score IS NOT NULL"
+            ).fetchall()
+
+        buckets: dict[object, list[float]] = {}
+        for r in rows:
+            try:
+                regime = _json.loads(r["prompt_snapshot"]).get("regime") or {}
+            except Exception:
+                regime = {}
+            # Absent key and explicit null mean opposite things: a snapshot
+            # written before this key existed carried whatever was live at the
+            # time, while a null means the run demonstrably carried none. Folding
+            # them together would average the unguided baseline with runs that
+            # were fully guided, and label the result "unguided".
+            value = regime[key] if key in regime else NOT_RECORDED
+            buckets.setdefault(value, []).append(float(r["score"]))
+
+        return sorted(
+            (
+                {
+                    "value": value,
+                    "runs": len(scores),
+                    "mean_score": sum(scores) / len(scores),
+                }
+                for value, scores in buckets.items()
+            ),
+            key=lambda b: b["mean_score"],
+            reverse=True,
+        )
+
     def get_rejection_stats(self) -> dict:
         """Aggregate the two rates the Refine gate depends on, across all runs:
 
@@ -676,14 +824,24 @@ class Store:
     def get_decisions_for_ticker(self, ticker: str, limit: int = 3) -> list[dict]:
         """Most recent decisions on a ticker (newest first), for stop-loss review.
 
-        Returns dicts: {timestamp, action, confidence, thesis, price_at_decision}.
+        Returns dicts: {timestamp, action, confidence, thesis, price_at_decision,
+        source, thesis_verdict, thesis_evidence}.
+
+        The verdict travels with the thesis it judged: a caller showing what was
+        claimed about a name should be able to show whether the claim survived,
+        and joining that back on afterwards is how the two drift apart.
         """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT r.timestamp AS timestamp, do.action AS action, do.confidence AS confidence, "
-                "do.thesis AS thesis, do.price_at_decision AS price_at_decision "
-                "FROM decision_outcomes do JOIN recommendations r ON do.run_id = r.run_id "
-                "WHERE do.ticker = ? ORDER BY r.timestamp DESC LIMIT ?",
+                "SELECT COALESCE(do.decision_date, r.timestamp) AS timestamp, "
+                "do.action AS action, do.confidence AS confidence, "
+                "do.thesis AS thesis, do.price_at_decision AS price_at_decision, "
+                "do.source AS source, "
+                "do.thesis_verdict AS thesis_verdict, "
+                "do.thesis_evidence AS thesis_evidence "
+                "FROM decision_outcomes do "
+                "LEFT JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.ticker = ? ORDER BY timestamp DESC LIMIT ?",
                 (ticker.upper(), limit),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -718,7 +876,7 @@ class Store:
             conn.execute(
                 "UPDATE decision_outcomes SET "
                 "price_at_evaluation = ?, benchmark_return_pct = ?, position_return_pct = ?, "
-                "outperformed = ?, evaluation_date = ? "
+                "outperformed = ?, evaluation_date = ?, horizon_days = ? "
                 "WHERE run_id = ? AND ticker = ?",
                 (
                     outcome.price_at_evaluation,
@@ -726,6 +884,7 @@ class Store:
                     outcome.position_return_pct,
                     1 if outcome.outperformed else 0 if outcome.outperformed is not None else None,
                     outcome.evaluation_date,
+                    outcome.horizon_days,
                     outcome.run_id,
                     outcome.ticker,
                 ),
@@ -736,10 +895,16 @@ class Store:
         from fundmgr.state.models import DecisionOutcome as DO
         cutoff = datetime.utcnow().isoformat()[:10]
         with self._conn() as conn:
+            # LEFT JOIN + COALESCE: review decisions carry their own date and have
+            # no recommendations row, so an inner join would silently drop them
+            # and they would never be evaluated.
             rows = conn.execute(
-                "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
-                "JOIN recommendations r ON do.run_id = r.run_id "
-                "WHERE do.outperformed IS NULL AND DATE(r.timestamp) <= DATE(?, ?)",
+                "SELECT do.*, COALESCE(do.decision_date, r.timestamp) as run_ts "
+                "FROM decision_outcomes do "
+                "LEFT JOIN recommendations r ON do.run_id = r.run_id "
+                "WHERE do.outperformed IS NULL "
+                "AND COALESCE(do.decision_date, r.timestamp) IS NOT NULL "
+                "AND DATE(COALESCE(do.decision_date, r.timestamp)) <= DATE(?, ?)",
                 (cutoff, f"-{older_than_days} days"),
             ).fetchall()
         return [
@@ -752,14 +917,188 @@ class Store:
             for r in rows
         ]
 
+    def log_review_decision(
+        self,
+        ticker: str,
+        action: str,
+        confidence: float,
+        thesis: str,
+        price_at_decision: float | None,
+        source: str,
+        decision_date: str | None = None,
+    ) -> str:
+        """
+        Record a review verdict as a decision, to be evaluated like any other.
+
+        `price_at_decision` must be the NATIVE-currency price: outcomes are
+        scored against the cached closes, which are native, so a SEK-converted
+        price would manufacture a fake return on every foreign holding.
+
+        Returns the synthetic run_id. Re-reviewing the same name on the same day
+        overwrites that day's row rather than accumulating duplicates — the
+        UNIQUE(run_id, ticker) constraint makes the day the unit of record.
+        """
+        date = decision_date or datetime.utcnow().strftime("%Y-%m-%d")
+        run_id = review_run_id(ticker, source, date)
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO decision_outcomes "
+                "(run_id, ticker, action, confidence, price_at_decision, thesis, source, decision_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(run_id, ticker) DO UPDATE SET "
+                "action = excluded.action, confidence = excluded.confidence, "
+                "price_at_decision = excluded.price_at_decision, thesis = excluded.thesis",
+                (run_id, ticker.upper(), action, confidence, price_at_decision,
+                 thesis, source, date),
+            )
+        return run_id
+
+    # ── Position reviews (what a stop / target verdict actually asks of you) ──
+
+    def record_review(
+        self,
+        ticker: str,
+        source: str,
+        verdict: str,
+        confidence: float | None = None,
+        trim_pct: float | None = None,
+        votes: dict[str, int] | None = None,
+        n_samples: int | None = None,
+        old_target_pct: float | None = None,
+        new_target_pct: float | None = None,
+        price_at_review: float | None = None,
+        what_changed: str = "",
+        rationale: str = "",
+        review_date: str | None = None,
+    ) -> str:
+        """Store a review verdict in full and return its review_id.
+
+        A verdict that asks the human for a trade lands as 'open' and stays on
+        the dashboard until they say what they did with it; RAISE and HOLD land
+        as 'noted', because there is nothing to act on. Any earlier open review
+        of the same name is superseded — the newest read of a position is the
+        one to act on, and two contradictory instructions is worse than none.
+        """
+        date = review_date or datetime.utcnow().strftime("%Y-%m-%d")
+        ticker = ticker.upper()
+        review_id = review_run_id(ticker, source, date)
+        status = "open" if verdict in ACTIONABLE_VERDICTS else "noted"
+        now = datetime.utcnow().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE position_reviews SET status = 'superseded', resolved_at = ? "
+                "WHERE ticker = ? AND status = 'open' AND review_id != ?",
+                (now, ticker, review_id),
+            )
+            conn.execute(
+                "INSERT INTO position_reviews "
+                "(review_id, ticker, source, verdict, confidence, trim_pct, votes_json, "
+                " n_samples, old_target_pct, new_target_pct, price_at_review, what_changed, "
+                " rationale, created_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(review_id) DO UPDATE SET "
+                "verdict = excluded.verdict, confidence = excluded.confidence, "
+                "trim_pct = excluded.trim_pct, votes_json = excluded.votes_json, "
+                "n_samples = excluded.n_samples, old_target_pct = excluded.old_target_pct, "
+                "new_target_pct = excluded.new_target_pct, "
+                "price_at_review = excluded.price_at_review, "
+                "what_changed = excluded.what_changed, rationale = excluded.rationale, "
+                "created_at = excluded.created_at, status = excluded.status, "
+                "resolved_at = NULL",
+                (review_id, ticker, source, verdict, confidence, trim_pct,
+                 json.dumps(votes) if votes else None, n_samples, old_target_pct,
+                 new_target_pct, price_at_review, what_changed, rationale, now, status),
+            )
+        return review_id
+
+    def set_review_applied_target(
+        self, review_id: str, old_pct: float | None, new_pct: float
+    ) -> None:
+        """Record the take-profit level a review actually wrote back.
+
+        Separate from new_target_pct, which is only what the review proposed: a
+        proposal below the standing level is refused, and the dashboard has to be
+        able to tell "target moved" from "target argued for and declined".
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE position_reviews SET applied_target_pct = ?, old_target_pct = "
+                "COALESCE(?, old_target_pct) WHERE review_id = ?",
+                (new_pct, old_pct, review_id),
+            )
+
+    def latest_review_id(self, ticker: str, source: str) -> str | None:
+        """The most recent review of this name from this source, if there is one."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT review_id FROM position_reviews WHERE ticker = ? AND source = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (ticker.upper(), source),
+            ).fetchone()
+        return row["review_id"] if row else None
+
+    def get_open_reviews(self, tickers: list[str] | None = None) -> list[dict]:
+        """Review verdicts still waiting on a trade from the human, newest first.
+
+        `tickers` restricts to names still held — an EXIT that was carried out
+        leaves no position behind, so the instruction should stop being shown
+        whether or not anyone remembered to tick it off.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM position_reviews WHERE status = 'open' "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+        held = {t.upper() for t in tickers} if tickers is not None else None
+        return [
+            self._review_row(r) for r in rows
+            if held is None or r["ticker"] in held
+        ]
+
+    def get_recent_reviews(self, limit: int = 20) -> list[dict]:
+        """Every review verdict, newest first — the log behind the open ones."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM position_reviews ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._review_row(r) for r in rows]
+
+    def resolve_review(self, review_id: str, status: str = "done") -> bool:
+        """Close an open review. Returns False if there was nothing open to close."""
+        if status not in ("done", "dismissed"):
+            raise ValueError(f"unknown review status: {status}")
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE position_reviews SET status = ?, resolved_at = ? "
+                "WHERE review_id = ? AND status = 'open'",
+                (status, datetime.utcnow().isoformat(), review_id),
+            )
+            return cur.rowcount > 0
+
+    @staticmethod
+    def _review_row(r: sqlite3.Row) -> dict:
+        d = dict(r)
+        try:
+            d["votes"] = json.loads(d.pop("votes_json") or "{}")
+        except (TypeError, ValueError):
+            d["votes"] = {}
+        return d
+
     def get_evaluated_outcomes(self) -> list["DecisionOutcome"]:
-        """Return all retrospectively evaluated outcomes with their run dates (optimizer training data)."""
+        """Return all retrospectively evaluated outcomes with their run dates (optimizer training data).
+
+        Run decisions only. The optimizer compiles the weekly whole-portfolio
+        prompt, and a single-name review answering a different question under a
+        different prompt is not training data for it.
+        """
         from fundmgr.state.models import DecisionOutcome as DO
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
                 "JOIN recommendations r ON do.run_id = r.run_id "
-                "WHERE do.outperformed IS NOT NULL"
+                "WHERE do.outperformed IS NOT NULL "
+                "AND (do.source IS NULL OR do.source = 'run')"
             ).fetchall()
         return [
             DO(
@@ -772,6 +1111,9 @@ class Store:
                 outperformed=bool(r["outperformed"]),
                 evaluation_date=r["evaluation_date"],
                 thesis=r["thesis"],
+                thesis_verdict=r["thesis_verdict"],
+                thesis_evidence=r["thesis_evidence"],
+                horizon_days=r["horizon_days"],
                 decision_date=r["run_ts"][:10],
             )
             for r in rows
@@ -796,6 +1138,9 @@ class Store:
                 outperformed=bool(r["outperformed"]) if r["outperformed"] is not None else None,
                 evaluation_date=r["evaluation_date"],
                 thesis=r["thesis"],
+                thesis_verdict=r["thesis_verdict"],
+                thesis_evidence=r["thesis_evidence"],
+                horizon_days=r["horizon_days"],
                 decision_date=r["run_ts"][:10],
             )
             for r in rows
@@ -820,16 +1165,142 @@ class Store:
 
     def deactivate_all_learnings(self) -> int:
         """Deactivate every active learning (used after repairing corrupted outcome data)."""
+        return self.deactivate_learnings()
+
+    @staticmethod
+    def _learning_filter(category: str | None, before: str | None) -> tuple[str, list]:
+        clauses, params = ["is_active = 1"], []
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if before:
+            # created_at is stored as an ISO timestamp, so a bare date compares
+            # correctly as a prefix: everything on `before` itself sorts after it.
+            clauses.append("created_at < ?")
+            params.append(before)
+        return " AND ".join(clauses), params
+
+    def find_active_learnings(
+        self, category: str | None = None, before: str | None = None
+    ) -> list["Learning"]:
+        """Active learnings matching the filter — the preview for a prune."""
+        import json as _json
+        from fundmgr.state.models import Learning as L
+        where, params = self._learning_filter(category, before)
         with self._conn() as conn:
-            cur = conn.execute("UPDATE learnings SET is_active = 0 WHERE is_active = 1")
+            rows = conn.execute(
+                f"SELECT * FROM learnings WHERE {where} ORDER BY created_at DESC", params
+            ).fetchall()
+        return [
+            L(
+                id=r["id"],
+                category=r["category"],
+                body=r["body"],
+                run_ids=_json.loads(r["run_ids"] or "[]"),
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    def deactivate_learnings(
+        self, category: str | None = None, before: str | None = None
+    ) -> int:
+        """Deactivate active learnings matching the filter. Returns rows affected.
+
+        Retires rather than deletes: a lesson that shaped past decisions stays
+        in the table so the run it influenced can still be reconstructed.
+        """
+        where, params = self._learning_filter(category, before)
+        with self._conn() as conn:
+            cur = conn.execute(f"UPDATE learnings SET is_active = 0 WHERE {where}", params)
             return cur.rowcount
+
+    def set_thesis_verdict(self, outcome_id: int, verdict: str, evidence: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE decision_outcomes SET thesis_verdict = ?, thesis_evidence = ? WHERE id = ?",
+                (verdict, evidence, outcome_id),
+            )
+
+    def get_thesis_coverage(self) -> dict:
+        """Where evaluated outcomes are lost on the way to a thesis verdict.
+
+        Two filters stand in the way — a recorded thesis, and news in the
+        holding window to judge it against — and a verdict-only readout cannot
+        tell "never audited" from "audited and inconclusive". They need
+        different fixes: the first is about what the decision recorded, the
+        second about what the news cache covers.
+
+        Derived from the table rather than stored per run, so it reads back over
+        all history including outcomes evaluated before this existed.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS evaluated, "
+                "SUM(CASE WHEN TRIM(COALESCE(thesis, '')) <> '' THEN 1 ELSE 0 END) AS with_thesis, "
+                "SUM(CASE WHEN thesis_verdict IS NOT NULL THEN 1 ELSE 0 END) AS audited "
+                "FROM decision_outcomes WHERE outperformed IS NOT NULL "
+                "AND (source IS NULL OR source = 'run')"
+            ).fetchone()
+
+        evaluated = row["evaluated"] or 0
+        with_thesis = row["with_thesis"] or 0
+        audited = row["audited"] or 0
+        return {
+            "evaluated": evaluated,
+            "with_thesis": with_thesis,
+            "audited": audited,
+            # A thesis that was never audited had no news in its window — that
+            # is the only other filter, so the subtraction is exact.
+            "no_evidence": with_thesis - audited,
+            "no_thesis": evaluated - with_thesis,
+        }
+
+    def get_thesis_stats(self) -> dict:
+        """Cross-tab of whether the reasoning held against whether the price obliged.
+
+        The four cells are the point of the whole exercise. A thesis that held
+        while the position lagged is a timing or sizing problem; a thesis that
+        broke while the position won is luck, and is the cell that quietly
+        teaches the wrong lesson if you only ever look at returns. "unresolved"
+        is kept separate rather than folded into either — it means the evidence
+        did not settle the question, which is not the same as being wrong.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT thesis_verdict, outperformed FROM decision_outcomes "
+                "WHERE thesis_verdict IS NOT NULL AND outperformed IS NOT NULL "
+                "AND (source IS NULL OR source = 'run')"
+            ).fetchall()
+
+        cells: dict[str, dict[str, int]] = {}
+        for r in rows:
+            verdict = r["thesis_verdict"]
+            side = "beat" if r["outperformed"] else "lagged"
+            cells.setdefault(verdict, {"beat": 0, "lagged": 0})[side] += 1
+
+        resolved = sum(
+            sum(c.values()) for v, c in cells.items() if v in ("held", "broke")
+        )
+        held = sum(cells.get("held", {}).values())
+        return {
+            "cells": cells,
+            "n": sum(sum(c.values()) for c in cells.values()),
+            "resolved": resolved,
+            "hold_rate": held / resolved if resolved else None,
+        }
 
     def get_calibration_stats(self) -> dict:
         """Return accuracy stats by confidence bucket for use in learnings generation."""
         with self._conn() as conn:
+            # Run decisions only: "your high-confidence buy calls" must keep
+            # meaning the weekly whole-portfolio calls. A stop review's ADD is a
+            # buy too, but made under a different prompt about one name, and
+            # folding it in here would quietly redefine the hit rate.
             rows = conn.execute(
                 "SELECT confidence, outperformed FROM decision_outcomes "
-                "WHERE outperformed IS NOT NULL AND action = 'buy'"
+                "WHERE outperformed IS NOT NULL AND action = 'buy' "
+                "AND (source IS NULL OR source = 'run')"
             ).fetchall()
 
         if not rows:
@@ -841,8 +1312,10 @@ class Store:
             bucket = "high" if c >= 0.7 else "medium" if c >= 0.4 else "low"
             buckets[bucket].append(r["outperformed"])
 
+        # `hits` rides along so callers can put an interval on the rate: a hit
+        # rate without its sample size reads as a fact at n=5.
         return {
-            k: {"n": len(v), "hit_rate": sum(v) / len(v) if v else None}
+            k: {"n": len(v), "hits": sum(v), "hit_rate": sum(v) / len(v) if v else None}
             for k, v in buckets.items()
         }
 
@@ -1182,6 +1655,7 @@ class Store:
         "position_stops",
         "news_triggers",
         "daily_price_alerts",
+        "position_alerts",
         "app_meta",
     )
     _CACHE_TABLES = (

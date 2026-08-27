@@ -15,6 +15,7 @@ map) is kept in that DB's app_meta table; the registry is just the directory.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -256,6 +257,46 @@ def _extract_json_block(text: str) -> str | None:
                 depth -= 1
                 if depth == 0:
                     return text[start : i + 1]
+    return None
+
+
+def extract_json_object(text: str) -> str | None:
+    """Pull the first complete JSON *object* out of prose or ``` fences.
+
+    `_extract_json_block` looks for an array first, so on an object containing
+    one — an LLM verdict with `"unchecked": [...]`, an analysis with
+    `"conditions": [...]` — it returns the inner array and the caller sees a
+    list where it wanted a dict. This is brace-matched and string-aware, so
+    braces inside string values don't throw off the depth count.
+    """
+    if not text:
+        return None
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth, in_string, escaped = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
     return None
 
 
@@ -697,6 +738,7 @@ def create_portfolio(
     capex_kill: dict | None = None,
     kind: str = "paper",
     execute_buys: bool = True,
+    seed_holdings: bool = False,
 ) -> tuple[str, list[str]]:
     """Create a portfolio from a set of picks.
 
@@ -713,6 +755,13 @@ def create_portfolio(
     weights, kill criteria and notes are stored and monitored, but nothing is
     bought; positions appear as you record actual fills (`fund paper-fill` /
     Telegram screenshot). Cash stays whole.
+
+    seed_holdings=True books each holding's own `shares` at its own
+    `avg_cost_sek` instead of buying at today's price — the photo-import path,
+    where the screenshot already tells us what is held and what it cost. Rows
+    carrying kill rules or a horizon (`max_drawdown_pct`, `price_below`,
+    `price_above`, `horizon_date`/`horizon_months`) register them as the
+    watch plan; see fundmgr.watchplan.
 
     Returns (slug, log_lines). Raises ValueError on bad input (name taken,
     nothing parseable, or — when executing — no prices available).
@@ -740,6 +789,16 @@ def create_portfolio(
                 "kill_criterion": str(h.get("kill_criterion") or "").strip(),
                 "cluster": str(h.get("cluster") or "").strip(),
                 "confidence": _safe_confidence(h.get("confidence")),
+                # Seeding + watch-plan extras (photo import / edited review table).
+                # Carried through untouched; consumed after the store exists.
+                "shares": _opt_float(h.get("shares")),
+                "avg_cost_sek": _opt_float(h.get("avg_cost_sek")),
+                "max_drawdown_pct": h.get("max_drawdown_pct"),
+                "price_below": h.get("price_below"),
+                "price_above": h.get("price_above"),
+                "horizon_date": h.get("horizon_date"),
+                "horizon_months": h.get("horizon_months"),
+                "horizon_note": h.get("horizon_note"),
             }
             for h in holdings_override
         ])
@@ -761,7 +820,18 @@ def create_portfolio(
             "Use the preview to enter tickers manually."
         )
 
-    holdings = normalise_weights(holdings)
+    if seed_holdings:
+        # Target weight = what you actually hold, at cost, against NAV. Deriving
+        # it here rather than letting normalise_weights equal-weight the book is
+        # what makes the drift watch meaningful on an imported portfolio — and
+        # it sidesteps that function's fraction heuristic, which would misread a
+        # mostly-cash book's small weights as 0–1 values.
+        for h in holdings:
+            shares, cost = h.get("shares"), h.get("avg_cost_sek")
+            h["weight_pct"] = (round(shares * cost / capital_sek * 100, 2)
+                               if shares and cost and capital_sek else 0.0)
+    else:
+        holdings = normalise_weights(holdings)
     tickers = [h["ticker"] for h in holdings]
 
     # Per-ticker trading currency (resolves without a live price via yfinance
@@ -772,6 +842,9 @@ def create_portfolio(
     # cache. In plan-only mode a missing price just means no opening fill.
     from fundmgr.data.quotes import live_prices
     native = {t: p for t, p in live_prices(tickers).items() if p}
+
+    if seed_holdings:
+        execute_buys = False  # positions come from the screenshot, not today's tape
 
     priced = [h for h in holdings if h["ticker"] in native]
     if execute_buys:
@@ -813,6 +886,23 @@ def create_portfolio(
         if capex_kill:
             store.set_meta("paper_capex_kill", json.dumps(capex_kill))
 
+        # Numeric kill lines and time horizons carried on the holding rows.
+        from fundmgr import watchplan
+        for h in holdings:
+            if not any(h.get(k) for k in ("max_drawdown_pct", "price_below", "price_above",
+                                          "horizon_date", "horizon_months")):
+                continue
+            watchplan.set_position_plan(
+                store, h["ticker"],
+                max_drawdown_pct=h.get("max_drawdown_pct"),
+                price_below=h.get("price_below"),
+                price_above=h.get("price_above"),
+                currency=currency_map.get(h["ticker"]),
+                review_date=h.get("horizon_date"),
+                horizon_months=h.get("horizon_months"),
+                horizon_note=h.get("horizon_note"),
+            )
+
         def _plan_thesis(h: dict) -> tuple[str, str]:
             kill = (h.get("kill_criterion") or "").strip()
             thesis = h["thesis"]
@@ -851,6 +941,35 @@ def create_portfolio(
                 log.append(f"✓ Bought {shares:g} × {t} @ {price_sek:,.2f} SEK (fee {fee:.0f})")
             if not actions:
                 raise ValueError("No positions could be opened — see the skip reasons above.")
+        elif seed_holdings:
+            # Book what the screenshot says is already held: each holding's own
+            # share count at its own SEK cost basis, fee 0 (the fees were paid
+            # at the real broker long before this book existed). Same path as a
+            # manually recorded fill, so cash and NAV stay consistent.
+            for h in holdings:
+                t = h["ticker"]
+                shares, cost = h.get("shares"), h.get("avg_cost_sek")
+                if not shares or not cost:
+                    log.append(f"⚠ {t}: no share count / cost basis — not seeded "
+                               "(record a fill to open it)")
+                    continue
+                store.apply_fill(Transaction(
+                    ticker=t, side="buy", shares=round(shares, 4),
+                    price_sek=round(cost, 4), fee_sek=0.0, source="fill",
+                    currency=currency_map.get(t, "SEK"), timestamp=now,
+                ))
+                thesis, kill = _plan_thesis(h)
+                actions.append({
+                    "ticker": t, "side": "buy", "target_weight_pct": h["weight_pct"],
+                    "confidence": h["confidence"], "thesis": thesis, "kill_criterion": kill,
+                    "cluster": h.get("cluster") or "",
+                    "sek_estimate": round(shares * cost), "stop_loss_pct": None,
+                })
+                log.append(f"✓ Seeded {shares:g} × {t} @ {cost:,.2f} SEK cost basis")
+            if not actions:
+                raise ValueError(
+                    "No holdings could be seeded — every row was missing its share "
+                    "count or cost basis. Fill those in and try again.")
         else:
             # Plan only: record the intended trades without executing. Cash stays
             # whole; positions appear as fills are recorded later.
@@ -868,13 +987,17 @@ def create_portfolio(
         # dashboard and — for executed books — the learnings pipeline pick it up.
         run_id = f"paper-{slug}-{now.strftime('%Y%m%d%H%M%S')}"
         actions_json = json.dumps(actions)
-        summary = (
-            f"Paper portfolio '{name}' seeded from {model_label.strip() or 'pasted'} "
-            f"picks at live market prices."
-            if execute_buys else
-            f"Live sleeve '{name}' — plan imported from {model_label.strip() or 'pasted'} "
-            f"picks; positions fill as you record trades."
-        )
+        if execute_buys:
+            summary = (f"Paper portfolio '{name}' seeded from "
+                       f"{model_label.strip() or 'pasted'} picks at live market prices.")
+        elif seed_holdings:
+            summary = (f"Live sleeve '{name}' — {len(actions)} holdings imported from "
+                       f"{model_label.strip() or 'a portfolio photo'} at their recorded "
+                       f"cost basis.")
+        else:
+            summary = (f"Live sleeve '{name}' — plan imported from "
+                       f"{model_label.strip() or 'pasted'} picks; positions fill as you "
+                       f"record trades.")
         store.save_recommendation(RecommendationLog(
             run_id=run_id,
             timestamp=now,
@@ -901,6 +1024,13 @@ def create_portfolio(
         fetch_and_cache_benchmark(store, symbol=benchmark)
         if native:
             _cache_price_history(store, list(native.keys()))
+            # Drawdown lines are set above, before any price is cached, so they
+            # would all fall back to cost. Now that today's prices exist, anchor
+            # the ones still missing one — creating a book *is* the review.
+            from fundmgr import watchplan
+            for tkr, rule in watchplan.get_kill_rules(store).items():
+                if rule.get("max_drawdown_pct") and not rule.get("anchor_price_sek"):
+                    watchplan.set_position_plan(store, tkr, re_anchor=True)
 
         bench_rows = store.get_benchmark()
         store.upsert_nav(NavPoint(
@@ -920,6 +1050,9 @@ def create_portfolio(
     if execute_buys:
         log.append(f"✓ Portfolio '{name}' created — {len(actions)} positions, "
                    f"{store.get_cash():,.0f} SEK cash")
+    elif seed_holdings:
+        log.append(f"✓ Sleeve '{name}' created — {len(actions)} holdings seeded at cost, "
+                   f"{store.get_cash():,.0f} SEK cash. Watched daily by 'fund paper-track'.")
     else:
         log.append(f"✓ Plan '{name}' imported — {len(actions)} intended positions, "
                    f"no fills yet ({store.get_cash():,.0f} SEK cash). "
@@ -929,6 +1062,17 @@ def create_portfolio(
 
 def _cost_nav(store: Store) -> float:
     return sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
+
+
+def _opt_float(value) -> float | None:
+    """Positive float or None — for optional numeric fields off a web form."""
+    if value in (None, ""):
+        return None
+    try:
+        out = float(str(value).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return None
+    return out if out > 0 else None
 
 
 def _safe_confidence(value) -> float | None:
@@ -991,12 +1135,23 @@ def retag_position(store: Store, old_ticker: str, new_ticker: str) -> dict:
     new = (new_ticker or "").strip().upper()
     if not old or not new or old == new:
         raise ValueError("Give distinct old and new tickers.")
+
+    # A plan with no position is a real state — the dashboard shows those rows
+    # as "plan only" — and it is exactly what a half-finished retag leaves
+    # behind. Refusing to move it would strand the criteria on a ticker nobody
+    # holds, which is the situation this function exists to clear up.
     with store._conn() as conn:
         pos = conn.execute(
             "SELECT shares, avg_cost_sek FROM positions WHERE ticker=?", (old,)).fetchone()
-        if not pos or float(pos["shares"]) <= 0:
-            raise ValueError(f"No position '{old}' to retag.")
-        old_shares, old_avg = float(pos["shares"]), float(pos["avg_cost_sek"])
+    held = bool(pos and float(pos["shares"]) > 0)
+    if not held and not _has_plan(store, old):
+        raise ValueError(f"Nothing to retag under '{old}' — no position and no plan.")
+
+    with store._conn() as conn:
+        old_shares = float(pos["shares"]) if held else 0.0
+        old_avg = float(pos["avg_cost_sek"]) if held else 0.0
+        if not held:
+            conn.execute("DELETE FROM positions WHERE ticker=?", (old,))
         newpos = conn.execute(
             "SELECT shares, avg_cost_sek FROM positions WHERE ticker=?", (new,)).fetchone()
         if newpos and float(newpos["shares"]) > 0:
@@ -1011,10 +1166,98 @@ def retag_position(store: Store, old_ticker: str, new_ticker: str) -> dict:
         conn.execute("UPDATE transactions SET ticker=? WHERE ticker=?", (new, old))
 
     cmap = json.loads(store.get_meta("paper_currency_map") or "{}")
-    if new not in cmap:
-        cmap[new] = detect_currency(new)
-        store.set_meta("paper_currency_map", json.dumps(cmap))
-    return {"old": old, "new": new, "shares": old_shares}
+    cmap.pop(old, None)
+    cmap[new] = detect_currency(new)
+    store.set_meta("paper_currency_map", json.dumps(cmap))
+
+    moved = _retag_plan(store, old, new)
+    dropped = _drop_instrument_data(store, old)
+    return {"old": old, "new": new, "shares": old_shares,
+            "moved": moved, "dropped": dropped}
+
+
+# Plan state is keyed by ticker and describes the *company* — the criteria, the
+# horizon, the intended weight. A retag has to carry it, or the position keeps
+# the shares and loses the monitoring, which is worse than the mis-tag: the
+# dashboard then shows a plan row watching nothing and a holding nobody watches.
+_PLAN_MAPS = (
+    "paper_kill_criteria", "paper_add_criteria", "paper_kill_rules",
+    "paper_horizons", "paper_add_plan", "paper_target_weights",
+    "paper_position_notes",
+)
+_PLAN_PREFIXES = ("paper_killanalysis:", "paper_addanalysis:", "paper_horizon_stage:")
+
+# Observed data, by contrast, is about the *instrument that was wrong*. Its
+# prices, fundamentals, snapshots and news verdicts belong to a different
+# company, so carrying them across would import one company's numbers into
+# another's criteria — the exact error the retag is fixing.
+_INSTRUMENT_PREFIXES = ("paper_killverdict:", "paper_fundsnap:", "paper_killwatch:",
+                        "paper_killgap:", "paper_addstate:", "paper_drift_state:",
+                        "paper_killrule_state:")
+
+# Prices set these anchors, so they were taken from the wrong instrument too.
+# Dropping them re-arms the line at the next review rather than measuring a
+# drawdown from a number that never applied to this company.
+_PRICE_ANCHORS = {"paper_kill_rules": ("anchor_price_sek", "anchor_date"),
+                  "paper_add_plan": ("review_price", "review_date")}
+
+
+def _has_plan(store: Store, ticker: str) -> bool:
+    """Does any plan entry name this ticker, position or not?"""
+    for key in _PLAN_MAPS:
+        try:
+            data = json.loads(store.get_meta(key) or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and ticker in data:
+            return True
+    return any(store.get_meta(f"{prefix}{ticker}") for prefix in _PLAN_PREFIXES)
+
+
+def _retag_plan(store: Store, old: str, new: str) -> list[str]:
+    """Move every plan entry from `old` to `new`. Returns what moved."""
+    moved: list[str] = []
+    for key in _PLAN_MAPS:
+        try:
+            data = json.loads(store.get_meta(key) or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict) or old not in data:
+            continue
+        entry = data.pop(old)
+        # An entry already at the new symbol was set deliberately; keep it.
+        if new not in data:
+            if isinstance(entry, dict):
+                for field in _PRICE_ANCHORS.get(key, ()):
+                    entry.pop(field, None)
+            data[new] = entry
+            moved.append(key.replace("paper_", "").replace("_", " "))
+        store.set_meta(key, json.dumps(data))
+
+    for prefix in _PLAN_PREFIXES:
+        value = store.get_meta(f"{prefix}{old}")
+        if not value:
+            continue
+        if not store.get_meta(f"{prefix}{new}"):
+            store.set_meta(f"{prefix}{new}", value)
+        store.set_meta(f"{prefix}{old}", "")
+    return moved
+
+
+def _drop_instrument_data(store: Store, old: str) -> list[str]:
+    """Forget what was observed about the wrong instrument."""
+    dropped: list[str] = []
+    for prefix in _INSTRUMENT_PREFIXES:
+        if store.get_meta(f"{prefix}{old}"):
+            store.set_meta(f"{prefix}{old}", "")
+            dropped.append(prefix.rstrip(":").replace("paper_", ""))
+    with store._conn() as conn:
+        for table, label in (("price_cache", "prices"),
+                             ("fundamentals_cache", "fundamentals")):
+            cur = conn.execute(f"DELETE FROM {table} WHERE ticker=?", (old,))
+            if cur.rowcount:
+                dropped.append(label)
+    return dropped
 
 
 def set_cost_basis(store: Store, ticker: str, new_avg_sek: float) -> dict:
@@ -1079,12 +1322,71 @@ def track_portfolio(slug: str) -> list[str]:
     ))
     log.append(f"NAV {nav:,.0f} SEK ({len(positions)} positions)")
 
-    # Kill-criterion watch: check fresh headlines against each position's
+    # Fundamentals for the kill judge: refresh the cache and snapshot it, so a
+    # criterion phrased around growth or margins has both a current number and a
+    # direction of travel to be judged against. Optional dependency — a book on
+    # a machine without financedata just keeps whatever is already cached.
+    watched = sorted(set(tickers) | set(json.loads(
+        store.get_meta("paper_target_weights") or "{}")))
+    if watched:
+        try:
+            from fundmgr.data.fundamentals import fetch_and_cache_fundamentals
+            stale = store.get_stale_fundamentals_tickers(watched, ttl_days=7)
+            if stale:
+                fetch_and_cache_fundamentals(stale, store, ttl_days=7)
+        except Exception as e:
+            log.append(f"⚠ fundamentals refresh skipped: {e}")
+        # Capital structure comes off the statements, which `.info` never
+        # carries. Merged after the financedata refresh — that call rewrites the
+        # whole blob, so these have to be folded in afterwards, and before the
+        # snapshot so trends include them.
+        try:
+            from fundmgr.data.statements import refresh as refresh_statements
+            merged, seeded = refresh_statements(store, watched)
+            if merged:
+                log.append(f"Statement metrics merged for {merged} ticker(s)")
+            if seeded:
+                log.append(f"Back-filled {seeded} reported period(s) from the statements")
+        except Exception as e:
+            log.append(f"⚠ statement metrics skipped: {e}")
+        try:
+            from fundmgr.evidence import snapshot_fundamentals
+            snapped = snapshot_fundamentals(store, watched)
+            if snapped:
+                log.append(f"Fundamentals snapshot updated for {snapped} ticker(s)")
+        except Exception as e:
+            log.append(f"⚠ fundamentals snapshot failed: {e}")
+
+    # Kill-criterion watch: check fresh evidence against each position's
     # pre-registered falsification condition
     try:
         log += check_kill_criteria(slug, store=store)
     except Exception as e:
         log.append(f"⚠ kill-criterion watch failed: {e}")
+
+    # Numeric kill lines (max drawdown / price floor / price target) — the half
+    # of the kill criteria that needs no interpretation, so it runs with no API
+    # key and fires the moment a line is crossed.
+    from fundmgr import watchplan
+    try:
+        log += watchplan.check_kill_rules(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ kill-rule watch failed: {e}")
+
+    # Time horizons: nudge as each position's review date approaches so a fresh
+    # analysis happens before the thesis quietly expires.
+    try:
+        log += watchplan.check_horizons(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ horizon watch failed: {e}")
+
+    # Add signals — the other half of monitoring. Runs after the kill watches
+    # so a position that just tripped a kill can never also be suggested.
+    try:
+        from fundmgr import addsignal
+        log += addsignal.check_add_signals(slug, store=store)
+    except Exception as e:
+        log.append(f"⚠ add-signal watch failed: {e}")
 
     # Portfolio-level capex kill criterion (e.g. "2 of 5 hyperscalers guide
     # 2027 capex flat/down"), the master trigger for the whole sleeve.
@@ -1112,10 +1414,25 @@ def track_portfolio(slug: str) -> list[str]:
         generate_learnings,
         generate_qualitative_learnings,
     )
-    evaluated = evaluate_pending_outcomes(store)
+    from fundmgr.config import AppConfig
+    from fundmgr.engine.thesis_check import verify_theses
+    # A paper book has no fund config; the default horizon applies.
+    horizon = AppConfig().evaluation_horizon_days
+    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
     if evaluated:
-        stat = generate_learnings(store)
-        qual = generate_qualitative_learnings(store, evaluated)
+        funnel = verify_theses(store, evaluated, lookback_days=horizon)
+        verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
+        log.append(
+            f"Thesis check: {funnel['outcomes']} outcome(s) → "
+            f"{funnel['with_thesis']} with a thesis → "
+            f"{funnel['with_evidence']} with news → {verdicts or 'no verdicts'}"
+        )
+        stat = generate_learnings(store, horizon_days=horizon)
+        # A paper book has no fund config of its own: the lesson writer comes
+        # from the default config, the book's own benchmark from its meta.
+        qual = generate_qualitative_learnings(
+            store, evaluated, benchmark_label=meta.get("benchmark")
+        )
         log.append(f"Evaluated {len(evaluated)} outcomes → "
                    f"{len(stat)} calibration + {len(qual)} qualitative learnings")
     return log
@@ -1148,30 +1465,66 @@ def check_kill_criteria(slug: str, store: Store | None = None) -> list[str]:
     if not os.getenv("OPENAI_API_KEY"):
         return ["kill-criterion watch skipped (no OPENAI_API_KEY)"]
 
+    from fundmgr.evidence import build_pack
+
     log: list[str] = []
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     hits: list[tuple[str, str]] = []
+    gaps: list[tuple[str, dict]] = []
     for ticker, criterion in kills.items():
         if store.get_meta(f"paper_killwatch:{ticker}") == today:
             continue  # already checked today
-        headlines = _recent_headlines(ticker)
+        pack = build_pack(store, ticker)
         store.set_meta(f"paper_killwatch:{ticker}", today)
-        if not headlines:
-            continue
-        verdict = _judge_kill_hit(ticker, criterion, headlines)
-        if verdict:
-            hits.append((ticker, verdict))
-            store.set_meta(f"paper_killhit:{ticker}:{today}", verdict)
-            log.append(f"🚨 {ticker}: kill criterion may be triggering — {verdict}")
+        if not (pack["news"] or pack["fundamentals"]):
+            continue  # nothing to judge against at all
 
+        result = _judge_kill_hit(ticker, criterion, pack)
+        if result is None:
+            continue
+        store.set_meta(f"paper_killverdict:{ticker}", json.dumps({
+            "date": today, **result, "coverage": pack["coverage"],
+        }))
+
+        if result["verdict"] == "yes":
+            hits.append((ticker, result["reason"]))
+            store.set_meta(f"paper_killhit:{ticker}:{today}", result["reason"])
+            log.append(f"🚨 {ticker}: kill criterion may be triggering — {result['reason']}")
+        elif result["verdict"] == "insufficient":
+            # The criterion couldn't actually be checked. Say so once per wording
+            # (rewording re-notifies) rather than daily — the point is to tell
+            # you the line isn't being watched, not to nag about it.
+            fingerprint = hashlib.sha1(criterion.encode()).hexdigest()[:12]
+            if store.get_meta(f"paper_killgap:{ticker}") != fingerprint:
+                store.set_meta(f"paper_killgap:{ticker}", fingerprint)
+                gaps.append((ticker, result))
+            log.append(f"❓ {ticker}: kill criterion not verifiable from available "
+                       f"evidence — {result['reason']}")
+        else:
+            store.set_meta(f"paper_killgap:{ticker}", "")  # checkable after all
+
+    from fundmgr.notify.send import send_telegram
     if hits:
-        from fundmgr.notify.send import send_telegram
-        lines = [f"<b>📋 Paper portfolio — {name}</b>",
-                 "🚨 Kill-criterion watch: recent news may falsify a thesis"]
-        for ticker, verdict in hits:
-            lines.append(f"\n<b>{ticker}</b>: {verdict}")
+        lines = [f"<b>📋 {name}</b>",
+                 "🚨 Kill-criterion watch: the evidence may falsify a thesis"]
+        for ticker, reason in hits:
+            lines.append(f"\n<b>{ticker}</b>: {reason}")
             lines.append(f"  Pre-registered kill: {kills[ticker]}")
-        lines.append("\nVerify before acting — headline-level signal only.")
+        lines.append("\nVerify against the source before acting.")
+        send_telegram("\n".join(lines))
+
+    if gaps:
+        lines = [f"<b>📋 {name}</b>",
+                 "❓ Kill criteria that cannot be checked automatically"]
+        for ticker, result in gaps:
+            lines.append(f"\n<b>{ticker}</b>: {kills[ticker]}")
+            if result["unchecked"]:
+                for item in result["unchecked"][:4]:
+                    lines.append(f"  • can't verify: {item}")
+            elif result["reason"]:
+                lines.append(f"  {result['reason']}")
+        lines.append("\nThese are quoted back to you at each earnings print instead. "
+                     "Reword them around an observable figure if you want them watched.")
         send_telegram("\n".join(lines))
     return log
 
@@ -1200,41 +1553,122 @@ def _recent_headlines(ticker: str, max_items: int = 8) -> list[str]:
     return titles
 
 
-def _judge_kill_hit(ticker: str, criterion: str, headlines: list[str]) -> str | None:
-    """Ask gpt-4o-mini whether the headlines plausibly trigger the kill criterion.
+_JUDGE_SYSTEM = """\
+You monitor pre-registered kill criteria (thesis-falsification conditions) for \
+stock positions. You are given one criterion and an evidence pack: recent news \
+(headlines, summaries and, where available, article text), cached fundamentals \
+with their direction of travel, and the position itself.
 
-    Returns a one-line reason on a hit, None otherwise (including on any API
-    failure — the watch must never break tracking)."""
+First decompose the criterion. It often contains several conditions:
+  - joined by "and" / "while" / "combined with" → ALL must hold for a hit;
+  - joined by "or" → ANY one holds for a hit.
+Evaluate each condition separately against the evidence, then combine them.
+
+Then return one of three verdicts:
+  "YES"          - the evidence positively shows the criterion met. Cite the
+                   specific headline, article passage or figure that shows it.
+  "NO"           - the evidence does cover what the criterion asks about, and
+                   the criterion is not met.
+  "INSUFFICIENT" - the criterion depends on facts this evidence cannot settle
+                   (a metric that is not in the fundamentals block and is not
+                   discussed in any article, a private figure, a judgement that
+                   needs the full report). Say plainly which conditions you
+                   could not check.
+
+Be strict about YES: general negativity, share-price moves and unrelated bad
+news are never a hit. Be equally strict about NO — if you could not actually
+check a condition, the answer is INSUFFICIENT, not NO. A criterion that quietly
+returns NO because the data was missing is the failure this exists to prevent.
+
+Reply with a JSON object only:
+{"verdict": "YES"|"NO"|"INSUFFICIENT",
+ "reason": "<one or two sentences, citing the evidence>",
+ "unchecked": ["<condition you could not verify>", ...]}\
+"""
+
+
+def _judge_kill_hit(ticker: str, criterion: str, pack: dict) -> dict | None:
+    """Judge one kill criterion against an evidence pack.
+
+    Returns {"verdict": "yes"|"no"|"insufficient", "reason": str,
+    "unchecked": [str]}, or None if the call failed outright (the watch must
+    never break tracking).
+    """
+    from fundmgr.evidence import render_pack
+
     try:
         from openai import OpenAI
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": (
-                    "You monitor pre-registered kill criteria (thesis-falsification "
-                    "conditions) for stock positions. Given a criterion and recent "
-                    "headlines, decide if any headline plausibly indicates the "
-                    "criterion is being met. Be strict: general negativity, price "
-                    "moves, or unrelated bad news are NOT a hit — only concrete "
-                    "events matching the stated criterion. Reply with exactly "
-                    "'NO' or 'YES: <one-sentence reason citing the headline>'."
-                )},
-                {"role": "user", "content": (
-                    f"Position: {ticker}\n"
-                    f"Kill criterion: {criterion}\n\n"
-                    "Recent headlines:\n" + "\n".join(f"- {h}" for h in headlines)
-                )},
-            ],
-            max_tokens=120,
-            temperature=0.0,
+        user = (
+            f"# Position: {ticker}\n"
+            f"# Kill criterion\n{criterion}\n\n"
+            f"# Evidence\n{render_pack(pack)}"
         )
-        answer = (resp.choices[0].message.content or "").strip()
-        if answer.upper().startswith("YES"):
-            return answer.split(":", 1)[1].strip() if ":" in answer else answer
-        return None
+        kwargs = {
+            "model": os.getenv("FUND_KILL_MODEL", "gpt-4o-mini"),
+            "messages": [
+                {"role": "system", "content": _JUDGE_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": 400,
+            "temperature": 0.0,
+        }
+        try:
+            resp = client.chat.completions.create(
+                response_format={"type": "json_object"}, **kwargs)
+        except Exception:
+            resp = client.chat.completions.create(**kwargs)
+        return _parse_verdict((resp.choices[0].message.content or "").strip())
     except Exception:
         return None
+
+
+def _parse_verdict(answer: str) -> dict | None:
+    """Parse the judge's reply, tolerating a plain-text fallback."""
+    if not answer:
+        return None
+
+    data = None
+    try:
+        data = json.loads(answer)
+    except json.JSONDecodeError:
+        block = extract_json_object(answer)
+        if block:
+            try:
+                data = json.loads(block)
+            except json.JSONDecodeError:
+                data = None
+
+    if isinstance(data, dict) and data.get("verdict"):
+        verdict = str(data["verdict"]).strip().lower()
+        unchecked = data.get("unchecked")
+        if not isinstance(unchecked, list):
+            unchecked = []
+        if verdict.startswith("yes"):
+            verdict = "yes"
+        elif verdict.startswith("insuff"):
+            verdict = "insufficient"
+        else:
+            verdict = "no"
+        return {
+            "verdict": verdict,
+            "reason": str(data.get("reason") or "").strip(),
+            "unchecked": [str(u).strip() for u in unchecked if str(u).strip()],
+        }
+
+    # Plain-text fallback: the old 'YES: reason' / 'NO' shape.
+    upper = answer.upper()
+    if upper.startswith("YES"):
+        return {"verdict": "yes",
+                "reason": answer.split(":", 1)[1].strip() if ":" in answer else answer,
+                "unchecked": []}
+    if upper.startswith("INSUFFICIENT"):
+        return {"verdict": "insufficient",
+                "reason": answer.split(":", 1)[1].strip() if ":" in answer else answer,
+                "unchecked": []}
+    if upper.startswith("NO"):
+        return {"verdict": "no", "reason": "", "unchecked": []}
+    return None
 
 
 # ── Portfolio-level capex kill criterion ──────────────────────────────────────
@@ -1438,9 +1872,70 @@ def check_earnings_calendar(slug: str, store: Store | None = None) -> list[str]:
             if kill:
                 lines.append(f"Kill criterion: {kill}")
             lines.append("If the kill criterion is met, act per the plan.")
+            lines += _proof_prompt(store, slug, ticker)
             send_telegram("\n".join(lines))
             log.append(f"📊 {ticker} post-earnings reminder ({estr})")
     return log
+
+
+def _proof_prompt(store: Store, slug: str, ticker: str) -> list[str]:
+    """The proof question for a position that has an add plan, or [].
+
+    The reminder used to say "check the print against the thesis" and stop
+    there. The one thing it never did was *ask* — so `proof_confirmed` stayed
+    whatever it was, and the report that just invalidated it is the same report
+    that should have prompted a new answer. This closes that loop: the question
+    arrives where the alert does, with the figures that moved, and an answer
+    that is one reply long.
+    """
+    from fundmgr import addsignal
+
+    plan = addsignal.get_plan(store, ticker)
+    if not plan:
+        return []
+
+    lines = ["", "<b>Proof check</b> — did this print confirm the thesis?"]
+    state = addsignal.proof_status(store, ticker, plan)
+    if state["status"] == "fresh":
+        lines.append(f"Currently confirmed ({plan.get('proof_confirmed_at')}); "
+                     f"this report supersedes it.")
+    elif state["status"] == "stale":
+        lines.append(f"⚠ {state['reason']}")
+    else:
+        lines.append("Not yet confirmed for any report.")
+
+    # The numbers that moved, so the question can be answered from the message
+    # rather than from memory.
+    try:
+        from fundmgr.evidence import fundamentals_trend
+        moved = [r for r in fundamentals_trend(store, ticker)
+                 if r.get("direction") in ("up", "down")][:4]
+        for row in moved:
+            lines.append(f"• {row['label']}: {row['text']}")
+    except Exception:
+        pass
+
+    # The company-defined figures the criterion is actually written on, read out
+    # of what was published. Offered for confirmation, never recorded here — the
+    # alert asks a question, it does not answer it.
+    try:
+        from fundmgr.data.release import read_report
+        found = read_report(store, ticker)
+        for f in found.get("figures", [])[:4]:
+            lines.append(f"• {f['label']}: <b>{f['value']:,.2f}{f['unit']}</b> "
+                         f"— “{f['quote'][:90]}”")
+        if found.get("rejected"):
+            lines.append(f"⚠ {len(found['rejected'])} figure(s) discarded — the "
+                         f"number was not in the source text.")
+        if found.get("figures"):
+            lines.append(f"Record them with <code>fund paper-read {slug} {ticker} "
+                         f"--period &lt;quarter-end&gt; --apply</code> once checked.")
+    except Exception:
+        pass
+
+    lines.append(f"Reply <code>/proof {slug} {ticker} yes</code> "
+                 f"— or <code>no</code> to clear it.")
+    return lines
 
 
 def _next_earnings_date(ticker: str):

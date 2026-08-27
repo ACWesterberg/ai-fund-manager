@@ -82,13 +82,35 @@ class ScreenerConfig:
     rotate_weeks: int = 8  # spread the rest across N ISO-week buckets
 
 
+def default_heavy_model(provider: str) -> str:
+    """The heaviest reasoner for a provider.
+
+    Used for the roles where output quality matters far more than call volume —
+    writing the optimizer's candidate instructions, and distilling learnings.
+    Both run a handful of times a week and their output conditions every
+    subsequent decision, so neither should be served by a cheap model.
+    """
+    return "claude-opus-4-8" if provider == "anthropic" else "gpt-5.6-sol"
+
+
 @dataclass
 class OptimizerConfig:
     # Heavy model that *writes* candidate instructions (MIPRO prompt_model).
-    # None → derived from llm.provider at run time (anthropic → claude-opus-4-8, openai → gpt-5.6-sol).
+    # None → derived from llm.provider at run time (see default_heavy_model).
     prompt_model_id: str | None = None
     min_outcomes: int = 30       # evaluated outcomes required before optimization runs
-    min_examples: int = 8        # usable run-level examples required after reconstruction
+    # Usable run-level examples required before MIPRO runs at all. MIPRO holds
+    # out 20% and picks the winning instructions on that slice, so at 8 examples
+    # it was selecting on 2 runs — with weekly excess return noise of roughly 2pp,
+    # the best of a dozen candidates beats the field by more than that from
+    # chance alone, and the artifact would look like an improvement while being
+    # none. This is the "should we believe it" threshold, not "can it run".
+    min_examples: int = 25
+    # Other funds' configs to pool training examples from (filenames in config/,
+    # or absolute paths). Empty = this fund's own history only. Pooling shares
+    # the trainset, never the guidance artifact — each fund still compiles and
+    # applies its own.
+    pool_configs: list[str] = field(default_factory=list)
     compiled_dir: Path = field(default_factory=lambda: CONFIG_DIR / "compiled")
 
 
@@ -111,10 +133,28 @@ class AppConfig:
     fx_to_sek: bool = False  # convert foreign-currency holdings to SEK for cash/NAV
                              # (real fund). Sims run native-consistent; leave False.
     name: str = ""           # display name for notifications (which fund this is)
+    # Model that distils evaluated outcomes into learnings. None → this fund's
+    # provider's heavy model. Pin the same id across every fund's config to keep
+    # one lesson-writer system-wide, so the GPT-vs-Claude comparison is a
+    # difference in decision model rather than in how each fund is coached.
+    learning_model_id: str | None = None
+    # Days after a decision before its outcome is scored. This is a property of
+    # the mandate, not a system constant: a momentum book and a quality-
+    # compounder screen are not the same question asked at 28 days. Set it to
+    # match how long a thesis in this fund is expected to take to resolve — the
+    # learning loop reads the horizon back and will tell the fund to stop taking
+    # positions it cannot score inside it, so too short a horizon quietly
+    # rewrites the strategy.
+    evaluation_horizon_days: int = 28
 
     @property
     def display_name(self) -> str:
         return self.name or f"{self.llm.provider}/{self.llm.model_id}"
+
+    @property
+    def learning_model(self) -> str:
+        """Resolved id of the model that writes this fund's learnings."""
+        return self.learning_model_id or default_heavy_model(self.llm.provider)
 
     def config_hash(self) -> str:
         """Short hash of the decision-shaping config, for within-repo regime drift.
@@ -207,6 +247,20 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.fx_to_sek = bool(raw["fx_to_sek"])
     if "name" in raw:
         cfg.name = str(raw["name"])
+    if "learning_model_id" in raw:
+        cfg.learning_model_id = str(raw["learning_model_id"])
+    if "evaluation_horizon_days" in raw:
+        cfg.evaluation_horizon_days = int(raw["evaluation_horizon_days"])
+
+    if opt_raw := raw.get("optimizer"):
+        if "min_outcomes" in opt_raw:
+            cfg.optimizer.min_outcomes = int(opt_raw["min_outcomes"])
+        if "min_examples" in opt_raw:
+            cfg.optimizer.min_examples = int(opt_raw["min_examples"])
+        if "prompt_model_id" in opt_raw:
+            cfg.optimizer.prompt_model_id = str(opt_raw["prompt_model_id"])
+        if "pool_configs" in opt_raw:
+            cfg.optimizer.pool_configs = [str(x) for x in (opt_raw["pool_configs"] or [])]
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(

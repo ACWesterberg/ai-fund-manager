@@ -1,5 +1,6 @@
 """Paper portfolios: parsing pasted picks, creation at live prices, tracking, web routes."""
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -358,6 +359,19 @@ def test_create_stores_kill_criteria(paper_dir, mock_market):
     assert actions["MSFT"]["kill_criterion"] == "Azure decelerates two quarters"
 
 
+def _fake_pack(ticker: str, headline: str) -> dict:
+    """Minimal evidence pack — enough for check_kill_criteria to proceed."""
+    return {
+        "ticker": ticker,
+        "news": [{"headline": headline, "publisher": "Reuters", "published": "",
+                  "summary": "", "url": "", "body": ""}],
+        "fundamentals": [],
+        "position": None,
+        "coverage": {"headlines": True, "article_text": False, "article_bodies": 0,
+                     "fundamentals": False, "fundamentals_trend": False},
+    }
+
+
 def test_check_kill_criteria_flags_matching_news(paper_dir, mock_market, monkeypatch):
     text = json.dumps({"positions": [
         {"ticker": "AAPL", "weight_pct": 100,
@@ -366,10 +380,13 @@ def test_check_kill_criteria_flags_matching_news(paper_dir, mock_market, monkeyp
     slug, _ = paper.create_portfolio("Watch", 100_000, text)
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(paper, "_recent_headlines",
-                        lambda t, max_items=8: ["Hyperscaler custom chip hits 25% of accelerator shipments (Reuters)"])
-    monkeypatch.setattr(paper, "_judge_kill_hit",
-                        lambda ticker, criterion, headlines: "custom silicon crossed 25% per Reuters")
+    monkeypatch.setattr(
+        "fundmgr.evidence.build_pack",
+        lambda store, ticker, **kw: _fake_pack(
+            ticker, "Hyperscaler custom chip hits 25% of accelerator shipments"))
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "yes", "reason": "custom silicon crossed 25% per Reuters",
+        "unchecked": []})
     sent = {}
     import fundmgr.notify.send as send_mod
     monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: sent.update(text=text) or True)
@@ -388,8 +405,10 @@ def test_check_kill_criteria_no_hit_stays_quiet(paper_dir, mock_market, monkeypa
                                       "kill_criterion": "Services growth stalls"}]})
     slug, _ = paper.create_portfolio("Quiet", 100_000, text)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(paper, "_recent_headlines", lambda t, max_items=8: ["Apple unveils new colorway"])
-    monkeypatch.setattr(paper, "_judge_kill_hit", lambda *a: None)
+    monkeypatch.setattr("fundmgr.evidence.build_pack",
+                        lambda store, ticker, **kw: _fake_pack(ticker, "Apple unveils new colorway"))
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "no", "reason": "", "unchecked": []})
     assert paper.check_kill_criteria(slug) == []
 
 
@@ -1069,3 +1088,209 @@ def test_paper_book_has_no_watch_panel(client):
     assert "PAPER PORTFOLIO" in r.text
     assert "Not real money" in r.text
     assert "Watch status" not in r.text
+
+
+# ── Retag carries the plan, and forgets the wrong instrument's data ───────────
+#
+# Retagging DYVOX → DYVOX.ST moved the shares and left the kill criterion, max
+# drop, horizon and target weight behind on DYVOX. The dashboard then showed a
+# plan row watching nothing and a holding nobody watched — worse than the
+# original mis-tag, because both halves looked fine on their own.
+
+def _retag_book(tmp_path, monkeypatch):
+    from fundmgr import addsignal, watchplan
+    from fundmgr.state.models import Transaction
+    from fundmgr.state.store import Store
+    monkeypatch.setattr(paper, "detect_currency", lambda t: "SEK")
+
+    store = Store(tmp_path / "retag.db")
+    store.initialise(100_000)
+    store.apply_fill(Transaction(ticker="DYVOX", side="buy", shares=506,
+                                 price_sek=77.82, fee_sek=0.0, source="fill"))
+    store.save_prices("DYVOX", [{"date": "2026-08-13", "open": 169.77, "high": 169.77,
+                                 "low": 169.77, "close": 169.77, "volume": 1}])
+    watchplan.set_position_plan(
+        store, "DYVOX", kill_criterion="CC growth <10% for 2 quarters",
+        max_drawdown_pct="25", horizon_months="18", anchor_price_sek=169.77)
+    watchplan.set_add_text(store, "DYVOX", "CC growth at least 15%")
+    addsignal.set_plan(store, "DYVOX", book="A/B", max_weight_pct=6,
+                       tranche_pct=1, review_price=169.77)
+    store.set_meta("paper_target_weights", json.dumps({"DYVOX": 4.0}))
+    store.save_fundamentals("DYVOX", {"revenue_growth": 0.42})   # wrong company's
+    store.set_meta("paper_killverdict:DYVOX", json.dumps({"verdict": "no"}))
+    return store
+
+
+def test_retag_carries_the_whole_plan(tmp_path, monkeypatch):
+    from fundmgr import addsignal, watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert watchplan.get_kill_text(store).get("DYVOX.ST", "").startswith("CC growth")
+    assert watchplan.get_add_text(store).get("DYVOX.ST", "").startswith("CC growth")
+    assert watchplan.get_kill_rules(store)["DYVOX.ST"]["max_drawdown_pct"] == 25.0
+    assert watchplan.get_horizons(store)["DYVOX.ST"]["review_date"]
+    assert addsignal.get_plan(store, "DYVOX.ST")["book"] == "A/B"
+    assert json.loads(store.get_meta("paper_target_weights"))["DYVOX.ST"] == 4.0
+
+
+def test_retag_leaves_nothing_behind_on_the_old_symbol(tmp_path, monkeypatch):
+    """A leftover plan row is a watch on a ticker nobody holds."""
+    from fundmgr import addsignal, watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert "DYVOX" not in watchplan.get_kill_text(store)
+    assert "DYVOX" not in watchplan.get_kill_rules(store)
+    assert "DYVOX" not in watchplan.get_horizons(store)
+    assert addsignal.get_plan(store, "DYVOX") == {}
+    assert "DYVOX" not in json.loads(store.get_meta("paper_target_weights"))
+    assert watchplan.plan_tickers(store) == {"DYVOX.ST"}
+
+
+def test_retag_forgets_the_wrong_instruments_market_data(tmp_path, monkeypatch):
+    """DYVOX's prices and fundamentals were a different company's. Carrying them
+    over would import one company's numbers into another's criteria."""
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert store.get_prices("DYVOX") == []
+    assert store.get_fundamentals("DYVOX") in (None, {})
+    assert store.get_fundamentals("DYVOX.ST") in (None, {})   # not inherited
+    assert not store.get_meta("paper_killverdict:DYVOX")
+
+
+def test_retag_clears_price_anchors_set_from_the_wrong_instrument(tmp_path, monkeypatch):
+    """The anchor was 169.77 — a price this company never traded at. Keeping it
+    would measure a -25% drawdown from a number that never applied."""
+    from fundmgr import addsignal, watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert "anchor_price_sek" not in watchplan.get_kill_rules(store)["DYVOX.ST"]
+    assert "review_price" not in addsignal.get_plan(store, "DYVOX.ST")
+
+
+def test_retag_does_not_overwrite_a_plan_already_at_the_new_symbol(tmp_path, monkeypatch):
+    """If the correct symbol already carries a criterion, it was set on purpose."""
+    from fundmgr import watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    watchplan.set_position_plan(store, "DYVOX.ST", kill_criterion="the real one")
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+
+    assert watchplan.get_kill_text(store)["DYVOX.ST"] == "the real one"
+    assert "DYVOX" not in watchplan.get_kill_text(store)
+
+
+def test_retag_moves_the_currency_off_the_old_symbol(tmp_path, monkeypatch):
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")
+    cmap = json.loads(store.get_meta("paper_currency_map"))
+    assert cmap.get("DYVOX.ST") == "SEK" and "DYVOX" not in cmap
+
+
+def test_retag_moves_a_plan_that_has_no_position(tmp_path, monkeypatch):
+    """What a half-finished retag leaves behind: the shares already moved, the
+    criteria did not. Refusing to move a plan-only row would strand them on a
+    ticker nobody holds."""
+    from fundmgr import watchplan
+    store = _retag_book(tmp_path, monkeypatch)
+    paper.retag_position(store, "DYVOX", "DYVOX.ST")        # shares + plan move
+    watchplan.set_position_plan(store, "STRAY", kill_criterion="left behind",
+                                horizon_months="12")
+
+    res = paper.retag_position(store, "STRAY", "STRAY.ST")
+    assert res["shares"] == 0
+    assert watchplan.get_kill_text(store)["STRAY.ST"] == "left behind"
+    assert "STRAY" not in watchplan.get_kill_text(store)
+    assert watchplan.get_horizons(store)["STRAY.ST"]["review_date"]
+
+
+def test_retag_still_refuses_a_ticker_with_nothing_at_all(tmp_path, monkeypatch):
+    store = _retag_book(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="no position and no plan"):
+        paper.retag_position(store, "NOTHING", "NOTHING.ST")
+
+
+def test_every_cli_command_gets_the_environment(monkeypatch, tmp_path):
+    """`paper-track` never calls load_config, so it never loaded .env — under
+    cron that meant no OPENAI_API_KEY and every text-criterion watch silently
+    skipped. The group callback loads it for all subcommands."""
+    from click.testing import CliRunner
+
+    import fundmgr.config as config
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-from-dotenv\n")
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    from fundmgr.cli import cli
+    # Any subcommand will do; paper-list touches no config and no network.
+    CliRunner().invoke(cli, ["paper-list"])
+    assert os.environ.get("OPENAI_API_KEY") == "sk-from-dotenv"
+
+
+# ── prune-learnings across books ──────────────────────────────────────────────
+
+def _seed_learning(store, body, category="qualitative"):
+    from fundmgr.state.models import Learning
+    store.save_learning(Learning(category=category, body=body,
+                                 created_at=datetime(2026, 8, 17, 10, 0, tzinfo=timezone.utc)))
+
+
+def _invoke_prune(*args):
+    from click.testing import CliRunner
+
+    from fundmgr.cli import cli
+    return CliRunner().invoke(cli, ["prune-learnings", *args])
+
+
+def test_prune_touches_only_the_selected_book_by_default(paper_dir, mock_market, monkeypatch, tmp_path):
+    """Learnings are per-book — a default prune must not reach across funds."""
+    slug_a, _ = paper.create_portfolio("Book A", 100_000, "AAPL 100%")
+    slug_b, _ = paper.create_portfolio("Book B", 100_000, "MSFT 100%")
+    _, store_a = paper.open_portfolio(slug_a)
+    _, store_b = paper.open_portfolio(slug_b)
+    _seed_learning(store_a, "A lesson.")
+    _seed_learning(store_b, "B lesson.")
+
+    # The "current" fund is a separate db entirely; neither book is in scope.
+    from fundmgr.config import AppConfig
+    cfg = AppConfig()
+    cfg.db_path = tmp_path / "fund.db"
+    monkeypatch.setattr("fundmgr.cli.load_config", lambda *a, **k: cfg)
+
+    assert _invoke_prune("--category", "qualitative").exit_code == 0
+    assert len(store_a.get_active_learnings()) == 1
+    assert len(store_b.get_active_learnings()) == 1
+
+
+def test_prune_all_books_reaches_every_paper_portfolio(paper_dir, mock_market, monkeypatch, tmp_path):
+    slug_a, _ = paper.create_portfolio("Book A", 100_000, "AAPL 100%")
+    slug_b, _ = paper.create_portfolio("Book B", 100_000, "MSFT 100%")
+    _, store_a = paper.open_portfolio(slug_a)
+    _, store_b = paper.open_portfolio(slug_b)
+    _seed_learning(store_a, "A lesson.")
+    _seed_learning(store_b, "B lesson.")
+    _seed_learning(store_b, "B calibration.", category="calibration")
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path / "no-configs")
+
+    result = _invoke_prune("--category", "qualitative", "--all-books")
+    assert result.exit_code == 0, result.output
+    assert store_a.get_active_learnings() == []
+    # Only the qualitative lesson went; the calibration one is untouched.
+    assert [lrn.category for lrn in store_b.get_active_learnings()] == ["calibration"]
+
+
+def test_prune_all_books_dry_run_writes_nothing(paper_dir, mock_market, monkeypatch, tmp_path):
+    slug, _ = paper.create_portfolio("Book A", 100_000, "AAPL 100%")
+    _, store = paper.open_portfolio(slug)
+    _seed_learning(store, "A lesson.")
+
+    monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path / "no-configs")
+
+    result = _invoke_prune("--all-books", "--dry-run")
+    assert result.exit_code == 0, result.output
+    assert "DRY RUN" in result.output
+    assert len(store.get_active_learnings()) == 1

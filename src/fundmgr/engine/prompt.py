@@ -15,7 +15,11 @@ def _load_mandate(path: Path) -> str:
     return path.read_text().strip()
 
 
-def _portfolio_block(snap: PortfolioSnapshot, benchmark_return: float | None) -> str:
+def _portfolio_block(
+    snap: PortfolioSnapshot,
+    benchmark_return: float | None,
+    stop_levels: dict[str, dict] | None = None,
+) -> str:
     lines = ["## Current Portfolio State"]
     lines.append(f"NAV: {snap.nav_sek:,.0f} SEK  |  Cash: {snap.cash_sek:,.0f} SEK ({snap.cash_pct:.1f}%)")
 
@@ -24,16 +28,31 @@ def _portfolio_block(snap: PortfolioSnapshot, benchmark_return: float | None) ->
     lines.append("")
 
     if snap.positions:
+        levels = stop_levels or {}
         lines.append("Open positions:")
         for p in sorted(snap.positions, key=lambda x: x.market_value_sek, reverse=True):
             w = snap.weight_pct(p.ticker)
             pnl = p.unrealised_pnl_pct
-            lines.append(
+            row = (
                 f"  {p.ticker:<16} {p.shares:>8.0f} shares  "
                 f"avg {p.avg_cost_sek:>8.2f}  "
                 f"now {p.current_price_sek:>8.2f}  "
                 f"({pnl:+.1f}%)  weight {w:.1f}%"
             )
+            # The standing levels, and whether price has already run through
+            # them. Without this the model cannot tell that a winner it wants
+            # to hold is sitting above a target that will keep alerting.
+            lvl = levels.get(p.ticker) or {}
+            stop_pct, tp_pct = lvl.get("stop_pct"), lvl.get("take_profit_pct")
+            parts = []
+            if stop_pct:
+                parts.append(f"stop -{stop_pct:.0f}%")
+            if tp_pct:
+                flag = "  ← PAST TARGET" if pnl >= tp_pct else ""
+                parts.append(f"target +{tp_pct:.0f}%{flag}")
+            if parts:
+                row += "  [" + ", ".join(parts) + "]"
+            lines.append(row)
     else:
         lines.append("No open positions — fully in cash.")
 
@@ -96,13 +115,74 @@ def _risk_limits_block(
     return "\n".join(lines)
 
 
+PROMPT_LEARNING_LIMIT = 8  # lessons injected per run — keeps the prompt tight
+
+
+def select_prompt_learnings(
+    learnings: list[Learning], limit: int = PROMPT_LEARNING_LIMIT
+) -> list[Learning]:
+    """The lessons that actually reach the model, in the order they are shown.
+
+    Ranked by strength of evidence rather than recency. Calibration lessons
+    lead: they are computed from hit rates over many decisions, so a batch of
+    single-trade anecdotes must not be able to displace them — which is exactly
+    what a plain `created_at DESC` cut did, since `generate_learnings` runs
+    before `generate_qualitative_learnings` and so always stamps the older
+    timestamp of the pair. Within a tier, a lesson backed by more runs outranks
+    one backed by fewer, and recency only breaks the remaining ties.
+
+    The web view renders the same selection, so the page and the prompt can
+    never disagree about which lessons are live.
+    """
+    def rank(lrn: Learning) -> tuple:
+        return (
+            0 if lrn.category == "calibration" else 1,
+            -len(lrn.run_ids),
+            -lrn.created_at.timestamp(),
+        )
+
+    return sorted(learnings, key=rank)[:limit]
+
+
+def learnings_fingerprint(learnings_block: str) -> str | None:
+    """Short hash of the lessons block as injected, or None when none were.
+
+    Recorded in each run's snapshot regime, mirroring `guidance_fingerprint`, so
+    scored runs can be sliced by which lessons the model was actually carrying.
+    Learnings go into every prompt, so without this there is no way to tell
+    whether the channel helps, hurts, or does nothing — and a pipeline that
+    feeds its own output back into its next decision is exactly the one you
+    want a measurement on.
+
+    Hashes the rendered block rather than the row ids: it is what the model saw,
+    so an edited body or a changed cut both register as a new regime.
+    """
+    block = (learnings_block or "").strip()
+    if not block:
+        return None
+    import hashlib
+    return hashlib.sha256(block.encode()).hexdigest()[:12]
+
+
+_LESSON_LINE_PREFIX = "  ["
+
+
 def _learnings_block(learnings: list[Learning]) -> str:
-    if not learnings:
+    selected = select_prompt_learnings(learnings)
+    if not selected:
         return ""
     lines = ["## Past Performance Reflections", "These are lessons distilled from your prior decisions. Factor them in."]
-    for l in learnings[:8]:  # cap at 8 to keep prompt tight
-        lines.append(f"  [{l.category.upper()}] {l.body}")
+    for lrn in selected:
+        lines.append(f"{_LESSON_LINE_PREFIX}{lrn.category.upper()}] {lrn.body}")
     return "\n".join(lines)
+
+
+def learnings_count(learnings_block: str) -> int:
+    """How many lessons a rendered block carries, counted the way it was written."""
+    return sum(
+        1 for line in (learnings_block or "").split("\n")
+        if line.startswith(_LESSON_LINE_PREFIX)
+    )
 
 
 _CANDIDATE_LIMIT = 75  # non-held tickers shown to LLM per run
@@ -186,6 +266,9 @@ def build_prompt(
     store: Store,
     run_id: str,
     macro_block: str = "",
+    extra_context: str = "",
+    task_override: str = "",
+    heading: str = "Weekly Decision Run",
 ) -> tuple[str, str, dict[str, str]]:
     """
     Returns (system_message, user_message, fields).
@@ -198,6 +281,14 @@ def build_prompt(
 
     Note: `risk_limits` is the block *as rendered* — it embeds live sector
     exposure derived from current positions, not just static config caps.
+
+    `extra_context`, `task_override` and `heading` let a caller with a narrower
+    brief than the weekly run (a live-sleeve review, say) inject its own context
+    block, replace the closing task instruction and retitle the run. Their
+    defaults reproduce the weekly run exactly, so it and the What-If Lab render
+    as before. When `extra_context` is given it is also carried in `fields`
+    under "extra_context", alongside the six optimizer input fields rather than
+    in place of any of them.
     """
     mandate = _load_mandate(cfg.mandate_path)
 
@@ -230,7 +321,7 @@ def build_prompt(
 
     # Discrete blocks — captured once, used both for the flat prompt and the
     # fielded snapshot so the two can never drift.
-    portfolio_state = _portfolio_block(snap, bench_return)
+    portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops())
     risk_limits     = _risk_limits_block(cfg, snap, features)
     learnings_block = _learnings_block(learnings)
     universe        = _features_block(features, current_tickers)
@@ -243,9 +334,11 @@ def build_prompt(
         "universe":        universe,
         "learnings":       learnings_block,
     }
+    if extra_context:
+        fields["extra_context"] = extra_context
 
     sections = [
-        f"# Weekly Decision Run\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
+        f"# {heading}\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
     ]
 
     if macro_block:
@@ -259,16 +352,29 @@ def build_prompt(
         "",
     ]
 
-    if learnings:
+    if learnings_block:
         sections.append(learnings_block)
+        sections.append("")
+
+    # Before the universe, not after it: a caller's own context is about the
+    # book being decided on, and belongs with the portfolio state rather than
+    # trailing a candidate dump that can run to dozens of feature blocks.
+    if extra_context:
+        sections.append(extra_context)
         sections.append("")
 
     sections.append(universe)
 
     sections.append(
-        f"## Your Task\n"
-        f"Review the above and return a DecisionRun JSON with your buy/sell/hold decisions. "
-        f"Run ID must be: {run_id}"
+        task_override or (
+            f"## Your Task\n"
+            f"Review the above and return a DecisionRun JSON with your buy/sell/hold decisions. "
+            f"When you hold a position marked PAST TARGET, set take_profit_pct to the new level "
+            f"that reflects your current view — holding a winner without re-targeting leaves the "
+            f"old target standing, which keeps signalling a trim you did not recommend. "
+            f"Trim or sell instead if the target was right and the upside is spent. "
+            f"Run ID must be: {run_id}"
+        )
     )
 
     user = "\n".join(sections)
@@ -312,6 +418,7 @@ def snapshot_to_dict(
     }
     if cfg is not None:
         from fundmgr.engine.optimizer import guidance_fingerprint
+        learnings_block = (fields or {}).get("learnings", "")
         out["regime"] = {
             "capital_sek":  cfg.capital_sek,
             "provider":     cfg.llm.provider,
@@ -320,5 +427,8 @@ def snapshot_to_dict(
             "session":      None,  # nullable shared key (swing-trader sets us/european)
             "config_hash":  cfg.config_hash(),
             "guidance_hash": guidance_fingerprint(cfg),  # None when no MIPRO guidance active
+            # None when the run carried no lessons — the unguided arm of the A/B
+            "learnings_hash": learnings_fingerprint(learnings_block),
+            "learnings_n":    learnings_count(learnings_block),
         }
     return json.dumps(out)

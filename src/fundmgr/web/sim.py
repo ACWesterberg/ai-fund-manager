@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 
 from fundmgr.config import load_config, load_universe
-from fundmgr.reporting.dashboard import compute_stats, nav_chart_json
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 from fundmgr.state.store import Store
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -200,6 +200,7 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
             "pnl_sek": pnl_sek,
             "pnl_pct": pnl_pct,
             "active_page": "portfolio",
+        "benchmark_label": benchmark_label(cfg.benchmark),
             **_sim_base_ctx(),
         })
 
@@ -306,7 +307,7 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
     def sim_api_nav():
         cfg, store = _get_deps()
         nav_history = store.get_nav_history()
-        return json.loads(nav_chart_json(nav_history))
+        return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark)))
 
     @router.get("/api/stats")
     def sim_api_stats():

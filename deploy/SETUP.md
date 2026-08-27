@@ -66,6 +66,26 @@ uv pip install -e .
 > If FinanceData lives elsewhere, set `FINANCEDATA_DIR=/path/to/FinanceData` in the
 > deploy environment — `deploy.sh` reads it (default `../FinanceData`).
 
+**FinanceData must stay on `main`.** Unlike the fund repo, which deliberately
+runs the `deploy` branch, the data layer has no release branch — and a Pi
+quietly sitting on a FinanceData feature branch does not fail, it serves
+plausible wrong numbers. Every deploy now checks, logs which branch it found,
+and repoints itself when that is provably safe:
+
+| State of the checkout | What `deploy.sh` does |
+|---|---|
+| on `main` | nothing, silently |
+| on a branch already merged into `main`, clean tree | checks out `main` and says so — nothing can be lost |
+| on a branch with unmerged commits | logs a warning, **leaves it alone** — those commits may be deliberate |
+| dirty working tree | logs a warning, leaves it alone |
+
+So the fix for an unmerged branch is to merge it upstream in the FinanceData
+repo; the next deploy then repoints the Pi on its own. Override the expected
+branch with `FINANCEDATA_BRANCH=…` if that ever stops being `main`.
+
+Check the logic without a Pi: `bash deploy/test-branch-check.sh` builds throwaway
+git repos in each of those states and asserts the outcome.
+
 ---
 
 ## 3. Configure environment variables

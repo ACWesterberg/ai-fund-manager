@@ -137,6 +137,7 @@ def _check_action(
     if action.side == "buy" and action.target_weight_pct > cfg.risk.max_position_pct:
         clipped_weight = cfg.risk.max_position_pct
         clipped_sek = nav * clipped_weight / 100
+        requested_weight = action.target_weight_pct  # the note's "from" — lost once we rebuild
         # Adjust sek_estimate proportionally
         action = Action(
             ticker=action.ticker,
@@ -151,7 +152,7 @@ def _check_action(
         v.action = action
         v.clipped = True
         v.clip_note = (
-            f"Weight clipped from {v.action.target_weight_pct:.1f}% to {clipped_weight:.1f}% (max_position_pct)"
+            f"Weight clipped from {requested_weight:.1f}% to {clipped_weight:.1f}% (max_position_pct)"
         )
 
     # 5. Sector concentration cap

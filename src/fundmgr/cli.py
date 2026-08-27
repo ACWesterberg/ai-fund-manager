@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import click
 
@@ -24,7 +25,11 @@ from fundmgr.engine.client import LLMError, call_llm_consensus
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
 from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
+from fundmgr.engine.thesis_check import verify_theses
 from fundmgr.guardrails.rules import apply_guardrails
+from fundmgr.levels import (
+    alertable_hits, merged_levels, record_sent_alerts, settled_sells,
+)
 from fundmgr.reporting.actions import format_action_list
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
 from fundmgr.state.store import Store
@@ -42,10 +47,21 @@ def _get_store(cfg=None) -> tuple:
     return cfg, store
 
 
+
+
 @click.group()
 def cli():
     """AI Fund Manager — weekly LLM-driven portfolio decisions for Nordic equities."""
-    pass
+    # Every subcommand gets the environment, not just those that happen to load
+    # a config. `paper-track` does not — it opens each book's store directly —
+    # so under cron it ran for months with no OPENAI_API_KEY and skipped every
+    # text-criterion watch, reporting the skip in a log nobody reads. The web
+    # and bot processes were unaffected (systemd hands them the same file),
+    # which is why the gap was invisible from the dashboard.
+    from dotenv import load_dotenv
+
+    from fundmgr.config import ROOT
+    load_dotenv(ROOT / ".env")
 
 
 @cli.command()
@@ -218,10 +234,21 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
     _print_feature_table(features, cfg)
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
-    evaluated = evaluate_pending_outcomes(store)
+    horizon = cfg.evaluation_horizon_days
+    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
     if evaluated:
-        stat_learnings = generate_learnings(store)
-        qual_learnings = generate_qualitative_learnings(store, evaluated)
+        # Judge the reasoning before distilling: a lesson needs to know whether a
+        # position that beat did so because the thesis held or in spite of it.
+        funnel = verify_theses(store, evaluated, cfg, lookback_days=horizon)
+        verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
+        click.echo(
+            f"\n[*] Thesis check: {funnel['outcomes']} outcome(s) → "
+            f"{funnel['with_thesis']} with a thesis → "
+            f"{funnel['with_evidence']} with news to judge → "
+            f"{verdicts or 'no verdicts'}"
+        )
+        stat_learnings = generate_learnings(store, horizon_days=horizon)
+        qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
         total_learnings = len(stat_learnings) + len(qual_learnings)
         click.echo(
             f"\n[*] Evaluated {len(evaluated)} past decisions; "
@@ -316,13 +343,16 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, s
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
 
-        # Persist stop/take-profit levels per position so check-stops survives multiple runs
+        # Persist stop/take-profit levels per position so check-stops survives
+        # multiple runs.
+        existing_levels = store.get_effective_stops()
         for action in guardrail_result.approved_actions:
-            if action.side == "buy" and (action.stop_loss_pct or action.take_profit_pct):
+            merged = merged_levels(action, existing_levels.get(action.ticker))
+            if merged:
                 store.set_position_stop(
                     action.ticker,
-                    stop_pct=action.stop_loss_pct,
-                    take_profit_pct=action.take_profit_pct,
+                    stop_pct=merged[0],
+                    take_profit_pct=merged[1],
                 )
             elif action.side == "sell" and action.target_weight_pct == 0:
                 store.clear_position_stop(action.ticker)
@@ -818,6 +848,10 @@ def check_stops(quiet: bool):
             parts.append(f"+{tp_pct:.0f}%")
         levels_str = " / ".join(parts) if parts else "n/a"
 
+        # These lists drive auto-sell and the stop review as well as the alert,
+        # so every breach is recorded on every cycle. Rate-limiting happens at
+        # the Telegram step alone — suppressing detection here would mean a
+        # stop-loss whose auto-sell failed never got retried.
         if stop_pct and chg <= -stop_pct:
             status = "🚨 STOP HIT"
             stops_hit.append((p.ticker, chg, stop_pct, live_price))
@@ -857,6 +891,7 @@ def check_stops(quiet: bool):
 
     # ── Auto-execute stops/profits for simulation fund ────────────────────────
     auto_sold: list[str] = []
+    deferred: list[str] = []
     triggered = stops_hit + profits_hit
     if triggered and cfg.auto_fill:
         from fundmgr.engine.auto_fill import execute_paper_fills
@@ -866,12 +901,25 @@ def check_stops(quiet: bool):
         ]
         # notify_skips=False: check-stops runs every 15 min, so a closed-market
         # skip here must not spam Telegram (the weekly run path handles reminders).
+        #
+        # Which of these actually filled has to be read off the book, not
+        # assumed: execute_paper_fills refuses to trade a venue that is closed,
+        # and this command runs on the NYSE window, so a European name hitting
+        # its target after XETRA shuts is skipped every cycle. Marking it sold
+        # anyway told Telegram "AUTO-SOLD" about a position still held, and —
+        # because an auto-sold ticker bypasses the once-a-day alert limit —
+        # repeated that same message every 15 minutes until the close.
+        held_before = {p.ticker: p.shares for p in store.get_positions()}
         fill_log = execute_paper_fills(sell_actions, store, cfg, notify_skips=False)
         for line in fill_log:
             click.echo(f"  {line}")
-        for ticker, *_ in triggered:
+        held_after = {p.ticker: p.shares for p in store.get_positions()}
+        auto_sold, deferred = settled_sells(triggered, held_before, held_after)
+        for ticker in auto_sold:
             store.clear_position_stop(ticker)
-            auto_sold.append(ticker)
+        if deferred and not quiet:
+            click.echo(f"  ⏸ Not sold this cycle (venue closed or no price): "
+                       f"{', '.join(deferred)} — the level stands and retries next cycle.")
 
     # ── Stop-loss review (advisory) for non-auto-fill (real-money) funds ───────
     # On a stop hit, run a focused N-sample reassessment so a recent "add" thesis
@@ -899,16 +947,67 @@ def check_stops(quiet: bool):
                 f"(conf {consensus.confidence:.2f})"
             )
 
+    # ── Take-profit review ────────────────────────────────────────────────────
+    # Symmetric to the stop review above: reaching a target is a decision, not a
+    # notification. The review banks the gain, trims, or raises the target — and
+    # a raise is written straight back, because the whole failure mode here was
+    # a stale target re-alerting with nothing able to move it.
+    reviewed_targets: set[str] = set()
+    if profits_hit and not cfg.auto_fill:
+        from fundmgr.engine.target_review import (
+            apply_new_target,
+            review_position as review_target,
+            format_review_html as format_target_html,
+        )
+        for ticker, _chg, _tp, live in profits_hit:
+            meta_key = f"target_review:{ticker}:{today}"
+            if store.get_meta(meta_key):
+                continue
+            try:
+                result = review_target(ticker, store, cfg, live_price=live)
+            except Exception as e:
+                click.echo(f"  ⚠ target review failed for {ticker}: {e}", err=True)
+                continue
+            if result is None:
+                continue
+            consensus, votes = result
+            store.set_meta(meta_key, today)
+            reviewed_targets.add(ticker)
+            moved = apply_new_target(consensus, store)
+            review_snippets.append(
+                format_target_html(consensus, votes, max(1, cfg.llm.n_samples), moved)
+            )
+            moved_str = f"; target {moved[0]:+.0f}% → {moved[1]:+.0f}%" if moved else ""
+            click.echo(
+                f"  Target review {ticker}: {consensus.recommendation.upper()} "
+                f"(conf {consensus.confidence:.2f}{moved_str})"
+            )
+
     # ── Telegram alert ────────────────────────────────────────────────────────
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if (stops_hit or profits_hit or warnings) and bot_token and chat_id:
+    alert_stops   = alertable_hits(stops_hit, "stop", auto_sold, store, today) if bot_token and chat_id else []
+    alert_profits = alertable_hits(profits_hit, "target", auto_sold, store, today) if bot_token and chat_id else []
+
+    if (alert_stops or alert_profits or warnings) and bot_token and chat_id:
         lines = [f"<b>{cfg.display_name}</b>\n📉 Price Alert"]
-        for ticker, chg, stop_pct, price in stops_hit:
-            note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review &amp; sell"
+        for ticker, chg, stop_pct, price in alert_stops:
+            if ticker in auto_sold:
+                note = " — <b>AUTO-SOLD</b>"
+            elif ticker in deferred:
+                note = " — market closed, sells on the next open"
+            else:
+                note = " — review &amp; sell"
             lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")
-        for ticker, chg, tp_pct, price in profits_hit:
-            note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — consider trimming"
+        for ticker, chg, tp_pct, price in alert_profits:
+            if ticker in auto_sold:
+                note = " — <b>AUTO-SOLD</b>"
+            elif ticker in deferred:
+                note = " — market closed, sells on the next open"
+            elif ticker in reviewed_targets:
+                note = ""  # the review below carries the call — don't pre-empt it
+            else:
+                note = " — consider trimming"
             lines.append(f"🎯 <b>{ticker}</b> {chg:+.1f}% — TARGET HIT (+{tp_pct:.0f}%)  live {price:.2f}{note}")
         for ticker, chg, daily_chg, price, stop_pct in warnings:
             if stop_pct:
@@ -924,7 +1023,7 @@ def check_stops(quiet: bool):
         for snip in review_snippets:
             lines.append("")
             lines.append(snip)
-        if (stops_hit or profits_hit) and not auto_sold and not review_snippets:
+        if (alert_stops or alert_profits) and not auto_sold and not review_snippets:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
         msg = "\n".join(lines)
         try:
@@ -935,6 +1034,10 @@ def check_stops(quiet: bool):
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 data, timeout=10,
             )
+            # Only now is the day's alert spent — a send that never landed must
+            # be retried on the next cycle, not silently swallowed.
+            record_sent_alerts(alert_stops, "stop", store, today)
+            record_sent_alerts(alert_profits, "target", store, today)
             click.echo("  Telegram alert sent.")
         except Exception as e:
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
@@ -1017,6 +1120,145 @@ def review_stop(ticker: str | None, notify: bool):
         body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+
+
+@cli.command("review-target")
+@click.argument("ticker", required=False)
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+@click.option("--apply/--no-apply", default=True, show_default=True,
+              help="Persist a raised take-profit level. --no-apply reviews without changing anything.")
+def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
+    """Take-profit review (SELL/TRIM/RAISE/HOLD) for a position at its target.
+
+    With a TICKER: review that held position. With no argument: review every
+    holding currently at or above its take-profit level. A RAISE or TRIM writes
+    the new target back unless --no-apply is given.
+    """
+    from fundmgr.engine.client import LLMError
+    from fundmgr.engine.target_review import (
+        apply_new_target, find_target_hits, review_position as review_target,
+        format_review_text as fmt_text, format_review_html as fmt_html,
+    )
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    n = max(1, cfg.llm.n_samples)
+    held = [p.ticker for p in store.get_positions()]
+
+    if ticker:
+        q = ticker.upper()
+        matches = [h for h in held if h == q] or \
+                  [h for h in held if h.split(".")[0] == q] or \
+                  [h for h in held if h.startswith(q + ".")]
+        matches = sorted(set(matches))
+        if not matches:
+            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
+            sys.exit(1)
+        if len(matches) > 1:
+            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+            sys.exit(1)
+        targets = [{"ticker": matches[0], "live": None}]
+    else:
+        click.echo("Scanning holdings for positions at their take-profit target…")
+        hits = find_target_hits(store, cfg)
+        if hits["skipped"]:
+            click.echo("  Could not evaluate: " + ", ".join(
+                f"{s['ticker']} ({s['reason']})" for s in hits["skipped"]))
+        if not hits["hits"]:
+            click.echo("No positions are currently at their take-profit target.")
+            return
+        click.echo(f"  {len(hits['hits'])} at target: {', '.join(h['ticker'] for h in hits['hits'])}")
+        targets = hits["hits"]
+
+    html_blocks: list[str] = []
+    for t in targets:
+        tk = t["ticker"]
+        click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
+        try:
+            result = review_target(tk, store, cfg, live_price=t.get("live"))
+        except LLMError as e:
+            click.echo(f"  Review failed for {tk}: {e}", err=True)
+            continue
+        if result is None:
+            continue
+        consensus, votes = result
+        moved = apply_new_target(consensus, store) if apply else None
+        click.echo(fmt_text(consensus, votes, n, moved))
+        html_blocks.append(fmt_html(consensus, votes, n, moved))
+
+    if notify and html_blocks:
+        body = "<b>🎯 Take-Profit Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
+        if send_telegram(body):
+            click.echo("\n  (sent to Telegram)")
+
+
+@cli.command("decisions")
+@click.option("--all", "show_all", is_flag=True,
+              help="Include reviews already actioned, dismissed or superseded.")
+@click.option("--done", "done_ticker", default=None, metavar="TICKER",
+              help="Mark that name's open decision as actioned (you placed the order).")
+@click.option("--dismiss", "dismiss_ticker", default=None, metavar="TICKER",
+              help="Mark that name's open decision as not being acted on.")
+def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | None):
+    """Review verdicts still waiting on an order from you.
+
+    A stop or take-profit review decides — EXIT, SELL, TRIM, ADD — and then needs
+    a human to place the trade. This is the list of those that haven't been
+    ticked off, the same one the dashboard shows.
+    """
+    from fundmgr.web.views import review_row
+
+    cfg, store = _get_store()
+    positions = {p.ticker: p for p in store.get_positions()}
+
+    for ticker, status in ((done_ticker, "done"), (dismiss_ticker, "dismissed")):
+        if not ticker:
+            continue
+        tk = ticker.upper()
+        openrows = store.get_open_reviews()
+        match = next(
+            (r for r in openrows if r["ticker"] == tk
+             or r["ticker"].split(".")[0] == tk
+             or r["ticker"].startswith(tk + ".")),
+            None,
+        )
+        if match is None:
+            waiting = ", ".join(r["ticker"] for r in openrows) or "(none)"
+            click.echo(f"No open decision for {tk}. Waiting: {waiting}", err=True)
+            sys.exit(1)
+        store.resolve_review(match["review_id"], status)
+        click.echo(f"{match['ticker']}: {match['verdict'].upper()} marked {status}.")
+
+    def _pos(ticker: str) -> dict | None:
+        p = positions.get(ticker)
+        # No price: a share count is the part that is certain offline, and a
+        # SEK figure taken from cost basis would be wrong for a name at target.
+        return None if p is None else {
+            "ticker": p.ticker, "name": p.ticker, "shares": p.shares,
+            "current_price": None,
+        }
+
+    raw = (store.get_recent_reviews(limit=20) if show_all
+           else store.get_open_reviews(tickers=list(positions)))
+    rows = [review_row(r, _pos(r["ticker"])) for r in raw]
+    if not rows:
+        click.echo("Nothing waiting — every review verdict has been actioned.")
+        return
+
+    click.echo(f"\n─── {cfg.display_name} — decisions ─────────────────────────")
+    for r in rows:
+        tail = f"  [{r['status']}]" if show_all else ""
+        click.echo(f"\n  {r['verdict_label']}  {r['ticker']}  ({r['source_label']}, {r['when']}){tail}")
+        click.echo(f"    {r['instruction']}")
+        if r["follow_up"]:
+            click.echo(f"    {r['follow_up']}")
+        if r["target_line"]:
+            click.echo(f"    {r['target_line']}")
+        if r["rationale"]:
+            click.echo(f"    Why: {r['rationale']}")
+    if not show_all:
+        click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
 
 
 @cli.command("check-news")
@@ -1289,6 +1531,17 @@ def score_runs():
             f"{sign}{r['score']*100:>8.3f}%  "
             f"{r['nav_start']:>12,.0f} {r['nav_end']:>12,.0f}"
         )
+
+    # The two channels that shape every prompt without ever being measured.
+    for key, label in (("learnings_hash", "learnings"), ("guidance_hash", "MIPRO guidance")):
+        buckets = store.score_by_regime(key)
+        if len(buckets) < 2:
+            continue  # only one regime seen — nothing to compare against yet
+        click.echo(f"\n  Mean score by {label} regime:")
+        for b in buckets:
+            name = b["value"] or "(none — unguided)"
+            click.echo(f"    {name:<22} {b['runs']:>3} run(s)  {b['mean_score']*100:>+8.3f}%")
+        click.echo("    (descriptive only — weekly runs are few and not randomised)")
     click.echo()
 
 
@@ -1329,15 +1582,27 @@ def optimize(min_outcomes: int | None, dry_run: bool):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     cfg, store = _get_store()
-    from fundmgr.engine.optimizer import build_trainset, guidance_path, run_optimization
+    from fundmgr.engine.optimizer import build_pooled_trainset, guidance_path, run_optimization
 
     threshold = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
     evaluated = store.get_evaluated_outcomes()
-    examples = build_trainset(store)
+    examples = build_pooled_trainset(cfg)
+    resolved = sum(
+        1 for e in examples for v in (e.get("ticker_theses") or {}).values()
+        if v in ("held", "broke")
+    )
 
     click.echo("\n─── Prompt Optimizer ───────────────────────────────")
     click.echo(f"  Evaluated outcomes:   {len(evaluated)} (need {threshold})")
     click.echo(f"  Usable run examples:  {len(examples)} (need {cfg.optimizer.min_examples})")
+    if cfg.optimizer.pool_configs:
+        by_source: dict[str, int] = {}
+        for e in examples:
+            by_source[e.get("source") or "?"] = by_source.get(e.get("source") or "?", 0) + 1
+        click.echo("    pooled from:        " + ", ".join(
+            f"{src} ({n})" for src, n in sorted(by_source.items())
+        ))
+    click.echo(f"  Resolved theses:      {resolved} (metric signal beyond raw alpha)")
     click.echo(f"  Guidance artifact:    {guidance_path(cfg)}")
 
     if dry_run:
@@ -1381,6 +1646,140 @@ def repair_outcomes_cmd(dry_run: bool, deactivate_learnings: bool):
     elif stats["price_fixed"] or stats["recomputed"]:
         click.echo("\n  ⚠ Existing learnings were distilled from the corrupted returns —")
         click.echo("    consider re-running with --deactivate-learnings.")
+
+
+@cli.command("thesis-report")
+def thesis_report():
+    """Did the reasoning hold, and did the price agree? The four-cell readout."""
+    cfg, store = _get_store()
+    stats = store.get_thesis_stats()
+
+    cov = store.get_thesis_coverage()
+    click.echo(f"\n─── Thesis vs outcome — {cfg.display_name} ───────────")
+    click.echo(f"\n  Coverage: {cov['evaluated']} evaluated outcome(s)")
+    click.echo(f"    no thesis recorded:      {cov['no_thesis']}")
+    click.echo(f"    thesis, no news to judge: {cov['no_evidence']}")
+    click.echo(f"    audited:                 {cov['audited']}")
+    if cov["no_evidence"] > cov["audited"]:
+        click.echo("    ⚠ most theses are lost to missing news, not to being")
+        click.echo("      unfalsifiable — widen what the news fetch covers.")
+
+    if not stats["n"]:
+        click.echo("  No checked theses yet. Verdicts are written when outcomes")
+        click.echo("  mature (~4 weeks after each run).")
+        return
+
+    click.echo(f"\n  {'':<12} {'beat':>8} {'lagged':>8}")
+    click.echo(f"  {'─'*12} {'─'*8} {'─'*8}")
+    for verdict in ("held", "broke", "unresolved"):
+        cell = stats["cells"].get(verdict)
+        if not cell:
+            continue
+        click.echo(f"  {verdict:<12} {cell['beat']:>8} {cell['lagged']:>8}")
+
+    if stats["hold_rate"] is not None:
+        click.echo(
+            f"\n  Theses that held: {stats['hold_rate']:.0%} "
+            f"of {stats['resolved']} resolved ({stats['n']} checked)"
+        )
+    lucky = (stats["cells"].get("broke") or {}).get("beat", 0)
+    if lucky:
+        click.echo(f"  ⚠ {lucky} position(s) beat the benchmark on a thesis that broke —")
+        click.echo("    judged on return alone these are indistinguishable from skill.")
+    click.echo()
+
+
+@cli.command("prune-learnings")
+@click.option("--category", default=None, metavar="NAME",
+              help="Only this category (e.g. 'qualitative').")
+@click.option("--before", default=None, metavar="YYYY-MM-DD",
+              help="Only lessons created before this date.")
+@click.option("--dry-run", is_flag=True, help="Show what would be retired, write nothing.")
+@click.option("--all-books", is_flag=True,
+              help="Every fund in config/ and every paper book, not just this one.")
+def prune_learnings_cmd(category: str | None, before: str | None, dry_run: bool, all_books: bool):
+    """Retire active learnings so they stop being injected into the prompt.
+
+    For clearing out a batch that turned out to be noise — e.g. the per-trade
+    lessons written before batch distillation, which explained a whole run's
+    outcomes by the one macro line every trade in that run shared. Rows are
+    deactivated, not deleted, so past runs remain reconstructible.
+
+    Learnings are per-book: each fund and each paper portfolio distils from its
+    own outcomes into its own database. Without --all-books this touches one
+    book — the fund named by FUND_CONFIG, or the default config.
+    """
+    books = _all_learning_books() if all_books else [_current_learning_book()]
+
+    scope = category or "all categories"
+    window = f" created before {before}" if before else ""
+    click.echo(f"\n─── Prune learnings ({scope}{window}) ───────────────")
+
+    total_matched = total_retired = 0
+    for label, store in books:
+        matched = store.find_active_learnings(category=category, before=before)
+        if not matched:
+            if all_books:
+                click.echo(f"\n  {label}: nothing matches.")
+            continue
+
+        total_matched += len(matched)
+        click.echo(f"\n  {label}:")
+        for lrn in matched:
+            body = lrn.body if len(lrn.body) <= 88 else lrn.body[:85] + "..."
+            click.echo(f"    [{lrn.created_at.strftime('%Y-%m-%d')}] {lrn.category}: {body}")
+
+        if not dry_run:
+            total_retired += store.deactivate_learnings(category=category, before=before)
+            click.echo(f"    → {len(store.get_active_learnings())} active learning(s) remain.")
+
+    if not total_matched:
+        click.echo("\n  Nothing matches — no learnings retired.")
+    elif dry_run:
+        click.echo(f"\n  DRY RUN — {total_matched} would be retired across "
+                   f"{len(books)} book(s), nothing written.")
+    else:
+        click.echo(f"\n  Retired {total_retired} across {len(books)} book(s).")
+
+
+def _current_learning_book() -> tuple[str, Store]:
+    cfg, store = _get_store()
+    return cfg.display_name, store
+
+
+def _all_learning_books() -> list[tuple[str, Store]]:
+    """Every book that distils learnings: each config/*.yaml fund, each paper book.
+
+    Both run the same learning pipeline against their own database, so a prune
+    that only reached the fund selected by FUND_CONFIG would silently leave the
+    other funds' lessons live in their prompts.
+    """
+    from fundmgr import paper
+    from fundmgr.config import CONFIG_DIR, load_config
+
+    books: list[tuple[str, Store]] = []
+    seen: set[Path] = set()
+
+    for path in sorted(CONFIG_DIR.glob("config*.yaml")):
+        try:
+            cfg = load_config(path)
+        except Exception as exc:
+            click.echo(f"  ⚠ skipping {path.name}: {exc}")
+            continue
+        if cfg.db_path in seen or not cfg.db_path.exists():
+            continue
+        seen.add(cfg.db_path)
+        books.append((f"{cfg.display_name} [{path.name}]", Store(cfg.db_path)))
+
+    for meta in paper.list_portfolios():
+        try:
+            _, store = paper.open_portfolio(meta["slug"])
+        except Exception as exc:
+            click.echo(f"  ⚠ skipping paper book {meta['slug']}: {exc}")
+            continue
+        books.append((f"{meta['name']} [paper/{meta['slug']}]", store))
+
+    return books
 
 
 @cli.command("reject-rates")
@@ -1436,6 +1835,350 @@ def paper_kill_check(slug: str | None):
     for s in slugs:
         for line in check_kill_criteria(s):
             click.echo(f"  {line}")
+
+
+@cli.command("aliases")
+@click.option("--set", "set_pair", nargs=2, default=None,
+              metavar="KEY TICKER", help="Teach a mapping, e.g. --set SE0000115446 VOLV-B.ST")
+@click.option("--forget", default=None, metavar="KEY", help="Remove a learned mapping.")
+def aliases_cmd(set_pair, forget):
+    """List, add or remove learned ticker aliases.
+
+    Photo import records how every reviewed row resolved, so a ticker you fix
+    once is applied automatically the next time that ISIN, broker ticker or
+    company name appears — in any sleeve. KEY may be an ISIN, a broker ticker
+    or a company name.
+    """
+    from fundmgr import aliases as alias_store
+
+    if set_pair:
+        key, ticker = set_pair
+        kinds = alias_store.learn(
+            ticker,
+            isin=key if len(key.strip()) == 12 else None,
+            raw_ticker=key, name=key, source="manual",
+        )
+        if not kinds:
+            raise click.ClickException(f"Could not use '{key}' as an alias key.")
+        click.echo(f"✓ {key} → {ticker.upper()}  (as {', '.join(kinds)})")
+        return
+
+    if forget:
+        removed = alias_store.forget(forget)
+        if removed:
+            click.echo(f"✓ Forgot '{forget}' ({', '.join(removed)}).")
+        else:
+            click.echo(f"No learned alias matching '{forget}'.")
+        return
+
+    rows = alias_store.entries()
+    if not rows:
+        click.echo("No learned aliases yet — they're recorded as you import photos.")
+        return
+    click.echo(f"\n─── {len(rows)} learned alias(es) — {alias_store.alias_path()} ───")
+    click.echo(f"  {'KIND':<8} {'KEY':<28} {'TICKER':<14} {'LEARNED'}")
+    for r in rows:
+        click.echo(f"  {r['kind']:<8} {r['key'][:27]:<28} {r['ticker']:<14} "
+                   f"{r['learned_at'][:10]}")
+    click.echo("\n  Remove one with:  fund aliases --forget KEY\n")
+
+
+@cli.command("fundamentals-check")
+@click.argument("ticker")
+def fundamentals_check(ticker: str):
+    """Show which fundamentals fields the data layer really returns for TICKER.
+
+    Every metric the kill-criterion analyser can offer needs data behind it: a
+    key that is always None shows up as a watched line on the dashboard but can
+    never evaluate. yfinance `.info` is a passthrough of Yahoo's payload, so a
+    mis-mapped key name fails silently — run this after changing financedata's
+    _FIELD_MAP to confirm the new keys actually arrive.
+    """
+    tkr = ticker.upper()
+    try:
+        from financedata import get_fundamentals
+    except ImportError as e:
+        raise click.ClickException(f"financedata is not installed: {e}")
+    from fundmgr.evidence import FUND_FIELD_META
+
+    data = (get_fundamentals([tkr], ttl_days=0) or {}).get(tkr)
+    if not data:
+        raise click.ClickException(
+            f"No fundamentals returned for {tkr} — bad ticker, or the fetch failed.")
+
+    # A criterion reads the merged cache, not one provider, so the check has to
+    # show both sources or it answers the wrong question. Statement metrics are
+    # derived live here rather than read from a book's store — this command is
+    # about what a ticker *can* yield, independent of any portfolio.
+    from fundmgr.data.statements import STATEMENT_METRICS, derive
+    try:
+        statement_metrics = derive(tkr)
+    except Exception as e:
+        statement_metrics = {}
+        click.echo(f"  ⚠ statement metrics unavailable: {e}")
+    data.update({k: v for k, v in statement_metrics.items() if v is not None})
+
+    offered = set(FUND_FIELD_META)
+    populated = {k: v for k, v in sorted(data.items()) if v is not None}
+    empty = sorted(k for k, v in data.items() if v is None)
+
+    click.echo(f"\n─── {tkr}: {len(populated)}/{len(data)} fields populated ───")
+    for key, value in populated.items():
+        click.echo(f"  {'★' if key in offered else ' '} {key:<22} {value}")
+    if empty:
+        click.echo(f"\n  Returned but empty for this ticker:\n    {', '.join(empty)}")
+
+    # Statement metrics get their own section: an absent one almost always means
+    # a row label this codebase doesn't accept, which is silent everywhere else.
+    if statement_metrics:
+        # fiscal_period_end rides along in the same payload but is a period
+        # label, not a metric — counting it would inflate the coverage figure.
+        ratios = {k: v for k, v in statement_metrics.items() if k in STATEMENT_METRICS}
+        derived_ok = [k for k, v in ratios.items() if v is not None]
+        derived_missing = [k for k, v in ratios.items() if v is None]
+        period = statement_metrics.get("fiscal_period_end")
+        click.echo(f"\n  Derived from the financial statements "
+                   f"({len(derived_ok)}/{len(STATEMENT_METRICS)}"
+                   f"{f', period ending {period}' if period else ''}):")
+        for key, (label, is_fraction) in STATEMENT_METRICS.items():
+            value = statement_metrics.get(key)
+            if value is None:
+                if key == "cash_runway_months" and (data.get("operating_cash_flow") or 0) > 0:
+                    shown = "—  (n/a — cash generative)"
+                else:
+                    shown = "—  (no matching statement row)"
+            else:
+                shown = f"{value * 100:,.1f}%" if is_fraction else f"{value:,.2f}"
+            click.echo(f"    {'★' if key in offered else ' '} {key:<22} {shown}")
+        unexplained = [k for k in derived_missing
+                       if not (k == "cash_runway_months"
+                               and (data.get("operating_cash_flow") or 0) > 0)]
+        if unexplained:
+            click.echo(f"    → {len(unexplained)} unexplained: either this filer "
+                       "doesn't report them, or the row label needs adding.")
+
+    missing = sorted(offered - set(data))
+    if missing:
+        click.echo(f"\n  ⚠ offered as kill-criterion metrics but NOT in the payload "
+                   f"at all:\n    {', '.join(missing)}")
+        click.echo("    → these can never evaluate; fix the mapping or drop them.")
+    else:
+        click.echo("\n  ✓ every offered kill-criterion metric is present in the payload.")
+
+    # The other direction: a field the data layer now returns that no criterion
+    # can yet be checked against — the cue to add it to evidence._FUND_FIELDS.
+    spare = sorted(k for k in populated if k not in offered
+                   and isinstance(populated[k], (int, float)))
+    if spare:
+        click.echo(f"\n  Available but not offered as a metric:\n    {', '.join(spare)}")
+    click.echo("\n  ★ = offered to the criterion analyser as a checkable metric\n")
+
+
+@cli.command("paper-watch")
+@click.option("--slug", default=None, help="Check a single portfolio instead of all.")
+def paper_watch(slug: str | None):
+    """Check numeric kill lines and time horizons across the portfolios.
+
+    Kill lines (max drawdown from the review anchor, price floor, price target) are compared
+    with current prices; horizons alert at 30/14/7/1 days out and on the day.
+    Neither needs an API key. Both also run as part of 'fund paper-track'."""
+    from fundmgr.paper import list_portfolios
+    from fundmgr.watchplan import check_horizons, check_kill_rules
+    slugs = [slug] if slug else [m["slug"] for m in list_portfolios()]
+    if not slugs:
+        click.echo("No paper portfolios yet.")
+        return
+    quiet = True
+    for s in slugs:
+        for line in check_kill_rules(s) + check_horizons(s):
+            click.echo(f"  {line}")
+            quiet = False
+    if quiet:
+        click.echo("  No kill lines crossed, no horizons due.")
+
+
+@cli.command("paper-plan")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--kill", default=None, help="Kill criterion text (empty string clears it).")
+@click.option("--add", "add_criterion", default=None,
+              help="ADD criterion — what must still be true to add (empty string clears it).")
+@click.option("--max-drop", default=None, help="Max % drawdown from the review price before alerting.")
+@click.option("--price-below", default=None, help="Alert when price falls to/below this (native currency).")
+@click.option("--price-above", default=None, help="Alert when price rises to/above this (native currency).")
+@click.option("--horizon", default=None, help="Review date, YYYY-MM-DD.")
+@click.option("--months", default=None, help="…or a horizon this many months out.")
+@click.option("--note", default=None, help="Note on what should be true by the horizon.")
+@click.option("--re-anchor", is_flag=True,
+              help="Measure the drawdown line from today's price (do this after a fresh analysis).")
+@click.option("--clear", is_flag=True, help="Remove the whole watch plan for this ticker.")
+def paper_plan(slug: str, ticker: str, kill: str | None, add_criterion: str | None,
+               max_drop: str | None, price_below: str | None, price_above: str | None,
+               horizon: str | None, months: str | None, note: str | None,
+               re_anchor: bool, clear: bool):
+    """Set a position's kill criteria and time horizon.
+
+    The CLI twin of the dashboard's watch-plan editor:
+
+        fund paper-plan my-sleeve NVDA --kill "loses the Apple socket" \\
+            --max-drop 25 --months 12
+    """
+    from fundmgr import watchplan
+    from fundmgr.paper import open_portfolio
+    try:
+        meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    tkr = ticker.upper()
+    if clear:
+        watchplan.clear_position_plan(store, tkr)
+        click.echo(f"✓ Cleared the watch plan for {tkr} in {meta['name']}.")
+        return
+
+    plan = watchplan.set_position_plan(
+        store, tkr, kill_criterion=kill, max_drawdown_pct=max_drop,
+        price_below=price_below, price_above=price_above,
+        currency=meta["currency_map"].get(tkr), review_date=horizon,
+        horizon_months=months, horizon_note=note, re_anchor=re_anchor,
+    )
+    # The ADD criterion goes through the same analyser as the kill criterion,
+    # with the framing that reads its conditions as ones that must hold.
+    if add_criterion is not None:
+        previous = watchplan.get_add_text(store).get(tkr, "")
+        text = watchplan.set_add_text(store, tkr, add_criterion)
+        if text and text != previous:
+            watchplan.save_add_analysis(
+                store, tkr, watchplan.analyse_criterion(text, kind="add", store=store))
+        elif not text:
+            watchplan.save_add_analysis(store, tkr, None)
+
+    click.echo(f"✓ {tkr} in {meta['name']}:")
+    click.echo(f"  Kill criterion: {plan['kill_criterion'] or '—'}")
+    click.echo(f"  ADD criterion:  {watchplan.get_add_text(store).get(tkr) or '—'}")
+    rules = plan["kill_rules"]
+    click.echo(f"  Max drop: {rules.get('max_drawdown_pct') or '—'}   "
+               f"Floor: {rules.get('price_below') or '—'}   "
+               f"Target: {rules.get('price_above') or '—'}")
+    if rules.get("max_drawdown_pct"):
+        anchor = rules.get("anchor_price_sek")
+        click.echo(f"  Measured from: {anchor:,.2f} SEK on {rules.get('anchor_date', '')}"
+                   if anchor else
+                   "  Measured from: cost basis (no price cached when the line was set)")
+    for f in rules.get("fundamentals") or []:
+        span = (f" for {f['quarters']} straight quarters"
+                if int(f.get("quarters") or 1) > 1 else "")
+        click.echo(f"  Fundamental: {f['metric']} {f['op']} {f['value']:g}{span}")
+    hz = plan["horizon"]
+    if hz.get("review_date"):
+        click.echo(f"  Horizon: {hz['review_date']} ({hz.get('label', '')}, "
+                   f"{plan['days_left']}d away)")
+    else:
+        click.echo("  Horizon: —")
+
+
+@cli.command("paper-add-plan")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--book", default=None, help="Risk book: A, A/B or B (sets the gates).")
+@click.option("--max-weight", default=None, help="Ceiling weight % while an add thesis is active.")
+@click.option("--tranche", default=None, help="Size of one add step, in weight points.")
+@click.option("--target", default=None, help="Target review price (stamped with today's date).")
+@click.option("--review-price", default=None,
+              help="Anchor for price dislocation — the thesis-confirmed price. "
+                   "Use 'live' to anchor at the current price.")
+@click.option("--confirm-proof", is_flag=True, help="Record that the fundamental proof criterion is met.")
+@click.option("--drop-proof", is_flag=True, help="Withdraw the proof confirmation.")
+@click.option("--clear", is_flag=True, help="Remove the whole add plan for this ticker.")
+def paper_add_plan(slug, ticker, book, max_weight, tranche, target, review_price,
+                   confirm_proof, drop_proof, clear):
+    """Set a position's add plan, then show the resulting signal.
+
+    An add needs (proof OR dislocation) AND valuation AND weight AND no kill:
+
+        fund paper-add-plan my-sleeve SYSR.ST --book A --max-weight 13 \\
+            --tranche 1 --target 145 --review-price live
+    """
+    from fundmgr import addsignal
+    from fundmgr.paper import open_portfolio
+    try:
+        meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    tkr = ticker.upper()
+    if clear:
+        addsignal.clear_plan(store, tkr)
+        click.echo(f"✓ Cleared the add plan for {tkr}.")
+        return
+
+    if review_price and str(review_price).strip().lower() == "live":
+        from fundmgr.data.quotes import live_price
+        from fundmgr.paper import to_sek_price
+        native = live_price(tkr)
+        if not native:
+            raise click.ClickException(f"Could not fetch a live price for {tkr}.")
+        # Dislocation is compared against SEK prices, so the anchor must be SEK.
+        currency = meta["currency_map"].get(tkr, "SEK")
+        review_price = (native if currency == "SEK"
+                        else to_sek_price(native, currency, store))
+        if not review_price:
+            raise click.ClickException(f"No {currency}→SEK rate to anchor {tkr}.")
+        click.echo(f"  Anchoring review price at {review_price:,.2f} SEK")
+
+    addsignal.set_plan(
+        store, tkr, book=book, max_weight_pct=max_weight, tranche_pct=tranche,
+        target_price=target, review_price=review_price,
+        proof_confirmed=True if confirm_proof else (False if drop_proof else None),
+    )
+
+    row = next((r for r in addsignal.evaluate_all(store) if r["ticker"] == tkr), None)
+    if row is None:
+        click.echo(f"✓ Saved. No signal computed for {tkr} yet.")
+        return
+
+    click.echo(f"\n─── {tkr} in {meta['name']} — {row['state'].upper()} ───")
+    click.echo(f"  {row['why']}")
+    click.echo(f"  Book {row['book']}  ·  proof {'yes' if row['proof'] else 'no'}"
+               f"{' (' + row['proof_confirmed_at'] + ')' if row['proof_confirmed_at'] else ''}")
+    if row["dislocation_pct"] is not None:
+        click.echo(f"  Dislocation {row['dislocation_pct']:+.1f}% vs review "
+                   f"{row['review_price']:,.2f} (gate {row['dislocation_gate']:+.0f}%)")
+    click.echo(f"  Valuation {row['valuation_status']} — {row['valuation_reason']}")
+    if row["expected_annual_return"] is not None:
+        click.echo(f"  Expected {row['expected_annual_return']:.0f}%/yr over "
+                   f"{row['months_left']:.0f}m (gate {row['return_gate']:.0f}%)")
+    if row["max_weight_pct"]:
+        click.echo(f"  Weight {row['weight_pct']:.1f}% of max {row['max_weight_pct']:.1f}% "
+                   f"(tranche {row['tranche_pct']:.1f}pp)")
+    click.echo("")
+
+
+@cli.command("paper-adds")
+@click.option("--slug", default=None, help="Check a single portfolio instead of all.")
+def paper_adds(slug):
+    """Show the current add signal for every position carrying an add plan."""
+    from fundmgr import addsignal
+    from fundmgr.paper import list_portfolios, open_portfolio
+    slugs = [slug] if slug else [m["slug"] for m in list_portfolios()]
+    shown = False
+    for s in slugs:
+        try:
+            meta, store = open_portfolio(s)
+        except KeyError:
+            continue
+        rows = addsignal.evaluate_all(store)
+        if not rows:
+            continue
+        shown = True
+        click.echo(f"\n─── {meta['name']} ───")
+        click.echo(f"  {'TICKER':<14} {'STATE':<11} {'EXP/YR':>7} {'DISLOC':>8}  WHY")
+        for r in rows:
+            exp = f"{r['expected_annual_return']:.0f}%" if r["expected_annual_return"] is not None else "—"
+            dis = f"{r['dislocation_pct']:+.1f}%" if r["dislocation_pct"] is not None else "—"
+            click.echo(f"  {r['ticker']:<14} {r['state']:<11} {exp:>7} {dis:>8}  {r['why']}")
+    if not shown:
+        click.echo("No add plans yet — set one with 'fund paper-add-plan'.")
 
 
 @cli.command("paper-list")
@@ -1614,8 +2357,21 @@ def paper_retag(slug: str, old: str, new: str | None):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    click.echo(f"✓ Retagged {res['shares']:g} × {res['old']} → {res['new']} "
-               f"(cash unchanged).")
+    if res["shares"]:
+        click.echo(f"✓ Retagged {res['shares']:g} × {res['old']} → {res['new']} "
+                   f"(cash unchanged).")
+    else:
+        click.echo(f"✓ Moved the plan for {res['old']} → {res['new']} "
+                   f"(no position was held under {res['old']}).")
+    if res.get("moved"):
+        click.echo(f"  Plan carried over: {', '.join(res['moved'])}.")
+    if res.get("dropped"):
+        click.echo(f"  Forgot {', '.join(sorted(set(res['dropped'])))} — that data "
+                   f"described the wrong instrument.")
+    if any("kill rules" in m or "add plan" in m for m in res.get("moved", [])):
+        click.echo("  Price anchors were cleared: the drawdown line and review "
+                   "price were set from the wrong instrument. Re-anchor after a "
+                   "fresh look.")
     try:
         bench_rows = store.get_benchmark()
         nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
@@ -1697,5 +2453,514 @@ def paper_status(slug: str):
     click.echo(f"  NAV (cost): {nav:>12,.0f} SEK")
 
 
+@cli.command("paper-scopes")
+@click.option("--config", "config_name", default=None,
+              help="Source profile whose universe to list (default: config_global.yaml).")
+def paper_scopes(config_name: str | None):
+    """List the geographic scopes a sleeve review can be run against.
+
+    Every universe row carries a country, so a review is either global or
+    narrowed to one nation. The counts are enabled tickers per country."""
+    from fundmgr.engine.sleeve_review import DEFAULT_REVIEW_CONFIG, list_scopes
+    from fundmgr.engine.whatif import load_profile_config
+
+    config_name = config_name or DEFAULT_REVIEW_CONFIG
+    try:
+        scopes = list_scopes(config_name)
+    except ValueError as e:
+        click.echo(f"✗ {e}", err=True)
+        sys.exit(1)
+
+    def _names(n: int) -> str:
+        return f"{n:>6} name" + ("" if n == 1 else "s")
+
+    # The global total counts the whole universe, including rows whose country
+    # column is blank or malformed — those are unreachable by country scope but
+    # very much in play globally.
+    total = len(get_enabled_tickers(load_profile_config(config_name).universe_path))
+    click.echo(f"\n─── Scopes in {config_name} ───")
+    click.echo(f"  {'(global)':<6} {'every country':<20} {_names(total)}")
+    for s in scopes:
+        click.echo(f"  {s['code']:<6} {s['label']:<20} {_names(s['count'])}")
+    click.echo("\n  Use: fund paper-review SLUG --country SE")
+
+
+@cli.command("paper-review")
+@click.argument("slug", required=False)
+@click.option("--all", "all_sleeves", is_flag=True,
+              help="Review every live sleeve in turn. One LLM call per sleeve — "
+                   "this is the form the cron entry uses.")
+@click.option("--config", "config_name", default=None,
+              help="Source profile for universe, mandate and risk limits "
+                   "(default: the sleeve's stored profile, else config_global.yaml).")
+@click.option("--country", default=None,
+              help="Scope candidates to one country (e.g. SE). Omit for global; "
+                   "'--country global' clears a stored scope.")
+@click.option("--provider", default=None, help="Override the profile's LLM provider.")
+@click.option("--model", "model_id", default=None, help="Override the profile's model id.")
+@click.option("--samples", default=1, show_default=True,
+              help="Consensus samples — the model argues with itself before settling.")
+@click.option("--max-candidates", default=None, type=int,
+              help="Cap on candidate tickers worked this run.")
+@click.option("--no-macro", is_flag=True, help="Skip the global macro context fetch.")
+@click.option("--no-refresh", is_flag=True,
+              help="Use cached prices only — no fetch. Fast and free, but candidates "
+                   "stale past risk.stale_after_days can't be bought.")
+@click.option("--turnover", type=float, default=None,
+              help="Max % of NAV traded this run, overriding the profile. A swap costs "
+                   "turnover twice, so the profile's rebalance cap often truncates a "
+                   "review's paired trades. Remembered for next time.")
+@click.option("--max-position", type=float, default=None,
+              help="Max single-name weight %, overriding the profile.")
+@click.option("--max-positions", type=int, default=None,
+              help="Max open positions, overriding the profile.")
+@click.option("--min-cash", type=float, default=None,
+              help="Minimum cash %, overriding the profile.")
+@click.option("--dry-run", is_flag=True, help="Decide but don't write into the sleeve.")
+def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
+                 country: str | None, provider: str | None, model_id: str | None,
+                 samples: int, max_candidates: int | None, no_macro: bool,
+                 no_refresh: bool, turnover: float | None, max_position: float | None,
+                 max_positions: int | None, min_cash: float | None, dry_run: bool):
+    """Re-decide a live sleeve against its CURRENT positions.
+
+    Reviews every holding (hold / trim / exit) and proposes add-ons from the
+    scoped universe, funded from within the book — there is no new capital, so
+    a buy is paid for by the sells in the same run. The result is written into
+    the sleeve's own store, so it shows up on its dashboard as the latest
+    decision and feeds the sleeve's learnings loop."""
+    from fundmgr.engine.sleeve_review import DEFAULT_MAX_CANDIDATES, review_sleeve
+
+    if (provider is None) != (model_id is None):
+        click.echo("✗ Pass --provider and --model together, or neither.", err=True)
+        sys.exit(1)
+    if bool(slug) == bool(all_sleeves):
+        click.echo("✗ Give a SLUG or --all, not both or neither.", err=True)
+        sys.exit(1)
+    # An explicit "global" clears a stored country; omitting --country keeps it.
+    if country and country.strip().lower() in ("global", "all", "world"):
+        country = ""
+
+    risk = {k: v for k, v in (("max_turnover_pct", turnover),
+                              ("max_position_pct", max_position),
+                              ("max_positions", max_positions),
+                              ("min_cash_pct", min_cash)) if v is not None}
+
+    if all_sleeves:
+        from fundmgr.paper import list_portfolios
+        slugs = [m["slug"] for m in list_portfolios(kind="live")]
+        if not slugs:
+            click.echo("No live sleeves to review. See 'fund paper-list'.")
+            return
+    else:
+        slugs = [slug]
+
+    failures = 0
+    for one in slugs:
+        click.echo(f"\n{'═'*56}")
+        click.echo(f"  Live Sleeve Review — {one}")
+        click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+        click.echo(f"{'═'*56}")
+        click.echo("\n[→] Building features and calling the model — this takes a few minutes…")
+        try:
+            result = review_sleeve(
+                one,
+                config_name=config_name,
+                country=country,
+                provider=provider,
+                model_id=model_id,
+                n_runs=samples,
+                include_macro=not no_macro,
+                max_candidates=max_candidates or DEFAULT_MAX_CANDIDATES,
+                refresh_prices=not no_refresh,
+                risk=risk or None,
+                dry_run=dry_run,
+            )
+        except KeyError:
+            click.echo(f"✗ No paper portfolio '{one}'. See 'fund paper-list'.", err=True)
+            failures += 1
+            # One bad slug must not abandon the rest of a scheduled batch.
+            if not all_sleeves:
+                sys.exit(1)
+            continue
+        except (ValueError, RuntimeError, LLMError) as e:
+            click.echo(f"✗ {one}: {e}", err=True)
+            failures += 1
+            if not all_sleeves:
+                sys.exit(1)
+            continue
+        _print_review(result, one, dry_run)
+
+    if all_sleeves:
+        click.echo(f"\n{len(slugs) - failures}/{len(slugs)} sleeve(s) reviewed."
+                   + (f" {failures} failed." if failures else ""))
+    if failures and all_sleeves and failures == len(slugs):
+        sys.exit(1)
+
+
+def _print_review(result: dict, slug: str, dry_run: bool) -> None:
+    """Render one review result for the terminal."""
+    scope, data, model = result["scope"], result["data"], result["model"]
+    risk, turnover = result["risk"], result["turnover"]
+
+    click.echo(f"\n  Scope:   {scope['label']}  ({scope['profile']}, {scope['universe']})")
+    click.echo(f"  Data:    {data['features_built']} priced of {data['candidates_worked']} worked "
+               f"→ {data['candidates_to_llm']} to the model "
+               f"(median age {data['median_age_days']}d, {data['stale_count']} stale)")
+    click.echo(f"  Model:   {model['provider']}/{model['model_id']} × {model['n_runs']}")
+    click.echo(f"  Book:    NAV {result['nav_sek']:,.0f} SEK · cash {result['cash_sek']:,.0f} "
+               f"→ {result['funded_cash_sek']:,.0f} SEK after the sells below")
+
+    limits = (f"turnover {risk['max_turnover_pct']:.0f}% · max position "
+              f"{risk['max_position_pct']:.0f}% · max {risk['max_positions']} positions · "
+              f"min cash {risk['min_cash_pct']:.0f}%")
+    if risk["applied"]:
+        changed = ", ".join(f"{k} {v['from']:g}→{v['to']:g}" for k, v in risk["applied"].items())
+        limits += f"  (this sleeve's own: {changed})"
+    click.echo(f"  Limits:  {limits}")
+
+    if result["market_summary"]:
+        click.echo(f"\n  {result['market_summary']}")
+
+    click.echo(f"\n  {'Ticker':<14} {'Side':<6} {'Weight':>7} {'SEK':>10} {'Conf':>5}  Status")
+    click.echo(f"  {'─'*14} {'─'*6} {'─'*7} {'─'*10} {'─'*5}  {'─'*30}")
+    for a in result["actions"]:
+        tag = " +add-on" if a["add_on"] and a["approved"] else ""
+        click.echo(
+            f"  {a['ticker']:<14} {a['side']:<6} {a['target_weight_pct']:>6.1f}% "
+            f"{a['sek_estimate']:>10,.0f} {a['confidence']:>5.2f}  {a['status']}{tag}"
+        )
+        if a["reason"]:
+            click.echo(f"      {a['reason']}")
+
+    click.echo(
+        f"\n  {result['buy_count']} buy ({result['add_on_count']} new) · "
+        f"{result['sell_count']} sell · {result['hold_count']} hold · "
+        f"cash target {result['cash_target_pct']:.0f}%  [{result['elapsed_s']}s]"
+    )
+    # A swap costs turnover twice, so an empty-looking review is usually the cap
+    # rather than the model having no view. Say which.
+    if turnover["dropped"]:
+        click.echo(
+            f"\n  ⚠ {turnover['dropped']} trade(s) dropped by the turnover cap: the model "
+            f"proposed {turnover['proposed_sek']:,.0f} SEK against a cap of "
+            f"{turnover['cap_sek']:,.0f} SEK ({turnover['cap_pct']:.0f}% of NAV).\n"
+            f"    Raise it for this sleeve with: fund paper-review {slug} --turnover 50"
+        )
+    if result["notes"]:
+        click.echo(f"\n  {result['notes']}")
+    if dry_run:
+        click.echo("\n  (dry run — nothing written to the sleeve)")
+    else:
+        click.echo(f"\n  ✓ Saved to {slug} as {result['id']} — see it on /live/{slug}")
+
+
+
 if __name__ == "__main__":
     cli()
+
+
+@cli.command("paper-metric")
+@click.argument("slug")
+@click.argument("key", required=False)
+@click.option("--label", default=None, help="How it reads on the dashboard.")
+# No click.Choice here on purpose: define_custom_metric owns this rule, and a
+# second copy of it in the option definition is how the error message came to
+# recommend a command the CLI then rejected.
+@click.option("--unit", default="",
+              help="Unit the figure is printed in: %, x, or a currency code (SEK, USD…).")
+@click.option("--note", default="", help="The company's definition, in your words.")
+@click.option("--edgar", default="", metavar="CONCEPT",
+              help="us-gaap concept to fill this from SEC filings (US filers only).")
+@click.option("--forget", is_flag=True, help="Remove this metric from the book.")
+def paper_metric(slug, key, label, unit, note, edgar, forget):
+    """Define a metric this book can write criteria against.
+
+    For the figures no provider carries because they are company-defined rather
+    than accounting standards — organic growth, ARR, adjusted EBITA, cash
+    conversion, order backlog. Once defined, a criterion may name it and
+    `paper-report` supplies the numbers from the company's own report.
+
+        fund paper-metric my-sleeve organic_growth --label "Organic growth" --unit %
+        fund paper-metric my-sleeve                      # list what is defined
+    """
+    from fundmgr.evidence import custom_metrics, define_custom_metric, forget_custom_metric
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    if key and forget:
+        if forget_custom_metric(store, key):
+            click.echo(f"✓ Removed '{key}'. Criteria naming it will report it as unknown.")
+        else:
+            click.echo(f"No custom metric '{key}' in this book.")
+        return
+    if key:
+        try:
+            define_custom_metric(store, key, label or "", unit, note, edgar)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+
+    defined = custom_metrics(store)
+    if not defined:
+        click.echo("No custom metrics yet. Add one:\n"
+                   "  fund paper-metric <slug> organic_growth --label 'Organic growth' --unit %")
+        return
+    click.echo(f"\n─── Custom metrics for {slug} ───")
+    for k, meta in sorted(defined.items()):
+        src = f"  ← SEC {meta['edgar']}" if meta.get("edgar") else ""
+        click.echo(f"  {k:<24} {meta.get('label', ''):<24} "
+                   f"{meta.get('unit', '') or '—'}{src}")
+        if meta.get("note"):
+            click.echo(f"    {meta['note']}")
+    # Name a metric this book actually has. A hardcoded example invites the
+    # "Unknown metric" error from a line the tool itself suggested.
+    example = sorted(defined)[0]
+    click.echo(f"\n  Enter figures with: fund paper-report {slug} <TICKER> "
+               f"--period <quarter-end> --set {example}=<value>")
+    if any(m.get("edgar") for m in defined.values()):
+        click.echo(f"  Or pull the SEC-mapped ones: fund paper-edgar {slug} <TICKER>")
+    click.echo()
+
+
+@cli.command("paper-report")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--period", required=True,
+              help="Period end the figures describe, YYYY-MM-DD (not today's date).")
+@click.option("--set", "pairs", multiple=True, metavar="KEY=VALUE",
+              help="A figure from the report. Repeatable.")
+@click.option("--percent", is_flag=True,
+              help="Your percentage figures are as printed (41.2, not 0.412). "
+                   "Applies to the built-in fraction metrics; the book's own "
+                   "metrics are always as printed.")
+def paper_report(slug, ticker, period, pairs, percent):
+    """Record figures read off a company's own quarterly report.
+
+    They land in the same cache a provider's numbers do, so criteria, kill
+    rules and the quarters machinery read them identically.
+
+        fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \\
+            --set organic_growth=6.4 --set adj_ebit_margin=9.3
+
+    UNITS: the book's own metrics are entered exactly as printed. The built-in
+    ones marked as fractions (margins, growth, yields) are stored the way the
+    data provider sends them — a 41.2% gross margin is 0.412 — and scaled back
+    to percent when a rule reads them. Pass --percent to type those as printed
+    too, and the conversion is done for you:
+
+        fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \\
+            --percent --set gross_margin=41.2
+
+    Every figure is echoed back in the unit a rule will read it in, so a
+    mis-typed one is visible immediately rather than at the next kill check.
+
+    The period is the quarter the figures describe, not the day you typed them:
+    that is what lets a late entry still count as its own quarter, and what stops
+    one report's numbers counting as two quarters of evidence.
+    """
+    from datetime import datetime
+
+    from fundmgr.evidence import field_meta, record_reported
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+    try:
+        datetime.strptime(period, "%Y-%m-%d")
+    except ValueError:
+        raise click.ClickException(f"Bad period '{period}' — use YYYY-MM-DD.")
+
+    known = field_meta(store)
+    values, unknown = {}, []
+    for pair in pairs:
+        if "=" not in pair:
+            raise click.ClickException(f"Expected KEY=VALUE, got '{pair}'.")
+        k, v = pair.split("=", 1)
+        k = k.strip()
+        if k not in known:
+            unknown.append(k)
+            continue
+        try:
+            values[k] = float(v.strip().replace(",", "."))
+        except ValueError:
+            raise click.ClickException(f"'{v}' is not a number (for {k}).")
+    if unknown:
+        raise click.ClickException(
+            f"Unknown metric(s): {', '.join(unknown)}. Define them first with "
+            f"'fund paper-metric {slug} <key>' — see 'fund paper-metric {slug}'.")
+    if not values:
+        raise click.ClickException("Nothing to record — pass at least one --set KEY=VALUE.")
+
+    try:
+        written = record_reported(store, ticker, values, period, percent=percent)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"✓ {ticker.upper()} — period ending {period}:")
+    for k, v in sorted(written.items()):
+        meta = known[k]
+        # Echo in the unit a rule reads, not the unit stored: confirming "41.20"
+        # for a figure that will compare as 4120% is how the mistake survives.
+        if meta.get("is_fraction"):
+            shown = f"{v * 100:,.2f}%   (stored {v:g})"
+        else:
+            shown = f"{v:,.2f}{meta.get('unit', '')}"
+        click.echo(f"    {meta['label']:<26} {shown}")
+
+
+@cli.command("paper-read")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--period", required=True, help="Period end the report covers, YYYY-MM-DD.")
+@click.option("--apply", "apply_", is_flag=True,
+              help="Record the extracted figures (default: show them only).")
+def paper_read(slug, ticker, period, apply_):
+    """Read this book's tracked figures out of coverage of a company's report.
+
+    Finds what was published around the reporting date, fetches it, and pulls
+    out the metrics defined with 'fund paper-metric'. Nothing is stored without
+    --apply: a figure that gates money should not enter the book on a model's
+    say-so.
+
+        fund paper-read my-sleeve SYSR.ST --period 2026-06-30
+        fund paper-read my-sleeve SYSR.ST --period 2026-06-30 --apply
+    """
+    from datetime import datetime
+
+    from fundmgr.data.release import read_report
+    from fundmgr.evidence import record_reported
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+    try:
+        datetime.strptime(period, "%Y-%m-%d")
+    except ValueError:
+        raise click.ClickException(f"Bad period '{period}' — use YYYY-MM-DD.")
+
+    tkr = ticker.upper()
+    click.echo(f"⏳ Looking for {tkr} coverage around {period}…")
+    out = read_report(store, tkr, period)
+
+    for src in out["sources"]:
+        click.echo(f"  · {src['publisher']}: {src['headline'][:70]}")
+    if out.get("notes"):
+        click.echo(f"  note: {out['notes']}")
+
+    if not out["figures"] and not out["rejected"]:
+        click.echo("\n  Nothing extractable found. Enter the figures by hand:\n"
+                   f"    fund paper-report {slug} {tkr} --period {period} --set <key>=<value>")
+        return
+
+    if out["figures"]:
+        click.echo(f"\n─── Found in the coverage ({len(out['figures'])}) ───")
+        for f in out["figures"]:
+            mark = "" if f["quote_verbatim"] else "  ~paraphrased quote"
+            click.echo(f"  {f['label']:<26} {f['value']:>10,.2f}{f['unit']:<4}"
+                       f"  conf {f['confidence']:.1f}{mark}")
+            click.echo(f"      “{f['quote'][:100]}”")
+            if f["period"]:
+                click.echo(f"      period as stated: {f['period']}")
+    if out["rejected"]:
+        click.echo(f"\n─── Discarded ({len(out['rejected'])}) ───")
+        for f in out["rejected"]:
+            click.echo(f"  {f['label']:<26} {f['value']:>10,.2f}  — {f['reason']}")
+
+    if not apply_:
+        click.echo("\n  Check these against the report, then re-run with --apply "
+                   "to record them.")
+        return
+
+    written = record_reported(store, tkr, {f["metric"]: f["value"] for f in out["figures"]},
+                              period)
+    click.echo(f"\n✓ Recorded {len(written)} figure(s) for period ending {period}.")
+
+
+@cli.command("paper-edgar")
+@click.argument("slug")
+@click.argument("ticker")
+@click.option("--quarters", default=4, help="How many recent quarters to show.")
+@click.option("--apply", "apply_", is_flag=True, help="Record the figures.")
+def paper_edgar(slug, ticker, quarters, apply_):
+    """Fill EDGAR-mapped metrics from a US filer's own XBRL facts.
+
+    Map a metric to a us-gaap concept first, then pull every quarter the
+    company has filed:
+
+        fund paper-metric kf datacenter_revenue --unit SEK --edgar Revenues
+        fund paper-edgar  kf NVDA
+        fund paper-edgar  kf NVDA --apply
+
+    Values are stored against the period they cover, so the `quarters` part of
+    a criterion works on them straight away. US filers only — a foreign issuer
+    is simply absent from EDGAR, which the command says rather than guessing.
+    """
+    from fundmgr.data.edgar import EdgarError, read_ticker
+    from fundmgr.evidence import MAX_SNAPSHOTS, custom_metrics, field_meta, record_reported
+    from fundmgr.paper import open_portfolio
+    try:
+        _meta, store = open_portfolio(slug)
+    except KeyError:
+        raise click.ClickException(f"No portfolio '{slug}' — see 'fund paper-list'.")
+
+    tkr = ticker.upper()
+    try:
+        series = read_ticker(store, tkr)
+    except EdgarError as e:
+        raise click.ClickException(str(e))
+    except Exception as e:
+        raise click.ClickException(f"EDGAR request failed: {e}")
+
+    if not series:
+        click.echo(f"Nothing to fill for {tkr}. Either this book maps no metric to a "
+                   f"us-gaap concept (see 'fund paper-metric {slug}'), or {tkr} does "
+                   f"not file with the SEC — only US filers do.")
+        return
+
+    known = field_meta(store)
+    mismatched = []
+    for metric, found in sorted(series.items()):
+        meta = known.get(metric, {})
+        declared, filed_unit = meta.get("unit", ""), found["unit"]
+        values = found["values"]
+        click.echo(f"\n─── {meta.get('label', metric)} — filed in {filed_unit} ───")
+        for period in sorted(values, reverse=True)[:quarters]:
+            click.echo(f"    {period}   {values[period]:>18,.0f} {filed_unit}")
+        # A currency the metric does not claim makes every threshold written
+        # against it mean something else. Say so, and refuse to store it.
+        if declared and filed_unit and declared != filed_unit:
+            mismatched.append((metric, declared, filed_unit))
+
+    for metric, declared, filed_unit in mismatched:
+        click.echo(f"\n  ⚠ {metric} is declared in {declared} but the company files "
+                   f"in {filed_unit}. A threshold written against it would mean "
+                   f"something else. Fix it with:\n"
+                   f"      fund paper-metric {slug} {metric} --unit {filed_unit} "
+                   f"--edgar {custom_metrics(store)[metric]['edgar']}")
+    if mismatched:
+        raise click.ClickException("Nothing recorded — correct the unit(s) first.")
+
+    if not apply_:
+        click.echo("\n  Check these against the filing, then re-run with --apply.")
+        return
+
+    # One call per period so each figure lands in the quarter it describes.
+    # Only the periods the series can hold are written: the older ones would be
+    # trimmed on the next append anyway, and writing them makes the count report
+    # sixteen years of history that is not there.
+    all_periods = sorted({p for f in series.values() for p in f["values"]})
+    periods = all_periods[-MAX_SNAPSHOTS:]
+    written = 0
+    for period in periods:
+        batch = {m: f["values"][period] for m, f in series.items()
+                 if period in f["values"]}
+        written += len(record_reported(store, tkr, batch, period))
+    older = len(all_periods) - len(periods)
+    tail = f" ({older} older quarter(s) skipped — the series holds {MAX_SNAPSHOTS})" if older else ""
+    click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s)"
+               f"{tail}, {periods[0]} to {periods[-1]}.")

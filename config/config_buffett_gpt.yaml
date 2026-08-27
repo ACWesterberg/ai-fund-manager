@@ -69,3 +69,23 @@ web:
 reporting:
   currency: SEK
   output_dir: "data/reports_buffett_gpt"
+
+# Prompt optimizer (DSPy MIPROv2, `fund optimize`).
+optimizer:
+  # Training examples are pooled across the funds: MIPRO searches for
+  # instructions that make the decision task go better, which is a question
+  # every fund shares, and one fund alone accrues a single example a week.
+  # Only the trainset is shared — each fund still compiles and applies its
+  # own guidance artifact, and its own performance is measured alone.
+  pool_configs:
+    - config.yaml
+    - config_buffett_claude.yaml
+    - config_claude.yaml
+    - config_global.yaml
+
+# A quality-compounder screen is not the same question asked at 28 days. The
+# learning loop reads this horizon back: at 28 days it concluded, correctly for
+# that window, that theses whose invalidators only appear in a scheduled report
+# cannot be scored — which for this mandate would mean rejecting exactly the
+# positions it exists to hold. One quarter lets a report land inside the window.
+evaluation_horizon_days: 90

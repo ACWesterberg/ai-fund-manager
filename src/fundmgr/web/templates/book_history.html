@@ -43,6 +43,7 @@
         <thead>
           <tr>
             <th>Ticker</th>
+            <th class="num">Shares</th>
             <th class="num">≈ SEK</th>
             <th class="num">Weight</th>
             <th class="num">Conf</th>
@@ -58,6 +59,8 @@
               {% else %}<span class="badge badge-hold">HOLD</span>{% endif %}
               <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
             </td>
+            <td class="num {% if a.shares %}text-white font-semibold{% else %}text-slate-600{% endif %}">
+              {% if a.shares %}{{ "{:,.4g}".format(a.shares) }}{% else %}—{% endif %}</td>
             <td class="num text-slate-300">{% if a.sek_estimate %}{{ "{:,.0f}".format(a.sek_estimate) }}{% else %}—{% endif %}</td>
             <td class="num text-slate-300">{{ a.target_weight_pct }}%</td>
             <td class="num text-slate-300">{{ "%.2f"|format(a.confidence) }}</td>
@@ -65,7 +68,7 @@
           </tr>
           {% if a.thesis %}
           <tr>
-            <td colspan="5" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
+            <td colspan="6" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
           </tr>
           {% endif %}
           {% endfor %}

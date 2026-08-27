@@ -2468,8 +2468,10 @@ def paper_status(slug: str):
                f"{sum(1 for a in acts if a.get('side') == 'sell')} sell · "
                f"{sum(1 for a in acts if a.get('side') == 'hold')} hold")
     for a in acts:
+        shares = f"{a['shares']:,.4g} sh" if a.get("shares") else ""
         click.echo(f"    {a.get('side', '?').upper():<5} {a.get('ticker', ''):<14} "
-                   f"{a.get('target_weight_pct', 0):>5.1f}%  {a.get('thesis', '')[:80]}")
+                   f"{shares:>12}  {a.get('target_weight_pct', 0):>5.1f}%  "
+                   f"{a.get('thesis', '')[:70]}")
     if not acts:
         click.echo("    (nothing approved — every proposed trade was rejected or "
                    "dropped by the guardrails)")
@@ -2644,12 +2646,15 @@ def _print_review(result: dict, slug: str, dry_run: bool) -> None:
     if result["market_summary"]:
         click.echo(f"\n  {result['market_summary']}")
 
-    click.echo(f"\n  {'Ticker':<14} {'Side':<6} {'Weight':>7} {'SEK':>10} {'Conf':>5}  Status")
-    click.echo(f"  {'─'*14} {'─'*6} {'─'*7} {'─'*10} {'─'*5}  {'─'*30}")
+    click.echo(f"\n  {'Ticker':<14} {'Side':<6} {'Shares':>9} {'Weight':>7} {'SEK':>10} "
+               f"{'Conf':>5}  Status")
+    click.echo(f"  {'─'*14} {'─'*6} {'─'*9} {'─'*7} {'─'*10} {'─'*5}  {'─'*30}")
     for a in result["actions"]:
         tag = " +add-on" if a["add_on"] and a["approved"] else ""
+        shares = f"{a['shares']:,.4g}" if a.get("shares") else "—"
         click.echo(
-            f"  {a['ticker']:<14} {a['side']:<6} {a['target_weight_pct']:>6.1f}% "
+            f"  {a['ticker']:<14} {a['side']:<6} {shares:>9} "
+            f"{a['target_weight_pct']:>6.1f}% "
             f"{a['sek_estimate']:>10,.0f} {a['confidence']:>5.2f}  {a['status']}{tag}"
         )
         if a["reason"]:

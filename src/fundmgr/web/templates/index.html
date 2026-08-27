@@ -710,6 +710,200 @@
 </section>
 {% endif %}
 
+{% if review %}
+<!-- ── Run a review (live sleeves) ── -->
+<section class="card mb-5" style="border-color:rgba(14,165,233,.18)">
+  <details id="rv-details">
+    <summary class="flex items-center gap-2" style="cursor:pointer;list-style:none">
+      <span class="material-symbols-outlined text-sky-400" style="font-size:17px">radar</span>
+      <span class="card-title">Review this sleeve</span>
+      <span class="text-xs text-slate-500 ml-1">
+        re-decide <b class="text-sky-400">{{ sim_label }}</b> against what it holds today — hold, trim, exit, and what to add
+      </span>
+    </summary>
+
+    {% set rcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
+    <div class="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+      <div class="col-span-2 md:col-span-1">
+        <label class="kpi-label" for="rv-config">Universe &amp; risk limits</label>
+        <select id="rv-config" class="{{ rcls }}">
+          {% for p in review.profiles %}
+          <option value="{{ p.config }}" {% if p.config == review.config %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-span-2 md:col-span-1">
+        <label class="kpi-label" for="rv-country">Search scope</label>
+        <select id="rv-country" class="{{ rcls }}">
+          <option value="">Global — every country</option>
+          {% for s in review.scopes %}
+          <option value="{{ s.code }}" {% if s.code == review.country %}selected{% endif %}>{{ s.label }} ({{ s.count }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="kpi-label" for="rv-model">Model</label>
+        <select id="rv-model" class="{{ rcls }}">
+          <option value="">Profile default</option>
+          {% for m in review.models %}
+          <option value="{{ m.provider }}|{{ m.model_id }}">{{ m.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="kpi-label" for="rv-runs">Consensus runs</label>
+        <input id="rv-runs" type="number" min="1" max="{{ review.max_runs }}" value="1" class="{{ rcls }}" />
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <label class="flex items-center gap-2 text-[11px] text-slate-400">
+          <input id="rv-macro" type="checkbox" checked class="accent-sky-500" /> Include macro context
+        </label>
+        <label class="flex items-center gap-2 text-[11px] text-slate-400">
+          <input id="rv-refresh" type="checkbox" checked class="accent-sky-500" /> Refresh candidate prices
+        </label>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-3">
+      <button id="rv-run" type="button"
+              class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white disabled:opacity-40">
+        Run review
+      </button>
+      <span id="rv-status" class="text-xs text-slate-500"></span>
+    </div>
+    <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+      No new capital is assumed: every buy is funded from cash on hand plus the sells in the same run, inside the
+      profile's turnover cap. Nothing is executed — record the fills you actually make.
+      A wider scope searches more names; a single country covers that market far more thoroughly.
+    </p>
+
+    <div id="rv-result" class="hidden mt-4"></div>
+  </details>
+</section>
+
+<script>
+(function () {
+  const btn     = document.getElementById('rv-run');
+  const status  = document.getElementById('rv-status');
+  const out     = document.getElementById('rv-result');
+  const cfgSel  = document.getElementById('rv-config');
+  const cSel    = document.getElementById('rv-country');
+  const ACTION  = {{ review.action|tojson }};
+  const JOBS    = {{ review.jobs_url|tojson }};
+  const SCOPES  = {{ review.scopes_url|tojson }};
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // Scope list belongs to the selected profile's universe — repopulate on change.
+  cfgSel.addEventListener('change', async () => {
+    const keep = cSel.value;
+    try {
+      const r = await fetch(`${SCOPES}?config=${encodeURIComponent(cfgSel.value)}`);
+      if (!r.ok) return;
+      const { scopes } = await r.json();
+      cSel.innerHTML = '<option value="">Global — every country</option>' +
+        scopes.map(s => `<option value="${esc(s.code)}">${esc(s.label)} (${s.count})</option>`).join('');
+      if ([...cSel.options].some(o => o.value === keep)) cSel.value = keep;
+    } catch (e) { /* keep the previous list */ }
+  });
+
+  function render(res) {
+    const rows = res.actions.map(a => {
+      const cls = a.side === 'buy' ? 'badge-buy' : (a.side === 'sell' ? 'badge-sell' : 'badge-hold');
+      const dim = a.approved ? '' : 'opacity:.45';
+      const tag = a.add_on && a.approved
+        ? ' <span class="badge" style="background:rgba(14,165,233,.15);color:#38bdf8">NEW</span>' : '';
+      return `<tr style="${dim}">
+          <td><span class="badge ${cls}">${esc(a.side.toUpperCase())}</span>
+              <span class="text-white font-medium ml-1">${esc(a.ticker)}</span>${tag}</td>
+          <td class="num text-slate-300">${a.sek_estimate.toLocaleString()}</td>
+          <td class="num text-slate-300">${a.target_weight_pct}%</td>
+          <td class="num text-slate-300">${a.confidence.toFixed(2)}</td>
+          <td class="text-slate-500" style="font-size:10px">${esc(a.status)}${a.reason ? ' — ' + esc(a.reason) : ''}</td>
+        </tr>
+        <tr style="${dim}"><td colspan="5" class="text-slate-500"
+            style="font-size:10px;padding-top:0;padding-bottom:6px">${esc(a.thesis)}</td></tr>`;
+    }).join('');
+
+    out.innerHTML = `
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <span class="badge badge-buy">${res.buy_count} buy</span>
+        <span class="badge badge-sell">${res.sell_count} sell</span>
+        <span class="badge badge-hold">${res.hold_count} hold</span>
+        <span class="text-xs text-slate-500">${res.add_on_count} new name(s) · ${esc(res.scope.label)}</span>
+      </div>
+      <p class="text-[11px] text-slate-600 mb-3">
+        ${esc(res.model.provider)}/${esc(res.model.model_id)} × ${res.model.n_runs} ·
+        ${res.data.candidates_to_llm} candidates of ${res.data.features_built} priced
+        (median age ${res.data.median_age_days ?? '—'}d, ${res.data.stale_count} stale) ·
+        cash ${res.cash_sek.toLocaleString()} → ${res.funded_cash_sek.toLocaleString()} SEK after these sells ·
+        ${res.elapsed_s}s
+      </p>
+      ${res.market_summary ? `<p class="text-xs text-slate-400 leading-relaxed mb-3">${esc(res.market_summary)}</p>` : ''}
+      <div class="overflow-x-auto -mx-1 mb-3">
+        <table class="data-table" style="font-size:11px">
+          <thead><tr><th>Ticker</th><th class="num">≈ SEK</th><th class="num">Weight</th>
+                     <th class="num">Conf</th><th>Guardrails</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      ${res.notes ? `<p class="text-xs text-slate-600 italic mb-3">${esc(res.notes)}</p>` : ''}
+      <button type="button" onclick="location.reload()"
+              class="px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs text-slate-300 hover:border-sky-500/60">
+        Saved to this sleeve — reload to see it in Last Decision
+      </button>`;
+    out.classList.remove('hidden');
+  }
+
+  async function poll(jobId, started) {
+    const r = await fetch(`${JOBS}/${jobId}`);
+    if (!r.ok) throw new Error('Lost track of the review job');
+    const job = await r.json();
+    if (job.status === 'running') {
+      status.textContent = `Working… ${Math.round((Date.now() - started) / 1000)}s (fetching prices, then the model)`;
+      setTimeout(() => poll(jobId, started).catch(fail), 3000);
+      return;
+    }
+    btn.disabled = false;
+    if (job.status === 'error') { fail(new Error(job.error || 'Review failed')); return; }
+    status.textContent = `Done in ${job.elapsed_s}s`;
+    render(job.result);
+  }
+
+  function fail(err) {
+    btn.disabled = false;
+    status.innerHTML = `<span class="text-red-400">✗ ${esc(err.message)}</span>`;
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    out.classList.add('hidden');
+    status.textContent = 'Starting…';
+    const [provider, modelId] = (document.getElementById('rv-model').value || '|').split('|');
+    try {
+      const r = await fetch(ACTION, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          config: cfgSel.value,
+          country: cSel.value,
+          provider: provider || null,
+          model_id: modelId || null,
+          n_runs: parseInt(document.getElementById('rv-runs').value, 10) || 1,
+          include_macro: document.getElementById('rv-macro').checked,
+          refresh_prices: document.getElementById('rv-refresh').checked,
+        }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || 'Could not start the review');
+      poll(body.job_id, Date.now()).catch(fail);
+    } catch (e) { fail(e); }
+  });
+})();
+</script>
+{% endif %}
+
 <!-- ── KPI strip ── -->
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
 
@@ -972,7 +1166,11 @@
         <p class="text-xs text-slate-600 leading-relaxed italic">{{ last_run.notes }}</p>
       {% endif %}
     {% else %}
+      {% if review %}
+      <p class="empty">No decisions yet.<br>Use <b class="text-sky-400">Review this sleeve</b> above, or run <code class="text-slate-500">fund paper-review {{ review.slug }}</code>.</p>
+      {% else %}
       <p class="empty">No decisions yet.<br>Send <code class="text-slate-500">/run</code> in Telegram or run <code class="text-slate-500">fund run</code>.</p>
+      {% endif %}
     {% endif %}
   </section>
 

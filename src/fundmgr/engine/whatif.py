@@ -103,7 +103,7 @@ def list_profiles() -> list[dict]:
     return profiles
 
 
-def _load_profile_config(config_name: str) -> AppConfig:
+def load_profile_config(config_name: str) -> AppConfig:
     """Resolve a profile config by bare filename only — no path components —
     so the web layer can pass user input through safely."""
     if Path(config_name).name != config_name or not config_name.endswith(".yaml"):
@@ -244,7 +244,7 @@ def generate_whatif(
     started = time.time()
     n_runs = max(1, min(MAX_RUNS, int(n_runs)))
 
-    cfg = _load_profile_config(config_name)
+    cfg = load_profile_config(config_name)
     profile_name = cfg.display_name
     profile_capital = cfg.capital_sek
 

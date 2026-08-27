@@ -2430,6 +2430,139 @@ def paper_status(slug: str):
     click.echo(f"  NAV (cost): {nav:>12,.0f} SEK")
 
 
+@cli.command("paper-scopes")
+@click.option("--config", "config_name", default=None,
+              help="Source profile whose universe to list (default: config_global.yaml).")
+def paper_scopes(config_name: str | None):
+    """List the geographic scopes a sleeve review can be run against.
+
+    Every universe row carries a country, so a review is either global or
+    narrowed to one nation. The counts are enabled tickers per country."""
+    from fundmgr.engine.sleeve_review import DEFAULT_REVIEW_CONFIG, list_scopes
+    from fundmgr.engine.whatif import load_profile_config
+
+    config_name = config_name or DEFAULT_REVIEW_CONFIG
+    try:
+        scopes = list_scopes(config_name)
+    except ValueError as e:
+        click.echo(f"✗ {e}", err=True)
+        sys.exit(1)
+
+    def _names(n: int) -> str:
+        return f"{n:>6} name" + ("" if n == 1 else "s")
+
+    # The global total counts the whole universe, including rows whose country
+    # column is blank or malformed — those are unreachable by country scope but
+    # very much in play globally.
+    total = len(get_enabled_tickers(load_profile_config(config_name).universe_path))
+    click.echo(f"\n─── Scopes in {config_name} ───")
+    click.echo(f"  {'(global)':<6} {'every country':<20} {_names(total)}")
+    for s in scopes:
+        click.echo(f"  {s['code']:<6} {s['label']:<20} {_names(s['count'])}")
+    click.echo("\n  Use: fund paper-review SLUG --country SE")
+
+
+@cli.command("paper-review")
+@click.argument("slug")
+@click.option("--config", "config_name", default=None,
+              help="Source profile for universe, mandate and risk limits "
+                   "(default: the sleeve's stored profile, else config_global.yaml).")
+@click.option("--country", default=None,
+              help="Scope candidates to one country (e.g. SE). Omit for global; "
+                   "'--country global' clears a stored scope.")
+@click.option("--provider", default=None, help="Override the profile's LLM provider.")
+@click.option("--model", "model_id", default=None, help="Override the profile's model id.")
+@click.option("--samples", default=1, show_default=True,
+              help="Consensus samples — the model argues with itself before settling.")
+@click.option("--max-candidates", default=None, type=int,
+              help="Cap on candidate tickers worked this run.")
+@click.option("--no-macro", is_flag=True, help="Skip the global macro context fetch.")
+@click.option("--no-refresh", is_flag=True,
+              help="Use cached prices only — no fetch. Fast and free, but candidates "
+                   "stale past risk.stale_after_days can't be bought.")
+@click.option("--dry-run", is_flag=True, help="Decide but don't write into the sleeve.")
+def paper_review(slug: str, config_name: str | None, country: str | None,
+                 provider: str | None, model_id: str | None, samples: int,
+                 max_candidates: int | None, no_macro: bool, no_refresh: bool,
+                 dry_run: bool):
+    """Re-decide a live sleeve against its CURRENT positions.
+
+    Reviews every holding (hold / trim / exit) and proposes add-ons from the
+    scoped universe, funded from within the book — there is no new capital, so
+    a buy is paid for by the sells in the same run. The result is written into
+    the sleeve's own store, so it shows up on its dashboard as the latest
+    decision and feeds the sleeve's learnings loop."""
+    from fundmgr.engine.sleeve_review import DEFAULT_MAX_CANDIDATES, review_sleeve
+
+    if (provider is None) != (model_id is None):
+        click.echo("✗ Pass --provider and --model together, or neither.", err=True)
+        sys.exit(1)
+    # An explicit "global" clears a stored country; omitting --country keeps it.
+    if country and country.strip().lower() in ("global", "all", "world"):
+        country = ""
+
+    click.echo(f"\n{'═'*56}")
+    click.echo(f"  Live Sleeve Review — {slug}")
+    click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    click.echo(f"{'═'*56}")
+    click.echo("\n[→] Building features and calling the model — this takes a few minutes…")
+
+    try:
+        result = review_sleeve(
+            slug,
+            config_name=config_name,
+            country=country,
+            provider=provider,
+            model_id=model_id,
+            n_runs=samples,
+            include_macro=not no_macro,
+            max_candidates=max_candidates or DEFAULT_MAX_CANDIDATES,
+            refresh_prices=not no_refresh,
+            dry_run=dry_run,
+        )
+    except KeyError:
+        click.echo(f"✗ No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+    except (ValueError, RuntimeError, LLMError) as e:
+        click.echo(f"✗ {e}", err=True)
+        sys.exit(1)
+
+    scope, data, model = result["scope"], result["data"], result["model"]
+    click.echo(f"\n  Scope:   {scope['label']}  ({scope['profile']}, {scope['universe']})")
+    click.echo(f"  Data:    {data['features_built']} priced of {data['candidates_worked']} worked "
+               f"→ {data['candidates_to_llm']} to the model "
+               f"(median age {data['median_age_days']}d, {data['stale_count']} stale)")
+    click.echo(f"  Model:   {model['provider']}/{model['model_id']} × {model['n_runs']}")
+    click.echo(f"  Book:    NAV {result['nav_sek']:,.0f} SEK · cash {result['cash_sek']:,.0f} "
+               f"→ {result['funded_cash_sek']:,.0f} SEK after the sells below")
+
+    if result["market_summary"]:
+        click.echo(f"\n  {result['market_summary']}")
+
+    click.echo(f"\n  {'Ticker':<14} {'Side':<6} {'Weight':>7} {'SEK':>10} {'Conf':>5}  Status")
+    click.echo(f"  {'─'*14} {'─'*6} {'─'*7} {'─'*10} {'─'*5}  {'─'*30}")
+    for a in result["actions"]:
+        tag = " +add-on" if a["add_on"] and a["approved"] else ""
+        click.echo(
+            f"  {a['ticker']:<14} {a['side']:<6} {a['target_weight_pct']:>6.1f}% "
+            f"{a['sek_estimate']:>10,.0f} {a['confidence']:>5.2f}  {a['status']}{tag}"
+        )
+        if a["reason"]:
+            click.echo(f"      {a['reason']}")
+
+    click.echo(
+        f"\n  {result['buy_count']} buy ({result['add_on_count']} new) · "
+        f"{result['sell_count']} sell · {result['hold_count']} hold · "
+        f"cash target {result['cash_target_pct']:.0f}%  [{result['elapsed_s']}s]"
+    )
+    if result["notes"]:
+        click.echo(f"\n  {result['notes']}")
+    if dry_run:
+        click.echo("\n  (dry run — nothing written to the sleeve)")
+    else:
+        click.echo(f"\n  ✓ Saved to {slug} as {result['id']} — see it on /live/{slug}")
+
+
 if __name__ == "__main__":
     cli()
 

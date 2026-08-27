@@ -266,6 +266,9 @@ def build_prompt(
     store: Store,
     run_id: str,
     macro_block: str = "",
+    extra_context: str = "",
+    task_override: str = "",
+    heading: str = "Weekly Decision Run",
 ) -> tuple[str, str, dict[str, str]]:
     """
     Returns (system_message, user_message, fields).
@@ -278,6 +281,14 @@ def build_prompt(
 
     Note: `risk_limits` is the block *as rendered* — it embeds live sector
     exposure derived from current positions, not just static config caps.
+
+    `extra_context`, `task_override` and `heading` let a caller with a narrower
+    brief than the weekly run (a live-sleeve review, say) inject its own context
+    block, replace the closing task instruction and retitle the run. Their
+    defaults reproduce the weekly run exactly, so it and the What-If Lab render
+    as before. When `extra_context` is given it is also carried in `fields`
+    under "extra_context", alongside the six optimizer input fields rather than
+    in place of any of them.
     """
     mandate = _load_mandate(cfg.mandate_path)
 
@@ -323,9 +334,11 @@ def build_prompt(
         "universe":        universe,
         "learnings":       learnings_block,
     }
+    if extra_context:
+        fields["extra_context"] = extra_context
 
     sections = [
-        f"# Weekly Decision Run\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
+        f"# {heading}\nRun ID: {run_id}\nDate: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n",
     ]
 
     if macro_block:
@@ -345,14 +358,20 @@ def build_prompt(
 
     sections.append(universe)
 
+    if extra_context:
+        sections.append("")
+        sections.append(extra_context)
+
     sections.append(
-        f"## Your Task\n"
-        f"Review the above and return a DecisionRun JSON with your buy/sell/hold decisions. "
-        f"When you hold a position marked PAST TARGET, set take_profit_pct to the new level "
-        f"that reflects your current view — holding a winner without re-targeting leaves the "
-        f"old target standing, which keeps signalling a trim you did not recommend. "
-        f"Trim or sell instead if the target was right and the upside is spent. "
-        f"Run ID must be: {run_id}"
+        task_override or (
+            f"## Your Task\n"
+            f"Review the above and return a DecisionRun JSON with your buy/sell/hold decisions. "
+            f"When you hold a position marked PAST TARGET, set take_profit_pct to the new level "
+            f"that reflects your current view — holding a winner without re-targeting leaves the "
+            f"old target standing, which keeps signalling a trim you did not recommend. "
+            f"Trim or sell instead if the target was right and the upside is spent. "
+            f"Run ID must be: {run_id}"
+        )
     )
 
     user = "\n".join(sections)

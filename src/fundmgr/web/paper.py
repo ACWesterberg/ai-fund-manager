@@ -17,15 +17,19 @@ the per-slug dashboards (index / transactions / learnings / prompt) are shared.
 from __future__ import annotations
 
 import json
+import threading
 import time
+import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from fundmgr import paper, watchplan
+from fundmgr.engine import sleeve_review
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
 # Largest single upload accepted for photo import. Phone photos of a holdings
@@ -47,6 +51,46 @@ def _logo_domain(website: str | None) -> str | None:
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _PRICE_TTL = 300  # seconds
 _price_cache: dict[str, tuple[float, dict[str, float]]] = {}
+
+# Single-slot review job registry, same shape as the What-If Lab's: a review is
+# an LLM-cost-bearing run of several minutes, so it goes to a daemon thread and
+# the page polls. One at a time across all sleeves — the Pi doesn't need a queue.
+_review_lock = threading.Lock()
+_review_job: dict | None = None  # {id, slug, status, params, result, error, started}
+
+
+class ReviewRequest(BaseModel):
+    """Scope for one sleeve review. Empty country = global."""
+    config: str | None = None
+    country: str = ""
+    provider: str | None = None
+    model_id: str | None = None
+    n_runs: int = Field(default=1, ge=1, le=sleeve_review.MAX_RUNS)
+    include_macro: bool = True
+    refresh_prices: bool = True
+
+
+def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
+    global _review_job
+    try:
+        result = sleeve_review.review_sleeve(
+            slug,
+            config_name=req.config,
+            country=req.country,
+            provider=req.provider,
+            model_id=req.model_id,
+            n_runs=req.n_runs,
+            include_macro=req.include_macro,
+            refresh_prices=req.refresh_prices,
+        )
+        with _review_lock:
+            if _review_job and _review_job["id"] == job_id:
+                _review_job.update(status="done", result=result)
+    except Exception as e:
+        with _review_lock:
+            if _review_job and _review_job["id"] == job_id:
+                _review_job.update(status="error", error=str(e))
+
 
 jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
 
@@ -863,6 +907,70 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         if not bits:
             return _back(f"Cleared the add plan for {tkr}.", 1)
         return _back(f"{tkr}: saved {', '.join(bits)}.", 1)
+    # ── Sleeve review (live sleeves only) ───────────────────────────────────
+
+    @router.post("/{slug}/review")
+    def start_review(slug: str, req: ReviewRequest):
+        """Kick off a background re-decision of this sleeve."""
+        global _review_job
+        if not real:
+            raise HTTPException(status_code=404, detail="Reviews run on live sleeves only")
+        try:
+            _meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"No sleeve {slug!r}") from None
+
+        config_name = req.config or sleeve_review.review_defaults(store)["config"]
+        if config_name not in {pr["config"] for pr in sleeve_review.list_profiles()}:
+            raise HTTPException(status_code=400, detail=f"Unknown profile: {config_name}")
+        if req.country and req.country.upper() not in {
+            sc["code"] for sc in sleeve_review.list_scopes(config_name)
+        }:
+            raise HTTPException(status_code=400, detail=f"Unknown scope: {req.country}")
+        if req.provider or req.model_id:
+            valid = {(m["provider"], m["model_id"]) for m in sleeve_review.MODEL_OPTIONS}
+            if (req.provider, req.model_id) not in valid:
+                raise HTTPException(status_code=400, detail="Unknown provider/model combination")
+
+        with _review_lock:
+            if _review_job and _review_job["status"] == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"A review of {_review_job['slug']!r} is already running")
+            job_id = uuid.uuid4().hex[:12]
+            _review_job = {
+                "id": job_id, "slug": slug, "status": "running",
+                "params": req.model_dump(), "result": None, "error": None,
+                "started": time.time(),
+            }
+        threading.Thread(target=_run_review, args=(job_id, slug, req), daemon=True).start()
+        return {"job_id": job_id}
+
+    @router.get("/{slug}/review/scopes")
+    def review_scopes(slug: str, config: str = ""):
+        """Countries selectable for one source profile — the scope dropdown
+        repopulates from here when the profile changes."""
+        if not real:
+            raise HTTPException(status_code=404, detail="Reviews run on live sleeves only")
+        config_name = config or sleeve_review.DEFAULT_REVIEW_CONFIG
+        if config_name not in {pr["config"] for pr in sleeve_review.list_profiles()}:
+            raise HTTPException(status_code=400, detail=f"Unknown profile: {config_name}")
+        return {"scopes": list(sleeve_review.list_scopes(config_name))}
+
+    @router.get("/{slug}/review/jobs/{job_id}")
+    def review_job_status(slug: str, job_id: str):
+        with _review_lock:
+            if not _review_job or _review_job["id"] != job_id:
+                raise HTTPException(status_code=404, detail="Unknown job")
+            return {
+                "id": _review_job["id"],
+                "slug": _review_job["slug"],
+                "status": _review_job["status"],
+                "params": _review_job["params"],
+                "elapsed_s": round(time.time() - _review_job["started"], 1),
+                "result": _review_job["result"],
+                "error": _review_job["error"],
+            }
 
     # ── Per-book dashboard ──────────────────────────────────────────────────
 
@@ -950,6 +1058,26 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             except Exception:
                 pass
 
+        review = None
+        if real:
+            defaults = sleeve_review.review_defaults(store)
+            try:
+                scopes = sleeve_review.list_scopes(defaults["config"])
+            except ValueError:
+                scopes = ()
+            review = {
+                "slug": slug,
+                "action": f"{prefix}/{slug}/review",
+                "jobs_url": f"{prefix}/{slug}/review/jobs",
+                "scopes_url": f"{prefix}/{slug}/review/scopes",
+                "profiles": sleeve_review.list_profiles(),
+                "scopes": list(scopes),
+                "models": sleeve_review.MODEL_OPTIONS,
+                "max_runs": sleeve_review.MAX_RUNS,
+                "config": defaults["config"],
+                "country": defaults["country"],
+            }
+
         return _render("index.html", {
             "request": request,
             "positions": positions_data,
@@ -966,6 +1094,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             # Live sleeves only — paper books keep the plain simulation framing.
             "watch": _watch_status(store, positions_data) if real else None,
             "adds": _add_status(store) if real else None,
+            "review": review,
             "flash": flash,
             **_base_ctx(meta),
         })

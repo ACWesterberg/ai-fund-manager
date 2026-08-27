@@ -131,7 +131,7 @@ def test_real_repo_profiles_pair_each_mandate_with_its_own_universe():
 @pytest.mark.parametrize("bad", ["../secrets.yaml", "/etc/passwd", "config.txt", "sub/config.yaml"])
 def test_profile_path_traversal_rejected(profile, bad):
     with pytest.raises(ValueError):
-        whatif._load_profile_config(bad)
+        whatif.load_profile_config(bad)
 
 
 # ── Generation ────────────────────────────────────────────────────────────────
@@ -388,7 +388,7 @@ def test_undersized_amount_is_flagged_but_still_runs(profile, monkeypatch):
 
 
 def test_deployment_floors_derive_from_risk_config(profile):
-    cfg = whatif._load_profile_config("config_test.yaml")
+    cfg = whatif.load_profile_config("config_test.yaml")
     hard, comfortable = whatif.deployment_floors(cfg)
     assert hard == 1000              # min_trade_sek
     assert comfortable == 5000       # 1000 / 0.20

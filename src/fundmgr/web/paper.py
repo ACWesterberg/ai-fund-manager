@@ -68,6 +68,9 @@ class ReviewRequest(BaseModel):
     n_runs: int = Field(default=1, ge=1, le=sleeve_review.MAX_RUNS)
     include_macro: bool = True
     refresh_prices: bool = True
+    # Per-sleeve risk caps. Empty = keep whatever the sleeve already stores;
+    # the engine cleans and validates before any of it reaches a guardrail.
+    risk: dict = Field(default_factory=dict)
 
 
 def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
@@ -82,6 +85,7 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
             n_runs=req.n_runs,
             include_macro=req.include_macro,
             refresh_prices=req.refresh_prices,
+            risk=req.risk or None,
         )
         with _review_lock:
             if _review_job and _review_job["id"] == job_id:
@@ -309,6 +313,15 @@ def _kill_verdicts(store, tickers: list[str]) -> dict[str, dict]:
             "coverage": data.get("coverage") or {},
         }
     return out
+
+
+def _profile_risk(config_name: str) -> dict:
+    """The source profile's overridable caps, for the review form's placeholders."""
+    try:
+        cfg = sleeve_review.load_profile_config(config_name)
+    except ValueError:
+        return {}
+    return {k: getattr(cfg.risk, k) for k in sleeve_review.OVERRIDABLE_RISK}
 
 
 def _not_found() -> HTMLResponse:
@@ -1076,6 +1089,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "max_runs": sleeve_review.MAX_RUNS,
                 "config": defaults["config"],
                 "country": defaults["country"],
+                "risk": defaults["risk"],
+                # The profile's own caps, so the form can show what an empty
+                # override field will actually run under.
+                "profile_risk": _profile_risk(defaults["config"]),
             }
 
         return _render("index.html", {

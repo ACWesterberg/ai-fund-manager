@@ -627,6 +627,104 @@ def test_review_survives_a_failing_news_fetch(env, sleeve, monkeypatch):
     assert sleeve_review.review_sleeve(sleeve, include_macro=False)["hold_count"] == 1
 
 
+# ── Risk overrides ────────────────────────────────────────────────────────────
+
+def test_turnover_override_lets_a_paired_swap_through(env, sleeve, monkeypatch):
+    """A swap costs turnover twice. Under a rebalance-sized cap the sell is
+    dropped and the funding pass then drops the buy, so the review returns
+    nothing — which is the whole reason a sleeve carries its own cap."""
+    _meta, store = paper.open_portfolio(sleeve)
+    store.set_cash(0.0)
+    # NAV is 10,000 here, so this pair is 8,000 of turnover: comfortably over a
+    # 25% rebalance cap, comfortably under a 100% one.
+    actions = [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=50,
+               sek_estimate=5_000, confidence=0.9, thesis="trim hard"),
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=30,
+               sek_estimate=3_000, confidence=0.8, thesis="replacement"),
+    ]
+
+    _stub_llm(monkeypatch, actions)
+    tight = sleeve_review.review_sleeve(sleeve, include_macro=False,
+                                        risk={"max_turnover_pct": 25})
+    assert tight["buy_count"] == 0 and tight["sell_count"] == 0
+    assert tight["turnover"]["dropped"] >= 1
+
+    _stub_llm(monkeypatch, actions)
+    loose = sleeve_review.review_sleeve(sleeve, include_macro=False,
+                                        risk={"max_turnover_pct": 100})
+    assert loose["sell_count"] == 1
+    assert loose["buy_count"] == 1
+    assert loose["turnover"]["dropped"] == 0
+
+
+def test_risk_overrides_are_remembered_and_reported(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False,
+                                         risk={"max_turnover_pct": 60})
+
+    assert result["risk"]["max_turnover_pct"] == 60
+    assert result["risk"]["applied"]["max_turnover_pct"] == {"from": 100.0, "to": 60.0}
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.stored_risk(store) == {"max_turnover_pct": 60.0}
+
+    # The next review inherits it without being told again.
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")])
+    again = sleeve_review.review_sleeve(sleeve, include_macro=False)
+    assert again["risk"]["max_turnover_pct"] == 60
+
+
+def test_unusable_risk_values_fall_back_to_the_profile(env, sleeve, monkeypatch):
+    """This is the boundary between a form field and a guardrail. A typo must
+    fall back, never reach apply_guardrails as a string or a zero that would
+    silently forbid every trade."""
+    assert sleeve_review.clean_risk({"max_turnover_pct": "abc"}) == {}
+    assert sleeve_review.clean_risk({"max_turnover_pct": 0}) == {}
+    assert sleeve_review.clean_risk({"max_turnover_pct": -5}) == {}
+    assert sleeve_review.clean_risk({"max_turnover_pct": ""}) == {}
+    assert sleeve_review.clean_risk({"nonsense": 5}) == {}
+    assert sleeve_review.clean_risk({"max_positions": "7"}) == {"max_positions": 7}
+
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False,
+                                         risk={"max_turnover_pct": "nope"})
+    assert result["risk"]["max_turnover_pct"] == 100.0     # the profile's
+    assert result["risk"]["applied"] == {}
+
+
+def test_turnover_reports_what_the_cap_cost(env, sleeve, monkeypatch):
+    """An empty review must explain itself: the cap, what was proposed against
+    it, and how many trades it took."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0,
+               sek_estimate=9_000, confidence=0.9, thesis="exit"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False,
+                                         risk={"max_turnover_pct": 1})
+
+    turnover = result["turnover"]
+    assert turnover["cap_pct"] == 1
+    assert turnover["proposed_sek"] == 9_000
+    assert turnover["kept_sek"] == 0
+    assert turnover["dropped"] == 1
+
+
+def test_the_prompt_states_the_cap_actually_in_force(env, sleeve, monkeypatch):
+    """The model sizes to the cap it is told about, so an override the prompt
+    doesn't mention would have it lead with trades that get dropped."""
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False,
+                                risk={"max_turnover_pct": 60})
+
+    assert "capped at 60% of NAV" in capture["user"]
+
+
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 def test_review_is_saved_as_the_sleeves_latest_decision(env, sleeve, monkeypatch):
@@ -750,6 +848,34 @@ def test_review_job_runs_and_reports_its_result(client, sleeve, monkeypatch):
     assert job["status"] == "done", job.get("error")
     assert job["result"]["add_on_count"] == 1
     assert job["result"]["scope"]["country"] == "SE"
+
+
+def test_review_form_offers_risk_limits_with_profile_placeholders(client, sleeve):
+    r = client.get(f"/live/{sleeve}")
+    assert r.status_code == 200
+    assert "Max turnover %" in r.text
+    assert 'id="rv-turnover"' in r.text
+    # The profile's own cap is the hint, so a blank field is never a mystery.
+    assert 'placeholder="100"' in r.text
+
+
+def test_web_review_accepts_risk_overrides(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+               sek_estimate=0, confidence=0.6, thesis="hold"),
+    ])
+    start = client.post(f"/live/{sleeve}/review",
+                        json={"config": "config_test.yaml", "include_macro": False,
+                              "risk": {"max_turnover_pct": 45}})
+    assert start.status_code == 200
+    job_id = start.json()["job_id"]
+
+    for _ in range(200):
+        job = client.get(f"/live/{sleeve}/review/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+    assert job["status"] == "done", job.get("error")
+    assert job["result"]["risk"]["max_turnover_pct"] == 45
 
 
 def test_unknown_review_job_is_404(client, sleeve):

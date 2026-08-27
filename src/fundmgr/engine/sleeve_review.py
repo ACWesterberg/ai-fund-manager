@@ -76,6 +76,19 @@ DEFAULT_MAX_CANDIDATES = 750
 
 META_CONFIG = "paper_review_config"
 META_COUNTRY = "paper_review_country"
+META_RISK = "paper_review_risk"
+
+# Risk caps a sleeve may carry its own value for. Everything else — sector caps,
+# minimum trade size, staleness — stays the source profile's, because those are
+# properties of the market and the broker rather than of this book's mandate.
+#
+# max_turnover_pct is the one that actually bites. A weekly rebalance drifts a
+# book; a sleeve review swaps positions, and a swap costs turnover twice — an
+# 18% exit plus an 18% replacement is 36% against a profile cap of 25%. Left
+# inherited, the cap truncates exactly the paired trades a review exists to
+# produce, and the funding pass then drops the orphaned buy, so the review
+# returns nothing at all.
+OVERRIDABLE_RISK = ("max_turnover_pct", "max_position_pct", "max_positions", "min_cash_pct")
 
 COUNTRY_NAMES = {
     "AT": "Austria", "BE": "Belgium", "CA": "Canada", "CH": "Switzerland",
@@ -115,11 +128,68 @@ def list_scopes(config_name: str = DEFAULT_REVIEW_CONFIG) -> tuple[dict, ...]:
 
 
 def review_defaults(store: Store) -> dict:
-    """This sleeve's stored review scope, falling back to the global profile."""
+    """This sleeve's stored review scope and risk overrides, else the global
+    profile's."""
     config_name = store.get_meta(META_CONFIG) or DEFAULT_REVIEW_CONFIG
     if config_name not in {p["config"] for p in list_profiles()}:
         config_name = DEFAULT_REVIEW_CONFIG
-    return {"config": config_name, "country": store.get_meta(META_COUNTRY) or ""}
+    return {
+        "config": config_name,
+        "country": store.get_meta(META_COUNTRY) or "",
+        "risk": stored_risk(store),
+    }
+
+
+def clean_risk(raw: dict | None) -> dict:
+    """Keep only known, numeric, positive risk caps.
+
+    This is the boundary between user input and a guardrail, so anything
+    unrecognised or unparseable is dropped rather than carried forward: a
+    typo'd cap must fall back to the profile's, never reach apply_guardrails
+    as a string or a zero that silently forbids every trade.
+    """
+    out: dict = {}
+    for key in OVERRIDABLE_RISK:
+        value = (raw or {}).get(key)
+        if value is None or value == "":
+            continue
+        try:
+            parsed = int(value) if key == "max_positions" else float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            out[key] = parsed
+    return out
+
+
+def stored_risk(store: Store) -> dict:
+    """This sleeve's own risk caps, as far as it sets any."""
+    try:
+        return clean_risk(json.loads(store.get_meta(META_RISK) or "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+def apply_risk_overrides(cfg: AppConfig, overrides: dict) -> tuple[AppConfig, dict]:
+    """cfg with this sleeve's own caps in place of the profile's.
+
+    Returns (cfg, applied) where `applied` names only the caps that actually
+    changed something, so a review can report what it ran under rather than
+    leaving the operator to infer it from the profile.
+    """
+    clean = clean_risk(overrides)
+    if not clean:
+        return cfg, {}
+    cfg = copy.copy(cfg)
+    cfg.risk = copy.copy(cfg.risk)
+    applied = {}
+    for key, value in clean.items():
+        before = getattr(cfg.risk, key)
+        value = int(value) if key == "max_positions" else float(value)
+        if value != before:
+            applied[key] = {"from": before, "to": value}
+        setattr(cfg.risk, key, value)
+    return cfg, applied
 
 
 # ── Candidate selection ───────────────────────────────────────────────────────
@@ -614,6 +684,7 @@ def review_sleeve(
     include_macro: bool = True,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     refresh_prices: bool = True,
+    risk: dict | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Re-decide one sleeve against its current book and a scoped universe.
@@ -622,6 +693,9 @@ def review_sleeve(
     dashboard's decision panel renders it) and seeds outcomes so the sleeve's
     learnings loop starts scoring these calls. Blocking — the web layer runs it
     in a background thread. `dry_run` returns the same result without writing.
+
+    `risk` overrides the profile's caps for this run (see OVERRIDABLE_RISK) and,
+    like the scope, is remembered on the sleeve for the next one.
     """
     from fundmgr import paper
 
@@ -632,8 +706,10 @@ def review_sleeve(
     defaults = review_defaults(store)
     config_name = config_name or defaults["config"]
     country = (country if country is not None else defaults["country"]) or None
+    risk = defaults["risk"] if risk is None else clean_risk(risk)
 
     cfg = load_profile_config(config_name)
+    cfg, risk_applied = apply_risk_overrides(cfg, risk)
     cfg = copy.copy(cfg)
     cfg.llm = copy.copy(cfg.llm)
     if provider and model_id:
@@ -770,6 +846,19 @@ def review_sleeve(
 
     buys = [r for r in actions if r["side"] == "buy" and r["approved"]]
     sells = [r for r in actions if r["side"] == "sell" and r["approved"]]
+    # A swap costs turnover twice, so the cap truncates paired trades before it
+    # touches anything else. Report what it cost rather than leaving an empty
+    # review to be explained by reading per-action rejection strings.
+    wanted = sum(a.sek_estimate for a in decision.actions if a.side != "hold")
+    kept = sum(r["sek_estimate"] for r in buys + sells)
+    turnover = {
+        "cap_pct": cfg.risk.max_turnover_pct,
+        "cap_sek": round(snap.nav_sek * cfg.risk.max_turnover_pct / 100),
+        "proposed_sek": round(wanted),
+        "kept_sek": round(kept),
+        "dropped": sum(1 for r in actions
+                       if r["status"] == "DROPPED" and "turnover cap" in r["reason"]),
+    }
     ages = sorted(f.data_age_trading_days for f in screened.values())
 
     result = {
@@ -801,6 +890,16 @@ def review_sleeve(
         "nav_sek": round(snap.nav_sek),
         "cash_sek": round(snap.cash_sek),
         "funded_cash_sek": round(funded.cash_sek),
+        "risk": {
+            "profile": config_name,
+            "overrides": risk,
+            "applied": risk_applied,
+            "max_turnover_pct": cfg.risk.max_turnover_pct,
+            "max_position_pct": cfg.risk.max_position_pct,
+            "max_positions": cfg.risk.max_positions,
+            "min_cash_pct": cfg.risk.min_cash_pct,
+        },
+        "turnover": turnover,
         "buy_count": len(buys),
         "sell_count": len(sells),
         "add_on_count": sum(1 for r in buys if r["add_on"]),
@@ -836,9 +935,11 @@ def review_sleeve(
                     for a in guardrails.approved_actions
                     if a.ticker in features and features[a.ticker].last_price},
         )
-        # Remember the scope so the next review — and the form — default to it.
+        # Remember the scope and caps so the next review — and the form —
+        # default to them.
         store.set_meta(META_CONFIG, config_name)
         store.set_meta(META_COUNTRY, (country or "").upper())
+        store.set_meta(META_RISK, json.dumps(risk))
 
     return result
 

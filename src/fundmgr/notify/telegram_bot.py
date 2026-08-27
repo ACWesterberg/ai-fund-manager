@@ -148,6 +148,9 @@ def _env_timeout(name: str, default: int) -> int:
 RUN_TIMEOUT      = _env_timeout("FUND_RUN_TIMEOUT", 2700)        # /run  — 45 min
 RUN_FULL_TIMEOUT = _env_timeout("FUND_RUN_FULL_TIMEOUT", 5400)   # /run_full — 90 min
 REVIEW_TIMEOUT   = _env_timeout("FUND_REVIEW_TIMEOUT", 900)      # /review scan — 15 min
+# /prun runs the same pipeline as a weekly fund run — features, then an LLM
+# consensus over the sleeve — so it needs the same order of time, not /review's.
+PRUN_TIMEOUT     = _env_timeout("FUND_PRUN_TIMEOUT", 2700)       # /prun — 45 min
 
 
 def _tail(text: str, lines: int = 12) -> str:
@@ -364,6 +367,11 @@ def _active_book_line(chat_id: int) -> str:
     return f"📋 Active book: {_book_name(slug) or slug} ({slug})"
 
 
+def _book_listing() -> str:
+    """Slug — name for every paper/live book, for the 'which book?' replies."""
+    return "\n".join(f"  {s} — {n}" for s, n in _all_books().items()) or "  (none yet — /plist)"
+
+
 async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/ptarget [SLUG] — route /pfill + Montrose screenshots into a paper book.
 
@@ -373,9 +381,6 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     chat_id = update.effective_chat.id
     books = _all_books()
 
-    def _listing() -> str:
-        return "\n".join(f"  {s} — {n}" for s, n in books.items()) or "  (none yet — /plist)"
-
     if not args:
         cur = _active_book.get(chat_id)
         if cur:
@@ -384,7 +389,7 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
                 f"/pfill and screenshots record here. /ptarget off to switch back.")
         else:
             await update.message.reply_text(
-                "No active book set. Aim at a sleeve with /ptarget <slug>:\n" + _listing())
+                "No active book set. Aim at a sleeve with /ptarget <slug>:\n" + _book_listing())
         return
 
     slug = args[0].strip().lower()
@@ -394,7 +399,7 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
         return
     if books and slug not in books:
         await update.message.reply_text(
-            f"No book '{slug}'. Available:\n{_listing()}")
+            f"No book '{slug}'. Available:\n{_book_listing()}")
         return
     _active_book[chat_id] = slug
     name = books.get(slug) or _book_name(slug) or slug
@@ -403,6 +408,35 @@ async def cmd_ptarget(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
         f"/pfill and Montrose screenshots now record here.\n"
         f"/ptarget off to switch back to the main fund.",
         parse_mode="HTML",
+    )
+
+
+async def cmd_prun(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/prun [SLUG] — re-decide a live sleeve against what it holds now.
+
+    The sleeve equivalent of /run: hold, trim, exit, add to a name, or bring in
+    something new, funded from within the book. Nothing is executed — record the
+    fills you actually make with /pfill.
+    """
+    args = context.args or []
+    slug = args[0] if args else _active_book.get(update.effective_chat.id)
+    if not slug:
+        await update.message.reply_text(
+            "No active book — /prun <slug>, or set one with /ptarget <slug> "
+            f"first.\n{_book_listing()}")
+        return
+
+    name = _book_name(slug) or slug
+    await update.message.reply_text(
+        f"⏳ Reviewing <b>{name}</b> against its current positions…\n"
+        "Prices, then the LLM — usually 5-15 min on the Pi. I'll message you "
+        "when it's done; the bot stays usable meanwhile.",
+        parse_mode="HTML",
+    )
+    await _run_cli_bg(
+        update, context, "paper-review", slug,
+        timeout=PRUN_TIMEOUT,
+        done_msg=f"✅ Review complete — see it on /live/{slug}.",
     )
 
 
@@ -599,6 +633,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"
         "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
+        "/prun [SLUG] — re-decide a sleeve against what it holds now\n"
         "/pfill TICKER SHARES PRICE FEE [side] — fill into the active book\n"
         "/pretag OLD [NEW] — fix a mis-tagged holding (e.g. ENR → ENR.DE)\n"
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
@@ -941,6 +976,7 @@ def main() -> None:
     app.add_handler(CommandHandler("setcash",  cmd_setcash))
     app.add_handler(CommandHandler("plist",    cmd_plist))
     app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
+    app.add_handler(CommandHandler("prun",     cmd_prun))
     app.add_handler(CommandHandler("pfill",    cmd_pfill))
     app.add_handler(CommandHandler("pretag",   cmd_pretag))
     app.add_handler(CommandHandler("psetcost", cmd_psetcost))

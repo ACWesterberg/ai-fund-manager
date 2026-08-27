@@ -2463,7 +2463,10 @@ def paper_scopes(config_name: str | None):
 
 
 @cli.command("paper-review")
-@click.argument("slug")
+@click.argument("slug", required=False)
+@click.option("--all", "all_sleeves", is_flag=True,
+              help="Review every live sleeve in turn. One LLM call per sleeve — "
+                   "this is the form the cron entry uses.")
 @click.option("--config", "config_name", default=None,
               help="Source profile for universe, mandate and risk limits "
                    "(default: the sleeve's stored profile, else config_global.yaml).")
@@ -2480,11 +2483,22 @@ def paper_scopes(config_name: str | None):
 @click.option("--no-refresh", is_flag=True,
               help="Use cached prices only — no fetch. Fast and free, but candidates "
                    "stale past risk.stale_after_days can't be bought.")
+@click.option("--turnover", type=float, default=None,
+              help="Max % of NAV traded this run, overriding the profile. A swap costs "
+                   "turnover twice, so the profile's rebalance cap often truncates a "
+                   "review's paired trades. Remembered for next time.")
+@click.option("--max-position", type=float, default=None,
+              help="Max single-name weight %, overriding the profile.")
+@click.option("--max-positions", type=int, default=None,
+              help="Max open positions, overriding the profile.")
+@click.option("--min-cash", type=float, default=None,
+              help="Minimum cash %, overriding the profile.")
 @click.option("--dry-run", is_flag=True, help="Decide but don't write into the sleeve.")
-def paper_review(slug: str, config_name: str | None, country: str | None,
-                 provider: str | None, model_id: str | None, samples: int,
-                 max_candidates: int | None, no_macro: bool, no_refresh: bool,
-                 dry_run: bool):
+def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
+                 country: str | None, provider: str | None, model_id: str | None,
+                 samples: int, max_candidates: int | None, no_macro: bool,
+                 no_refresh: bool, turnover: float | None, max_position: float | None,
+                 max_positions: int | None, min_cash: float | None, dry_run: bool):
     """Re-decide a live sleeve against its CURRENT positions.
 
     Reviews every holding (hold / trim / exit) and proposes add-ons from the
@@ -2497,37 +2511,75 @@ def paper_review(slug: str, config_name: str | None, country: str | None,
     if (provider is None) != (model_id is None):
         click.echo("✗ Pass --provider and --model together, or neither.", err=True)
         sys.exit(1)
+    if bool(slug) == bool(all_sleeves):
+        click.echo("✗ Give a SLUG or --all, not both or neither.", err=True)
+        sys.exit(1)
     # An explicit "global" clears a stored country; omitting --country keeps it.
     if country and country.strip().lower() in ("global", "all", "world"):
         country = ""
 
-    click.echo(f"\n{'═'*56}")
-    click.echo(f"  Live Sleeve Review — {slug}")
-    click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
-    click.echo(f"{'═'*56}")
-    click.echo("\n[→] Building features and calling the model — this takes a few minutes…")
+    risk = {k: v for k, v in (("max_turnover_pct", turnover),
+                              ("max_position_pct", max_position),
+                              ("max_positions", max_positions),
+                              ("min_cash_pct", min_cash)) if v is not None}
 
-    try:
-        result = review_sleeve(
-            slug,
-            config_name=config_name,
-            country=country,
-            provider=provider,
-            model_id=model_id,
-            n_runs=samples,
-            include_macro=not no_macro,
-            max_candidates=max_candidates or DEFAULT_MAX_CANDIDATES,
-            refresh_prices=not no_refresh,
-            dry_run=dry_run,
-        )
-    except KeyError:
-        click.echo(f"✗ No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
-        sys.exit(1)
-    except (ValueError, RuntimeError, LLMError) as e:
-        click.echo(f"✗ {e}", err=True)
+    if all_sleeves:
+        from fundmgr.paper import list_portfolios
+        slugs = [m["slug"] for m in list_portfolios(kind="live")]
+        if not slugs:
+            click.echo("No live sleeves to review. See 'fund paper-list'.")
+            return
+    else:
+        slugs = [slug]
+
+    failures = 0
+    for one in slugs:
+        click.echo(f"\n{'═'*56}")
+        click.echo(f"  Live Sleeve Review — {one}")
+        click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+        click.echo(f"{'═'*56}")
+        click.echo("\n[→] Building features and calling the model — this takes a few minutes…")
+        try:
+            result = review_sleeve(
+                one,
+                config_name=config_name,
+                country=country,
+                provider=provider,
+                model_id=model_id,
+                n_runs=samples,
+                include_macro=not no_macro,
+                max_candidates=max_candidates or DEFAULT_MAX_CANDIDATES,
+                refresh_prices=not no_refresh,
+                risk=risk or None,
+                dry_run=dry_run,
+            )
+        except KeyError:
+            click.echo(f"✗ No paper portfolio '{one}'. See 'fund paper-list'.", err=True)
+            failures += 1
+            # One bad slug must not abandon the rest of a scheduled batch.
+            if not all_sleeves:
+                sys.exit(1)
+            continue
+        except (ValueError, RuntimeError, LLMError) as e:
+            click.echo(f"✗ {one}: {e}", err=True)
+            failures += 1
+            if not all_sleeves:
+                sys.exit(1)
+            continue
+        _print_review(result, one, dry_run)
+
+    if all_sleeves:
+        click.echo(f"\n{len(slugs) - failures}/{len(slugs)} sleeve(s) reviewed."
+                   + (f" {failures} failed." if failures else ""))
+    if failures and all_sleeves and failures == len(slugs):
         sys.exit(1)
 
+
+def _print_review(result: dict, slug: str, dry_run: bool) -> None:
+    """Render one review result for the terminal."""
     scope, data, model = result["scope"], result["data"], result["model"]
+    risk, turnover = result["risk"], result["turnover"]
+
     click.echo(f"\n  Scope:   {scope['label']}  ({scope['profile']}, {scope['universe']})")
     click.echo(f"  Data:    {data['features_built']} priced of {data['candidates_worked']} worked "
                f"→ {data['candidates_to_llm']} to the model "
@@ -2535,6 +2587,14 @@ def paper_review(slug: str, config_name: str | None, country: str | None,
     click.echo(f"  Model:   {model['provider']}/{model['model_id']} × {model['n_runs']}")
     click.echo(f"  Book:    NAV {result['nav_sek']:,.0f} SEK · cash {result['cash_sek']:,.0f} "
                f"→ {result['funded_cash_sek']:,.0f} SEK after the sells below")
+
+    limits = (f"turnover {risk['max_turnover_pct']:.0f}% · max position "
+              f"{risk['max_position_pct']:.0f}% · max {risk['max_positions']} positions · "
+              f"min cash {risk['min_cash_pct']:.0f}%")
+    if risk["applied"]:
+        changed = ", ".join(f"{k} {v['from']:g}→{v['to']:g}" for k, v in risk["applied"].items())
+        limits += f"  (this sleeve's own: {changed})"
+    click.echo(f"  Limits:  {limits}")
 
     if result["market_summary"]:
         click.echo(f"\n  {result['market_summary']}")
@@ -2555,12 +2615,22 @@ def paper_review(slug: str, config_name: str | None, country: str | None,
         f"{result['sell_count']} sell · {result['hold_count']} hold · "
         f"cash target {result['cash_target_pct']:.0f}%  [{result['elapsed_s']}s]"
     )
+    # A swap costs turnover twice, so an empty-looking review is usually the cap
+    # rather than the model having no view. Say which.
+    if turnover["dropped"]:
+        click.echo(
+            f"\n  ⚠ {turnover['dropped']} trade(s) dropped by the turnover cap: the model "
+            f"proposed {turnover['proposed_sek']:,.0f} SEK against a cap of "
+            f"{turnover['cap_sek']:,.0f} SEK ({turnover['cap_pct']:.0f}% of NAV).\n"
+            f"    Raise it for this sleeve with: fund paper-review {slug} --turnover 50"
+        )
     if result["notes"]:
         click.echo(f"\n  {result['notes']}")
     if dry_run:
         click.echo("\n  (dry run — nothing written to the sleeve)")
     else:
         click.echo(f"\n  ✓ Saved to {slug} as {result['id']} — see it on /live/{slug}")
+
 
 
 if __name__ == "__main__":

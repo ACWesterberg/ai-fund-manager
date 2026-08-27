@@ -764,6 +764,43 @@
       </div>
     </div>
 
+    <details class="mt-3">
+      <summary class="text-[11px] text-slate-500 cursor-pointer hover:text-slate-400">
+        Risk limits for this sleeve — leave blank to use the profile's
+      </summary>
+      <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div>
+          <label class="kpi-label" for="rv-turnover">Max turnover %</label>
+          <input id="rv-turnover" type="number" min="1" max="100" step="1"
+                 value="{{ review.risk.max_turnover_pct or '' }}"
+                 placeholder="{{ review.profile_risk.max_turnover_pct }}" class="{{ rcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="rv-maxpos">Max position %</label>
+          <input id="rv-maxpos" type="number" min="1" max="100" step="1"
+                 value="{{ review.risk.max_position_pct or '' }}"
+                 placeholder="{{ review.profile_risk.max_position_pct }}" class="{{ rcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="rv-npos">Max positions</label>
+          <input id="rv-npos" type="number" min="1" max="60" step="1"
+                 value="{{ review.risk.max_positions or '' }}"
+                 placeholder="{{ review.profile_risk.max_positions }}" class="{{ rcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="rv-mincash">Min cash %</label>
+          <input id="rv-mincash" type="number" min="0" max="100" step="1"
+                 value="{{ review.risk.min_cash_pct or '' }}"
+                 placeholder="{{ review.profile_risk.min_cash_pct }}" class="{{ rcls }}" />
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+        A swap costs turnover twice — exiting an 18% position and replacing it is 36% — so the
+        profile's rebalance cap often truncates exactly the paired trades a review produces.
+        Raise the turnover cap here if reviews come back emptier than the reasoning suggests.
+      </p>
+    </details>
+
     <div class="mt-4 flex flex-wrap items-center gap-3">
       <button id="rv-run" type="button"
               class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white disabled:opacity-40">
@@ -835,6 +872,8 @@
       </div>
       <p class="text-[11px] text-slate-600 mb-3">
         ${esc(res.model.provider)}/${esc(res.model.model_id)} × ${res.model.n_runs} ·
+        limits ${res.risk.max_turnover_pct}% turnover / ${res.risk.max_position_pct}% position${
+          Object.keys(res.risk.applied).length ? ' (this sleeve\u2019s own)' : ''} ·
         ${res.data.candidates_to_llm} candidates of ${res.data.features_built} priced
         (median age ${res.data.median_age_days ?? '—'}d, ${res.data.stale_count} stale) ·
         cash ${res.cash_sek.toLocaleString()} → ${res.funded_cash_sek.toLocaleString()} SEK after these sells ·
@@ -848,6 +887,11 @@
           <tbody>${rows}</tbody>
         </table>
       </div>
+      ${res.turnover.dropped ? `<p class="text-xs text-amber-400 mb-3">
+        ⚠ ${res.turnover.dropped} trade(s) dropped by the turnover cap — the model proposed
+        ${res.turnover.proposed_sek.toLocaleString()} SEK against a cap of
+        ${res.turnover.cap_sek.toLocaleString()} SEK (${res.turnover.cap_pct}% of NAV).
+        Raise “Max turnover %” above and run again.</p>` : ''}
       ${res.notes ? `<p class="text-xs text-slate-600 italic mb-3">${esc(res.notes)}</p>` : ''}
       <button type="button" onclick="location.reload()"
               class="px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs text-slate-300 hover:border-sky-500/60">
@@ -881,6 +925,16 @@
     out.classList.add('hidden');
     status.textContent = 'Starting…';
     const [provider, modelId] = (document.getElementById('rv-model').value || '|').split('|');
+    // Blank means "use whatever the sleeve already stores", so omit rather than
+    // send a zero the engine would have to reject.
+    const risk = {};
+    for (const [key, id] of [['max_turnover_pct', 'rv-turnover'],
+                             ['max_position_pct', 'rv-maxpos'],
+                             ['max_positions', 'rv-npos'],
+                             ['min_cash_pct', 'rv-mincash']]) {
+      const raw = (document.getElementById(id).value || '').trim();
+      if (raw !== '') risk[key] = parseFloat(raw);
+    }
     try {
       const r = await fetch(ACTION, {
         method: 'POST',
@@ -893,6 +947,7 @@
           n_runs: parseInt(document.getElementById('rv-runs').value, 10) || 1,
           include_macro: document.getElementById('rv-macro').checked,
           refresh_prices: document.getElementById('rv-refresh').checked,
+          risk,
         }),
       });
       const body = await r.json();

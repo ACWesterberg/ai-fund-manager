@@ -877,6 +877,58 @@ def test_a_reported_figure_does_not_disturb_provider_fields(store):
     assert cached["organic_growth"] == 6.4
 
 
+def test_a_printed_percentage_in_a_fraction_metric_is_refused(store):
+    """The wrong value looks entirely plausible in every listing — 41.2 reads
+    back as 4120%, so a "gross margin below 45" rule silently stops matching.
+    Nothing downstream would ever flag it, so entry has to."""
+    with pytest.raises(ValueError, match="4,120%"):
+        evidence.record_reported(store, "X", {"gross_margin": 41.2}, "2026-06-30")
+    assert evidence.current_metric(store, "X", "gross_margin") is None
+
+
+def test_percent_records_printed_figures_in_provider_units(store):
+    evidence.record_reported(store, "X", {"gross_margin": 41.2}, "2026-06-30",
+                             percent=True)
+    assert (store.get_fundamentals("X") or {})["gross_margin"] == pytest.approx(0.412)
+    assert evidence.current_metric(store, "X", "gross_margin") == pytest.approx(41.2)
+
+
+def test_provider_units_still_record_unchanged(store):
+    """The guard must not move the goalposts for a caller doing it right."""
+    evidence.record_reported(store, "X", {"gross_margin": 0.412}, "2026-06-30")
+    assert evidence.current_metric(store, "X", "gross_margin") == pytest.approx(41.2)
+
+
+def test_an_unbounded_fraction_metric_may_exceed_100_percent(store):
+    """Growth, ROE and FCF conversion genuinely pass 100%. A guard firing on a
+    real 200% growth figure would only teach the operator to bypass it."""
+    evidence.record_reported(store, "X", {"revenue_growth": 2.0}, "2026-06-30")
+    assert evidence.current_metric(store, "X", "revenue_growth") == pytest.approx(200.0)
+
+
+def test_percent_leaves_non_fraction_metrics_alone(store):
+    """--percent is about the fraction convention. A P/E of 20 is 20 either way."""
+    evidence.record_reported(store, "X", {"pe_ratio": 20.0}, "2026-06-30", percent=True)
+    assert (store.get_fundamentals("X") or {})["pe_ratio"] == 20.0
+
+
+def test_a_custom_metric_is_unaffected_by_percent(store):
+    """Custom metrics are already entered as printed, so the flag must not
+    convert them twice."""
+    evidence.define_custom_metric(store, "organic_growth", "Organic growth", "%")
+    evidence.record_reported(store, "X", {"organic_growth": 6.4}, "2026-06-30",
+                             percent=True)
+    assert evidence.current_metric(store, "X", "organic_growth") == 6.4
+
+
+def test_a_refused_figure_records_nothing_at_all(store):
+    """One bad figure must not half-write the batch it arrived in."""
+    with pytest.raises(ValueError):
+        evidence.record_reported(
+            store, "X", {"pe_ratio": 20.0, "gross_margin": 41.2}, "2026-06-30")
+    assert store.get_fundamentals("X") in (None, {})
+
+
 def test_an_undefined_metric_is_not_recorded(store):
     """Silently accepting an unknown key would create a figure no criterion can
     ever name, and no error to say why."""

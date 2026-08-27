@@ -2709,7 +2709,11 @@ def paper_metric(slug, key, label, unit, note, edgar, forget):
               help="Period end the figures describe, YYYY-MM-DD (not today's date).")
 @click.option("--set", "pairs", multiple=True, metavar="KEY=VALUE",
               help="A figure from the report. Repeatable.")
-def paper_report(slug, ticker, period, pairs):
+@click.option("--percent", is_flag=True,
+              help="Your percentage figures are as printed (41.2, not 0.412). "
+                   "Applies to the built-in fraction metrics; the book's own "
+                   "metrics are always as printed.")
+def paper_report(slug, ticker, period, pairs, percent):
     """Record figures read off a company's own quarterly report.
 
     They land in the same cache a provider's numbers do, so criteria, kill
@@ -2717,6 +2721,18 @@ def paper_report(slug, ticker, period, pairs):
 
         fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \\
             --set organic_growth=6.4 --set adj_ebit_margin=9.3
+
+    UNITS: the book's own metrics are entered exactly as printed. The built-in
+    ones marked as fractions (margins, growth, yields) are stored the way the
+    data provider sends them — a 41.2% gross margin is 0.412 — and scaled back
+    to percent when a rule reads them. Pass --percent to type those as printed
+    too, and the conversion is done for you:
+
+        fund paper-report my-sleeve SYSR.ST --period 2026-06-30 \\
+            --percent --set gross_margin=41.2
+
+    Every figure is echoed back in the unit a rule will read it in, so a
+    mis-typed one is visible immediately rather than at the next kill check.
 
     The period is the quarter the figures describe, not the day you typed them:
     that is what lets a late entry still count as its own quarter, and what stops
@@ -2756,11 +2772,21 @@ def paper_report(slug, ticker, period, pairs):
     if not values:
         raise click.ClickException("Nothing to record — pass at least one --set KEY=VALUE.")
 
-    written = record_reported(store, ticker, values, period)
+    try:
+        written = record_reported(store, ticker, values, period, percent=percent)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
     click.echo(f"✓ {ticker.upper()} — period ending {period}:")
     for k, v in sorted(written.items()):
         meta = known[k]
-        click.echo(f"    {meta['label']:<26} {v:,.2f}{meta.get('unit', '')}")
+        # Echo in the unit a rule reads, not the unit stored: confirming "41.20"
+        # for a figure that will compare as 4120% is how the mistake survives.
+        if meta.get("is_fraction"):
+            shown = f"{v * 100:,.2f}%   (stored {v:g})"
+        else:
+            shown = f"{v:,.2f}{meta.get('unit', '')}"
+        click.echo(f"    {meta['label']:<26} {shown}")
 
 
 @cli.command("paper-read")

@@ -215,8 +215,20 @@ def forget_custom_metric(store: Store, key: str) -> bool:
     return True
 
 
+# is_fraction metrics that cannot legitimately reach 1.0 in the provider's own
+# units, so a value at or past _FRACTION_LIMIT is a percentage typed straight
+# in rather than a real reading. Growth, return on equity and FCF conversion
+# are deliberately absent: each can genuinely exceed 100%, and a guard that
+# fired on a real 200% growth figure would only teach the operator to bypass it.
+_BOUNDED_FRACTIONS = frozenset({
+    "gross_margin", "operating_margin", "ebitda_margin", "profit_margin",
+    "equity_to_assets", "net_debt_to_assets", "cost_to_income", "dividend_yield",
+})
+_FRACTION_LIMIT = 1.5
+
+
 def record_reported(store: Store, ticker: str, values: dict[str, float],
-                    period_end: str = "") -> dict:
+                    period_end: str = "", percent: bool = False) -> dict:
     """Write figures read off a company's own report into the metrics cache.
 
     These land in the same place a provider's numbers do, so every consumer —
@@ -227,6 +239,20 @@ def record_reported(store: Store, ticker: str, values: dict[str, float],
     the day they were typed in. Getting that right is what lets a figure entered
     late still count as its own quarter, and what stops one report's numbers
     being counted as two quarters of evidence.
+
+    Units are the trap here, because this function serves two conventions at
+    once. Custom metrics are entered as printed ("6.4 per cent" is 6.4), while
+    built-in `is_fraction` metrics are stored as the provider sends them (0.064)
+    and scaled to percent on the way out. Typing a printed percentage into one
+    of those records a figure a hundred times too large — and since a kill rule
+    reads it back scaled again, the breach it was written to catch silently
+    stops matching.
+
+    So `percent=True` says the caller's `is_fraction` figures are printed
+    percentages and converts them, and a bounded fraction landing past
+    `_FRACTION_LIMIT` is refused outright rather than stored. Refusing is the
+    point: the wrong value looks entirely plausible in every listing, and
+    nothing downstream would ever flag it.
     """
     ticker = (ticker or "").strip().upper()
     if not ticker:
@@ -236,6 +262,18 @@ def record_reported(store: Store, ticker: str, values: dict[str, float],
              if k in known and _num(v) is not None}
     if not clean:
         return {}
+
+    if percent:
+        clean = {k: (v / 100 if known[k]["is_fraction"] else v) for k, v in clean.items()}
+    for key, value in clean.items():
+        if key in _BOUNDED_FRACTIONS and abs(value) >= _FRACTION_LIMIT:
+            raise ValueError(
+                f"{known[key]['label']} ({key}) is stored as a fraction, so "
+                f"{value:g} would be read as {value * 100:,.0f}%. If you meant "
+                f"{value:g}%, pass it as {value / 100:g} — or record with "
+                f"percent=True (--percent on the command line) to convert "
+                f"printed percentages for you."
+            )
 
     existing = store.get_fundamentals(ticker) or {}
     existing.update(clean)

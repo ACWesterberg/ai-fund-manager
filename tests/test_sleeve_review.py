@@ -965,6 +965,103 @@ def test_web_review_accepts_risk_overrides(client, sleeve, monkeypatch):
     assert job["result"]["risk"]["max_turnover_pct"] == 45
 
 
+# ── Share counts ──────────────────────────────────────────────────────────────
+
+def test_a_full_exit_reports_the_whole_holding(env, sleeve, monkeypatch):
+    """A target weight decides; a share count executes. Closing a position
+    takes every share, fractions included — that is what the broker needs."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0, sek_estimate=10_000,
+               confidence=0.9, thesis="exit"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    alfa = next(a for a in result["actions"] if a["ticker"] == "ALFA.ST")
+    assert alfa["shares"] == 100          # the whole position
+    assert alfa["price_sek"] == 100.0
+
+
+def test_a_trim_reports_shares_to_sell_not_shares_to_keep(env, sleeve, monkeypatch):
+    """NAV is 100,000 with 100 ALFA.ST at 100 SEK. Trimming to 5% leaves 5,000
+    SEK — 50 shares — so 50 are sold."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=5, sek_estimate=5_000,
+               confidence=0.9, thesis="trim"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    alfa = next(a for a in result["actions"] if a["ticker"] == "ALFA.ST")
+    assert alfa["shares"] == 50
+
+
+def test_a_trim_can_never_sell_more_than_is_held(env, sleeve, monkeypatch):
+    """A target weight above the current one is not a sell of negative shares,
+    and a mis-sized one must not become an oversell."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=90, sek_estimate=2_000,
+               confidence=0.9, thesis="barely a trim"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    alfa = next(a for a in result["actions"] if a["ticker"] == "ALFA.ST")
+    assert alfa["shares"] is None          # nothing to sell, so nothing quoted
+
+
+def test_a_buy_reports_shares_to_buy(env, sleeve, monkeypatch):
+    """A name not yet held has no position to price it, so it is sized off its
+    latest cached close — the same source the weekly run sizes buys from — and
+    floored, since a broker fills whole shares."""
+    import math
+
+    _stub_llm(monkeypatch, [
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=20, sek_estimate=5_000,
+               confidence=0.8, thesis="new"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    beta = next(a for a in result["actions"] if a["ticker"] == "BETA.ST")
+    last_close = _price_rows()[-1]["close"]                 # 125.9, not the live 100
+    assert beta["price_sek"] == pytest.approx(last_close, abs=0.01)
+    assert beta["shares"] == math.floor(5_000 / last_close)
+
+
+def test_share_counts_are_stored_with_the_decision(env, sleeve, monkeypatch):
+    """Sizing depends on the book as it stood when the call was made. Re-deriving
+    it later, against a book that has moved, answers a different question."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0, sek_estimate=10_000,
+               confidence=0.9, thesis="exit"),
+    ])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    stored = json.loads(store.get_last_recommendation().actions_json)
+    assert stored[0]["shares"] == 100
+    assert stored[0]["price_sek"] == 100.0
+
+
+def test_a_hold_is_not_given_a_share_count(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="hold", target_weight_pct=50, sek_estimate=0,
+               confidence=0.6, thesis="keep"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+    assert next(a for a in result["actions"] if a["ticker"] == "ALFA.ST")["shares"] is None
+
+
+def test_share_counts_reach_the_dashboard_and_history(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0, sek_estimate=10_000,
+               confidence=0.9, thesis="exit"),
+    ])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    for url in (f"/live/{sleeve}", f"/live/{sleeve}/history"):
+        body = client.get(url).text
+        assert "Shares" in body, url
+        assert ">100<" in body.replace(" ", "").replace("\n", ""), url
+
+
 # ── Seeing the decision afterwards ────────────────────────────────────────────
 
 def _run_a_review(sleeve, monkeypatch):

@@ -856,12 +856,14 @@
       return `<tr style="${dim}">
           <td><span class="badge ${cls}">${esc(a.side.toUpperCase())}</span>
               <span class="text-white font-medium ml-1">${esc(a.ticker)}</span>${tag}</td>
+          <td class="num ${a.shares ? 'text-white font-semibold' : 'text-slate-600'}">${
+              a.shares ? (+a.shares).toLocaleString(undefined, {maximumFractionDigits: 4}) : '—'}</td>
           <td class="num text-slate-300">${a.sek_estimate.toLocaleString()}</td>
           <td class="num text-slate-300">${a.target_weight_pct}%</td>
           <td class="num text-slate-300">${a.confidence.toFixed(2)}</td>
           <td class="text-slate-500" style="font-size:10px">${esc(a.status)}${a.reason ? ' — ' + esc(a.reason) : ''}</td>
         </tr>
-        <tr style="${dim}"><td colspan="5" class="text-slate-500"
+        <tr style="${dim}"><td colspan="6" class="text-slate-500"
             style="font-size:10px;padding-top:0;padding-bottom:6px">${esc(a.thesis)}</td></tr>`;
     }).join('');
 
@@ -884,8 +886,9 @@
       ${res.market_summary ? `<p class="text-xs text-slate-400 leading-relaxed mb-3">${esc(res.market_summary)}</p>` : ''}
       <div class="overflow-x-auto -mx-1 mb-3">
         <table class="data-table" style="font-size:11px">
-          <thead><tr><th>Ticker</th><th class="num">≈ SEK</th><th class="num">Weight</th>
-                     <th class="num">Conf</th><th>Guardrails</th></tr></thead>
+          <thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">≈ SEK</th>
+                     <th class="num">Weight</th><th class="num">Conf</th>
+                     <th>Guardrails</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1204,6 +1207,7 @@
             <thead>
               <tr>
                 <th>Ticker</th>
+                <th class="num">Shares</th>
                 <th class="num">≈ SEK</th>
                 <th class="num">Weight</th>
                 <th class="num">Conf</th>
@@ -1219,13 +1223,15 @@
                   {% else %}<span class="badge badge-hold">HOLD</span>{% endif %}
                   <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
                 </td>
+                <td class="num {% if a.shares %}text-white font-semibold{% else %}text-slate-600{% endif %}">
+                  {% if a.shares %}{{ "{:,.4g}".format(a.shares) }}{% else %}—{% endif %}</td>
                 <td class="num text-slate-300">{{ "{:,.0f}".format(a.sek_estimate) }}</td>
                 <td class="num text-slate-300">{{ a.target_weight_pct }}%</td>
                 <td class="num text-slate-300">{{ "%.2f"|format(a.confidence) }}</td>
                 <td class="num text-slate-500">{% if a.stop_loss_pct %}-{{ a.stop_loss_pct }}%{% else %}—{% endif %}</td>
               </tr>
               <tr>
-                <td colspan="5" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
+                <td colspan="6" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
               </tr>
               {% endfor %}
             </tbody>

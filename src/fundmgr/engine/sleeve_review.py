@@ -563,6 +563,77 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
     )
 
 
+# ── Sizing ────────────────────────────────────────────────────────────────────
+
+def _price_sek(ticker: str, snap: PortfolioSnapshot, features: dict,
+               meta: dict, store: Store) -> float | None:
+    """One name's price in SEK — the unit NAV, weights and cost basis are in.
+
+    A held position already carries it, valued the same way the dashboard values
+    the book. Anything else is converted from the feature's native quote, whose
+    currency comes from the sleeve's own map when it knows the name and from the
+    Yahoo suffix when it doesn't — never a bare default, which would silently
+    price a Stockholm name in dollars.
+    """
+    from fundmgr import paper
+
+    for position in snap.positions:
+        if position.ticker == ticker and position.current_price_sek > 0:
+            return position.current_price_sek
+
+    feature = features.get(ticker)
+    if feature is None or not feature.last_price:
+        return None
+    currency = (meta.get("currency_map") or {}).get(ticker) or paper.detect_currency(ticker)
+    try:
+        return paper.to_sek_price(feature.last_price, currency, store)
+    except Exception:
+        return None
+
+
+def _share_counts(actions, snap: PortfolioSnapshot, features: dict,
+                  meta: dict, store: Store) -> dict[str, dict]:
+    """Whole shares to trade per approved action, keyed by ticker.
+
+    A target weight is the right way to *decide* and a poor way to *execute*:
+    the broker wants a number of shares. Computed here, at decision time,
+    because it depends on the book as it stood when the call was made — deriving
+    it later from a book that has since moved would quietly answer a different
+    question.
+
+    A full exit reports the whole holding, fractions included, since that is
+    what closing it actually takes. A trim floors to whole shares, and can never
+    exceed what is held.
+    """
+    import math
+
+    held = {p.ticker: p.shares for p in snap.positions if p.shares > 0}
+    out: dict[str, dict] = {}
+    for action in actions:
+        price = _price_sek(action.ticker, snap, features, meta, store)
+        if not price or price <= 0:
+            continue
+        if action.side == "sell":
+            have = held.get(action.ticker, 0.0)
+            if have <= 0:
+                continue
+            if action.target_weight_pct <= 0:
+                shares = have                      # close it out, fractions and all
+            else:
+                keep = (snap.nav_sek * action.target_weight_pct / 100) / price
+                shares = min(have, math.floor(max(0.0, have - keep)))
+            if shares <= 0:
+                continue
+        elif action.side == "buy":
+            shares = math.floor(action.sek_estimate / price)
+            if shares <= 0:
+                continue
+        else:
+            continue
+        out[action.ticker] = {"shares": round(shares, 4), "price_sek": round(price, 2)}
+    return out
+
+
 # ── Funding ───────────────────────────────────────────────────────────────────
 
 def _fund_from_sells(snap: PortfolioSnapshot, decision, cfg: AppConfig) -> PortfolioSnapshot:
@@ -842,6 +913,7 @@ def review_sleeve(
     unfunded = _drop_unfunded_buys(guardrails, snap, cfg)
 
     approved = {(a.ticker, a.side) for a in guardrails.approved_actions}
+    sizing = _share_counts(guardrails.approved_actions, snap, features, meta, store)
     name_by_ticker = {f.ticker: f.name for f in features.values()}
     targets = json.loads(store.get_meta("paper_target_weights") or "{}")
 
@@ -863,6 +935,10 @@ def review_sleeve(
             "status": v.status,
             "reason": v.rejection_reason or v.clip_note or "",
             "last_price": feat.last_price if feat else None,
+            # What to actually type at the broker. A target weight decides;
+            # a share count executes.
+            "shares": (sizing.get(a.ticker) or {}).get("shares"),
+            "price_sek": (sizing.get(a.ticker) or {}).get("price_sek"),
             "held": a.ticker in held_tickers,
             # An approved buy in a name the plan never had is the add-on this
             # review exists to surface — flag it so the UI can say so.
@@ -955,7 +1031,16 @@ def review_sleeve(
     result["elapsed_s"] = round(time.time() - started, 1)
 
     if not dry_run:
-        actions_json = json.dumps([a.model_dump() for a in guardrails.approved_actions])
+        # Share counts ride along in the stored decision rather than being
+        # re-derived when it is read back: they depend on the book as it stood
+        # at decision time, and a later reader would compute them against a
+        # book that has moved on.
+        stored_actions = []
+        for a in guardrails.approved_actions:
+            row = a.model_dump()
+            row.update(sizing.get(a.ticker) or {})
+            stored_actions.append(row)
+        actions_json = json.dumps(stored_actions)
         store.save_recommendation(RecommendationLog(
             run_id=run_id,
             timestamp=datetime.utcnow(),

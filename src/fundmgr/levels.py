@@ -55,6 +55,33 @@ def alertable_hits(
     ]
 
 
+def settled_sells(
+    triggered: list[tuple],
+    held_before: dict[str, float],
+    held_after: dict[str, float],
+) -> tuple[list[str], list[str]]:
+    """Split triggered tickers into (sold, deferred), read off the book.
+
+    Whether an auto-sell happened cannot be assumed from having asked for one:
+    the filler refuses to trade a venue that is closed, and check-stops runs on
+    one fund-wide schedule that outlasts some of its holdings' exchanges. A
+    European name hitting its target after XETRA shuts is skipped on every
+    cycle until the next open.
+
+    Getting this wrong is not cosmetic. An auto-sold ticker is exempt from the
+    once-a-day alert limit — correctly, since a completed trade is news rather
+    than a standing condition — so counting a skipped fill as sold both claims a
+    trade that never happened and repeats the claim every cycle.
+    """
+    sold, deferred = [], []
+    for ticker, *_ in triggered:
+        if held_after.get(ticker, 0.0) < held_before.get(ticker, 0.0):
+            sold.append(ticker)
+        else:
+            deferred.append(ticker)
+    return sold, deferred
+
+
 def record_sent_alerts(hits: list[tuple], kind: str, store, today: str) -> None:
     """Mark `hits` as alerted today, so the next cycle stays quiet."""
     for hit in hits:

@@ -27,7 +27,9 @@ from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnin
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.engine.thesis_check import verify_theses
 from fundmgr.guardrails.rules import apply_guardrails
-from fundmgr.levels import alertable_hits, merged_levels, record_sent_alerts
+from fundmgr.levels import (
+    alertable_hits, merged_levels, record_sent_alerts, settled_sells,
+)
 from fundmgr.reporting.actions import format_action_list
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
 from fundmgr.state.store import Store
@@ -889,6 +891,7 @@ def check_stops(quiet: bool):
 
     # ── Auto-execute stops/profits for simulation fund ────────────────────────
     auto_sold: list[str] = []
+    deferred: list[str] = []
     triggered = stops_hit + profits_hit
     if triggered and cfg.auto_fill:
         from fundmgr.engine.auto_fill import execute_paper_fills
@@ -898,12 +901,25 @@ def check_stops(quiet: bool):
         ]
         # notify_skips=False: check-stops runs every 15 min, so a closed-market
         # skip here must not spam Telegram (the weekly run path handles reminders).
+        #
+        # Which of these actually filled has to be read off the book, not
+        # assumed: execute_paper_fills refuses to trade a venue that is closed,
+        # and this command runs on the NYSE window, so a European name hitting
+        # its target after XETRA shuts is skipped every cycle. Marking it sold
+        # anyway told Telegram "AUTO-SOLD" about a position still held, and —
+        # because an auto-sold ticker bypasses the once-a-day alert limit —
+        # repeated that same message every 15 minutes until the close.
+        held_before = {p.ticker: p.shares for p in store.get_positions()}
         fill_log = execute_paper_fills(sell_actions, store, cfg, notify_skips=False)
         for line in fill_log:
             click.echo(f"  {line}")
-        for ticker, *_ in triggered:
+        held_after = {p.ticker: p.shares for p in store.get_positions()}
+        auto_sold, deferred = settled_sells(triggered, held_before, held_after)
+        for ticker in auto_sold:
             store.clear_position_stop(ticker)
-            auto_sold.append(ticker)
+        if deferred and not quiet:
+            click.echo(f"  ⏸ Not sold this cycle (venue closed or no price): "
+                       f"{', '.join(deferred)} — the level stands and retries next cycle.")
 
     # ── Stop-loss review (advisory) for non-auto-fill (real-money) funds ───────
     # On a stop hit, run a focused N-sample reassessment so a recent "add" thesis
@@ -976,11 +992,18 @@ def check_stops(quiet: bool):
     if (alert_stops or alert_profits or warnings) and bot_token and chat_id:
         lines = [f"<b>{cfg.display_name}</b>\n📉 Price Alert"]
         for ticker, chg, stop_pct, price in alert_stops:
-            note = " — <b>AUTO-SOLD</b>" if ticker in auto_sold else " — review &amp; sell"
+            if ticker in auto_sold:
+                note = " — <b>AUTO-SOLD</b>"
+            elif ticker in deferred:
+                note = " — market closed, sells on the next open"
+            else:
+                note = " — review &amp; sell"
             lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")
         for ticker, chg, tp_pct, price in alert_profits:
             if ticker in auto_sold:
                 note = " — <b>AUTO-SOLD</b>"
+            elif ticker in deferred:
+                note = " — market closed, sells on the next open"
             elif ticker in reviewed_targets:
                 note = ""  # the review below carries the call — don't pre-empt it
             else:

@@ -35,7 +35,9 @@ except ModuleNotFoundError:  # pragma: no cover
         setattr(_stub, _name, lambda *a, **k: None)
     sys.modules["financedata"] = _stub
 
-from fundmgr.levels import alertable_hits, merged_levels, record_sent_alerts  # noqa: E402
+from fundmgr.levels import (
+    alertable_hits, merged_levels, record_sent_alerts, settled_sells,
+)  # noqa: E402
 from fundmgr.engine.prompt import _portfolio_block  # noqa: E402
 from fundmgr.state.store import Store  # noqa: E402
 
@@ -118,6 +120,58 @@ def test_a_send_that_never_happened_does_not_burn_the_day(store):
     hits = [("TRUE-B.ST", 35.5, 33.0, 20.81)]
     assert alertable_hits(hits, "target", [], store, "2026-08-14")   # send fails here
     assert _send(hits, "target", store, "2026-08-14"), "must retry after a failed send"
+
+
+# ── What actually sold ────────────────────────────────────────────────────────
+#
+# SAP.DE hit its +27% target and check-stops reported "AUTO-SOLD" every 15
+# minutes from 19:15 to the close. XETRA shuts at 17:30 while this command runs
+# on the NYSE window to 22:00, so the filler was refusing to trade a closed
+# venue — correctly — and the caller counted every triggered ticker as sold
+# anyway. An auto-sold ticker is exempt from the daily alert limit, so the
+# false claim also repeated itself indefinitely.
+
+_TRIGGERED = [("SAP.DE", 26.9, 27.0, 189.88)]
+
+
+def test_a_skipped_fill_is_not_reported_as_sold():
+    """The position is still there afterwards, so nothing was sold."""
+    before = {"SAP.DE": 40.0}
+    sold, deferred = settled_sells(_TRIGGERED, before, dict(before))
+    assert sold == []
+    assert deferred == ["SAP.DE"]
+
+
+def test_a_real_sell_is_reported_as_sold():
+    sold, deferred = settled_sells(_TRIGGERED, {"SAP.DE": 40.0}, {})
+    assert sold == ["SAP.DE"]
+    assert deferred == []
+
+
+def test_a_partial_sell_still_counts_as_sold():
+    """Shares left the book, so the trade happened and is worth reporting."""
+    sold, _ = settled_sells(_TRIGGERED, {"SAP.DE": 40.0}, {"SAP.DE": 15.0})
+    assert sold == ["SAP.DE"]
+
+
+def test_a_deferred_sell_alerts_once_a_day_not_every_cycle(store):
+    """The spam, end to end: with the ticker correctly absent from auto_sold,
+    the daily limit applies and the 19:30 / 19:45 / 20:00 cycles stay quiet."""
+    held = {"SAP.DE": 40.0}
+    cycles = []
+    for _ in range(4):
+        sold, _deferred = settled_sells(_TRIGGERED, held, dict(held))   # venue closed
+        cycles.append(_send(_TRIGGERED, "target", store, "2026-08-27", auto_sold=sold))
+    assert len(cycles[0]) == 1, "the first breach of the day must still alert"
+    assert cycles[1:] == [[], [], []], "later cycles must stay silent"
+
+
+def test_a_genuine_auto_sell_still_bypasses_the_daily_limit(store):
+    """The exemption is right — a completed trade is news, not a standing
+    condition. It just has to be a trade that happened."""
+    sold, _ = settled_sells(_TRIGGERED, {"SAP.DE": 40.0}, {})
+    assert _send(_TRIGGERED, "target", store, "2026-08-27", auto_sold=sold)
+    assert _send(_TRIGGERED, "target", store, "2026-08-27", auto_sold=sold)
 
 
 def test_stop_and_target_alerts_are_independent_on_the_same_day(store):

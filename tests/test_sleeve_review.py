@@ -627,6 +627,92 @@ def test_review_survives_a_failing_news_fetch(env, sleeve, monkeypatch):
     assert sleeve_review.review_sleeve(sleeve, include_macro=False)["hold_count"] == 1
 
 
+def test_reported_figures_travel_with_the_fundamentals_rule(env, sleeve, monkeypatch):
+    """A threshold the model cannot check is a threshold it has to take on
+    trust. The reading and the streak make the line testable from the prompt."""
+    from fundmgr import evidence, watchplan
+
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_position_plan(
+        store, "ALFA.ST",
+        fundamentals=[{"metric": "gross_margin", "op": "below", "value": 45, "quarters": 2}])
+    # gross_margin is a fraction metric, so figures are recorded the way the
+    # provider gives them and read back scaled to percent.
+    evidence.record_reported(store, "ALFA.ST", {"gross_margin": 0.468}, period_end="2026-03-31")
+    evidence.record_reported(store, "ALFA.ST", {"gross_margin": 0.412}, period_end="2026-06-30")
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "gross_margin below 45 for 2 consecutive quarters" in user
+    # One quarter under the line out of the two the rule asks for — not a breach.
+    assert "streak 1 of 2" in user
+    assert "2026-06-30 41.2" in user
+
+
+def test_an_uncheckable_rule_says_so_rather_than_staying_silent(env, sleeve, monkeypatch):
+    """Silence reads as 'fine'. No reported periods is unknown, which is not the
+    same as a rule that was checked and cleared."""
+    from fundmgr import watchplan
+
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_position_plan(
+        store, "ALFA.ST",
+        fundamentals=[{"metric": "gross_margin", "op": "below", "value": 45, "quarters": 2}])
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    assert "this rule cannot be checked" in capture["user"]
+
+
+# ── Levels ────────────────────────────────────────────────────────────────────
+
+def test_recommended_stop_and_target_are_persisted(env, sleeve, monkeypatch):
+    """build_prompt renders stored levels in the portfolio block, so a review
+    that discards them starves the next one."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=20, sek_estimate=5_000,
+               confidence=0.8, thesis="new", stop_loss_pct=12, take_profit_pct=40),
+    ])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    level = store.get_effective_stops().get("BETA.ST") or {}
+    assert level.get("stop_pct") == 12
+    assert level.get("take_profit_pct") == 40
+
+
+def test_a_full_exit_clears_the_level(env, sleeve, monkeypatch):
+    _meta, store = paper.open_portfolio(sleeve)
+    store.set_position_stop("ALFA.ST", stop_pct=10, take_profit_pct=30)
+
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0, sek_estimate=5_000,
+               confidence=0.9, thesis="exit"),
+    ])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "ALFA.ST" not in store.get_effective_stops()
+
+
+def test_a_dry_run_writes_no_levels(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=20, sek_estimate=5_000,
+               confidence=0.8, thesis="new", stop_loss_pct=12),
+    ])
+    sleeve_review.review_sleeve(sleeve, include_macro=False, dry_run=True)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "BETA.ST" not in store.get_effective_stops()
+
+
 # ── Risk overrides ────────────────────────────────────────────────────────────
 
 def test_turnover_override_lets_a_paired_swap_through(env, sleeve, monkeypatch):

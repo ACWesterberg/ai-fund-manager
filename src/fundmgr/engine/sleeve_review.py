@@ -27,8 +27,10 @@ Two things a sleeve doesn't have, and where they come from:
 What the model is shown: the sleeve's own standing work — kill criterion and
 numeric kill rules, logged kill signals and the last judged verdict, the add
 criterion, target and review prices, the add-signal gates as computed by
-`addsignal` (the same numbers the dashboard's Add-signals panel shows), review
-horizons, plan weights and drift — plus what was previously claimed about each
+`addsignal` (the same numbers the dashboard's Add-signals panel shows), the
+reported figures standing behind each fundamentals kill rule so the line can
+actually be checked rather than taken on trust, review horizons, plan weights
+and drift — plus what was previously claimed about each
 name and whether `thesis_check` found the claim survived, and the book's own
 held/broke against beat/lagged record as calibration. All of it is evidence, none of it binding: a
 target price the model disagrees with is a number it must argue against in the
@@ -61,6 +63,7 @@ from fundmgr.engine.client import call_llm_consensus
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.engine.whatif import MAX_RUNS, MODEL_OPTIONS, load_profile_config, list_profiles
 from fundmgr.guardrails.rules import apply_guardrails
+from fundmgr.levels import merged_levels
 from fundmgr.state.models import PortfolioSnapshot, RecommendationLog
 from fundmgr.state.store import Store
 
@@ -260,8 +263,15 @@ def _kill_verdict(store: Store, ticker: str) -> dict:
         return {}
 
 
-def _rule_line(rule: dict) -> str:
-    """One position's numeric kill rule, as the thresholds actually stored."""
+def _rule_line(store: Store, ticker: str, rule: dict) -> str:
+    """One position's numeric kill rule, with the reported figures behind it.
+
+    A threshold on its own is untestable from the prompt: the model could read
+    "gross_margin below 45 for 2 consecutive quarters" and have no idea whether
+    it is tripping. `evidence.sustained_breach` answers the rule exactly as
+    written — streak counted from the newest period back, thin history never a
+    pass — so the reading travels with the line.
+    """
     parts = []
     if rule.get("max_drawdown_pct"):
         anchor = rule.get("anchor_price_sek")
@@ -278,8 +288,34 @@ def _rule_line(rule: dict) -> str:
         span = f" for {quarters} consecutive quarters" if quarters > 1 else ""
         value = f.get("value")
         shown = f"{value:g}" if isinstance(value, (int, float)) else str(value or "")
-        parts.append(f"{f['metric']} {f.get('op', '')} {shown}{span}".strip())
+        line = f"{f['metric']} {f.get('op', '')} {shown}{span}".strip()
+        parts.append(line + _breach_note(store, ticker, f))
     return " · ".join(parts)
+
+
+def _breach_note(store: Store, ticker: str, condition: dict) -> str:
+    """Where one fundamentals condition currently stands, in reported figures.
+
+    Silence would be read as "fine", so an unmeasurable rule says so: no
+    periods on file is *unknown*, which is a different thing from a rule that
+    has been checked and cleared.
+    """
+    try:
+        from fundmgr import evidence
+        state = evidence.sustained_breach(
+            store, ticker, condition["metric"], condition.get("op", "below"),
+            float(condition.get("value") or 0), int(condition.get("quarters") or 1),
+        )
+        history = evidence.metric_history(store, ticker, condition["metric"])[:3]
+    except Exception:
+        return ""
+
+    if not state["periods_seen"]:
+        return " [no reported periods on file — this rule cannot be checked]"
+    readings = ", ".join(f"{r['period']} {r['value']:g}" for r in history)
+    verdict = ("BREACHED" if state["hit"]
+               else f"streak {state['streak']} of {state['quarters']}")
+    return f" [{verdict}; {readings}]"
 
 
 def _add_rows(store: Store) -> dict[str, dict]:
@@ -450,7 +486,7 @@ def _sleeve_block(meta: dict, store: Store, snap: PortfolioSnapshot) -> str:
             lines.append("  ".join(parts))
             if kills.get(ticker):
                 lines.append(f"      kill criterion: {kills[ticker]}")
-            rule_text = _rule_line(rules.get(ticker) or {})
+            rule_text = _rule_line(store, ticker, rules.get(ticker) or {})
             if rule_text:
                 lines.append(f"      kill rule: {rule_text}")
             verdict = _kill_verdict(store, ticker)
@@ -935,6 +971,20 @@ def review_sleeve(
                     for a in guardrails.approved_actions
                     if a.ticker in features and features[a.ticker].last_price},
         )
+        # Persist the stop and take-profit the model just argued for. Without
+        # this the levels are discarded at the end of the run and the *next*
+        # review sees a book with no levels on it — build_prompt renders stored
+        # stops in the portfolio block, so a review that drops them starves its
+        # own successor. merged_levels also re-targets on holds and keeps a
+        # level the model simply didn't restate.
+        existing_levels = store.get_effective_stops()
+        for action in guardrails.approved_actions:
+            merged = merged_levels(action, existing_levels.get(action.ticker))
+            if merged:
+                store.set_position_stop(
+                    action.ticker, stop_pct=merged[0], take_profit_pct=merged[1])
+            elif action.side == "sell" and action.target_weight_pct == 0:
+                store.clear_position_stop(action.ticker)
         # Remember the scope and caps so the next review — and the form —
         # default to them.
         store.set_meta(META_CONFIG, config_name)

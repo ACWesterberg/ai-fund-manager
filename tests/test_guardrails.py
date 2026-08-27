@@ -152,6 +152,19 @@ def test_max_position_weight_clips():
     assert result.approved_actions[0].target_weight_pct == pytest.approx(18.0)
 
 
+def test_clip_note_records_the_weight_that_was_asked_for():
+    """The note is the audit trail for a clip, so it has to name the weight the
+    model actually requested — not repeat the capped one on both sides."""
+    cfg = _cfg(max_position_pct=18)
+    snap = _snap(cash=40_000)
+    features = {"VOLV-B.ST": _feat("VOLV-B.ST", 300)}
+    decision = _decision([_buy("VOLV-B.ST", 30, 12_000)])
+    result = apply_guardrails(decision, snap, features, UNIVERSE, cfg)
+
+    note = result.verdicts[0].clip_note
+    assert note == "Weight clipped from 30.0% to 18.0% (max_position_pct)"
+
+
 # ── Max positions count ───────────────────────────────────────────────────────
 
 def test_max_positions_blocks_new_entry():

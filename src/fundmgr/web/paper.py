@@ -1065,11 +1065,22 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                             "thesis": a.get("thesis", ""),
                             "stop_loss_pct": a.get("stop_loss_pct"),
                         }
-                        for a in actions if a.get("side") in ("buy", "sell")
+                        # Holds included: a review that decided to keep the book
+                        # as it is has decided something, and an empty table for
+                        # it reads as "the run went nowhere".
+                        for a in actions
                     ],
                 }
-            except Exception:
-                pass
+            except Exception as e:
+                # Never silently: a decision that is on disk but unrenderable
+                # looked exactly like no decision at all.
+                last_run = {
+                    "run_id": last_rec.run_id,
+                    "timestamp": last_rec.timestamp.strftime("%Y-%m-%d %H:%M"),
+                    "market_summary": "",
+                    "notes": f"This decision could not be rendered: {e}",
+                    "buys": 0, "sells": 0, "holds": 0, "actions": [],
+                }
 
         review = None
         if real:
@@ -1078,8 +1089,18 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 scopes = sleeve_review.list_scopes(defaults["config"])
             except ValueError:
                 scopes = ()
+            # A review runs for minutes in a background thread. Without this the
+            # page has no idea one is in flight or just finished, so navigating
+            # away loses the result — and, worse, loses the error when it failed.
+            with _review_lock:
+                job = dict(_review_job) if _review_job and _review_job["slug"] == slug else None
             review = {
                 "slug": slug,
+                "job": {
+                    "id": job["id"],
+                    "status": job["status"],
+                    "elapsed_s": round(time.time() - job["started"], 1),
+                } if job else None,
                 "action": f"{prefix}/{slug}/review",
                 "jobs_url": f"{prefix}/{slug}/review/jobs",
                 "scopes_url": f"{prefix}/{slug}/review/scopes",
@@ -1113,6 +1134,69 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "adds": _add_status(store) if real else None,
             "review": review,
             "flash": flash,
+            **_base_ctx(meta),
+        })
+
+    @router.get("/{slug}/history", response_class=HTMLResponse)
+    def history(request: Request, slug: str):
+        """Every decision on this book, newest first.
+
+        The dashboard shows only the latest one, and its "All decisions" link
+        used to point at /history — the *main fund's* history — so a sleeve
+        review that saved perfectly still looked like it had gone nowhere.
+        """
+        try:
+            meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            return _not_found()
+
+        with store._conn() as conn:
+            rows = conn.execute(
+                "SELECT run_id, timestamp, llm_response, actions_json "
+                "FROM recommendations ORDER BY timestamp DESC LIMIT 50"
+            ).fetchall()
+
+        recommendations = []
+        for r in rows:
+            try:
+                actions = json.loads(r["actions_json"])
+            except Exception:
+                actions = []
+            try:
+                llm = json.loads(r["llm_response"] or "{}")
+            except Exception:
+                llm = {}
+            # Holds are carried too: a review whose whole answer was "keep
+            # everything" is a decision, and showing an empty card for it is
+            # what makes a saved run look lost.
+            recommendations.append({
+                "run_id": r["run_id"],
+                "timestamp": (r["timestamp"] or "")[:16].replace("T", " "),
+                "action_count": len(actions),
+                "buys": sum(1 for a in actions if a.get("side") == "buy"),
+                "sells": sum(1 for a in actions if a.get("side") == "sell"),
+                "holds": sum(1 for a in actions if a.get("side") == "hold"),
+                "market_summary": llm.get("market_summary", ""),
+                "notes": llm.get("notes", ""),
+                "is_review": r["run_id"].startswith("review-"),
+                "actions": [
+                    {
+                        "ticker": a.get("ticker", ""),
+                        "side": a.get("side", ""),
+                        "sek_estimate": round(a.get("sek_estimate") or 0),
+                        "target_weight_pct": a.get("target_weight_pct", 0),
+                        "confidence": a.get("confidence") or 0,
+                        "thesis": a.get("thesis", ""),
+                        "stop_loss_pct": a.get("stop_loss_pct"),
+                    }
+                    for a in actions
+                ],
+            })
+
+        return _render("book_history.html", {
+            "request": request,
+            "recommendations": recommendations,
+            "active_page": "history",
             **_base_ctx(meta),
         })
 

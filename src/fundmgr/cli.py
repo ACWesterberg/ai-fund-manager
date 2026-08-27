@@ -2452,6 +2452,28 @@ def paper_status(slug: str):
     click.echo(f"\n  Cash:       {cash:>12,.0f} SEK")
     click.echo(f"  NAV (cost): {nav:>12,.0f} SEK")
 
+    # The latest decision, so "did my review actually save?" is answerable
+    # without opening the dashboard.
+    last = store.get_last_recommendation()
+    if last is None:
+        click.echo("\n  No decisions recorded yet.")
+        return
+    try:
+        acts = json.loads(last.actions_json)
+    except ValueError:
+        acts = []
+    kind = "Review" if last.run_id.startswith("review-") else "Imported plan"
+    click.echo(f"\n  {kind} — {last.timestamp.strftime('%Y-%m-%d %H:%M')} ({last.run_id})")
+    click.echo(f"    {sum(1 for a in acts if a.get('side') == 'buy')} buy · "
+               f"{sum(1 for a in acts if a.get('side') == 'sell')} sell · "
+               f"{sum(1 for a in acts if a.get('side') == 'hold')} hold")
+    for a in acts:
+        click.echo(f"    {a.get('side', '?').upper():<5} {a.get('ticker', ''):<14} "
+                   f"{a.get('target_weight_pct', 0):>5.1f}%  {a.get('thesis', '')[:80]}")
+    if not acts:
+        click.echo("    (nothing approved — every proposed trade was rejected or "
+                   "dropped by the guardrails)")
+
 
 @cli.command("paper-scopes")
 @click.option("--config", "config_name", default=None,

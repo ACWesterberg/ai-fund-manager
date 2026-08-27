@@ -1153,7 +1153,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
 
         with store._conn() as conn:
             rows = conn.execute(
-                "SELECT run_id, timestamp, llm_response, actions_json "
+                "SELECT run_id, timestamp, llm_response, actions_json, prompt_snapshot, "
+                "dismissed_at, dismissed_reason "
                 "FROM recommendations ORDER BY timestamp DESC LIMIT 50"
             ).fetchall()
 
@@ -1167,6 +1168,15 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 llm = json.loads(r["llm_response"] or "{}")
             except Exception:
                 llm = {}
+            # Every decision already records which model produced it. Showing it
+            # is what turns a list of runs into a comparison between models.
+            try:
+                regime = (json.loads(r["prompt_snapshot"] or "{}") or {}).get("regime") or {}
+            except Exception:
+                regime = {}
+            model = "/".join(x for x in (regime.get("provider"), regime.get("model_id")) if x)
+            if model and (regime.get("n_samples") or 1) > 1:
+                model += f" ×{regime['n_samples']}"
             # Holds are carried too: a review whose whole answer was "keep
             # everything" is a decision, and showing an empty card for it is
             # what makes a saved run look lost.
@@ -1180,6 +1190,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "market_summary": llm.get("market_summary", ""),
                 "notes": llm.get("notes", ""),
                 "is_review": r["run_id"].startswith("review-"),
+                "model": model,
+                "dismissed": bool(r["dismissed_at"]),
+                "dismissed_at": (r["dismissed_at"] or "")[:16].replace("T", " "),
+                "dismissed_reason": r["dismissed_reason"] or "",
                 "actions": [
                     {
                         "ticker": a.get("ticker", ""),
@@ -1195,12 +1209,48 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 ],
             })
 
+        flash = None
+        msg = request.query_params.get("msg")
+        if msg:
+            flash = {"msg": msg, "ok": request.query_params.get("ok") == "1"}
+
         return _render("book_history.html", {
             "request": request,
             "recommendations": recommendations,
+            "dismiss_action": f"{prefix}/{slug}/history/dismiss",
+            "flash": flash,
             "active_page": "history",
             **_base_ctx(meta),
         })
+
+    @router.post("/{slug}/history/dismiss")
+    def dismiss_decision(slug: str, run_id: str = Form(...), reason: str = Form(""),
+                         restore: str = Form("")):
+        """Mark a decision as not acted on, or undo that.
+
+        Not a delete: the call stays on file and keeps being scored, so a month
+        from now the history says whether declining it was the right call — and
+        two models' calls on the same book stay comparable.
+        """
+        from urllib.parse import urlencode
+
+        try:
+            _meta, store = paper.open_portfolio(slug)
+        except KeyError:
+            return _not_found()
+
+        if restore:
+            ok = store.restore_recommendation(run_id)
+            msg = ("Decision restored — it is the book's current decision again."
+                   if ok else "That decision was not dismissed.")
+        else:
+            ok = store.dismiss_recommendation(run_id, reason)
+            msg = ("Dismissed. It stays on file and is still scored, so you will "
+                   "see whether declining it was right." if ok else
+                   "Could not dismiss that decision — unknown, or already dismissed.")
+        return RedirectResponse(
+            url=f"{prefix}/{slug}/history?" + urlencode({"msg": msg, "ok": int(ok)}),
+            status_code=303)
 
     @router.get("/{slug}/transactions", response_class=HTMLResponse)
     def transactions(request: Request, slug: str):

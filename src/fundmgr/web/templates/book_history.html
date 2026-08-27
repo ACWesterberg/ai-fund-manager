@@ -9,14 +9,24 @@
   <p class="text-sm text-slate-500 mt-1">
     Every decision recorded for <b class="text-sky-400">{{ book_name }}</b>, newest first —
     the plan it was imported with, and each review since. Holds are shown too: a review that
-    decided to keep everything is still a decision.
+    decided to keep everything is still a decision. Mark one you didn't act on and it stops
+    being the book's current decision — but stays here and keeps being scored, so two models'
+    calls on the same book stay comparable.
   </p>
 </div>
+
+{% if flash %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border flex items-center gap-2 text-xs font-semibold
+            {% if flash.ok %}border-emerald-500/20 bg-emerald-500/5 text-emerald-400{% else %}border-red-500/20 bg-red-500/5 text-red-400{% endif %}">
+  <span class="material-symbols-outlined" style="font-size:15px">{{ 'check_circle' if flash.ok else 'error' }}</span>
+  {{ flash.msg }}
+</div>
+{% endif %}
 
 {% if recommendations %}
 <div class="space-y-4">
   {% for r in recommendations %}
-  <section class="card">
+  <section class="card" {% if r.dismissed %}style="opacity:.55"{% endif %}>
     <div class="card-header">
       <div class="flex items-center gap-2 flex-wrap">
         {% if r.is_review %}
@@ -25,6 +35,12 @@
         <span class="badge" style="background:rgba(148,163,184,.15);color:#94a3b8">PLAN</span>
         {% endif %}
         <h2 class="card-title">{{ r.timestamp }}</h2>
+        {% if r.model %}
+        <span class="text-[11px] text-slate-500 font-mono">{{ r.model }}</span>
+        {% endif %}
+        {% if r.dismissed %}
+        <span class="badge" style="background:rgba(248,113,113,.15);color:#f87171">NOT ACTED ON</span>
+        {% endif %}
       </div>
       <div class="flex items-center gap-2">
         <span class="badge badge-buy">{{ r.buys }} buy</span>
@@ -85,7 +101,29 @@
     {% if r.notes %}
     <p class="text-xs text-slate-600 leading-relaxed italic mb-2">{{ r.notes }}</p>
     {% endif %}
-    <p class="text-[10px] text-slate-700 font-mono">{{ r.run_id }}</p>
+    {% if r.dismissed %}
+    <p class="text-[11px] text-red-400/80 mb-2">
+      Dismissed {{ r.dismissed_at }}{% if r.dismissed_reason %} — {{ r.dismissed_reason }}{% endif %}.
+      Still on file and still scored, so you will see whether declining it was right.
+    </p>
+    {% endif %}
+
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <p class="text-[10px] text-slate-700 font-mono">{{ r.run_id }}</p>
+      <form method="post" action="{{ dismiss_action }}" class="flex items-center gap-2">
+        <input type="hidden" name="run_id" value="{{ r.run_id }}" />
+        {% if r.dismissed %}
+        <input type="hidden" name="restore" value="1" />
+        <button type="submit" class="text-[11px] text-slate-400 hover:text-sky-400">Restore</button>
+        {% else %}
+        <input name="reason" placeholder="why not? (optional)"
+               class="bg-slate-950/60 border border-slate-700/60 rounded-lg px-2 py-1 text-[11px] text-slate-300 focus:outline-none focus:border-sky-500/60" />
+        <button type="submit" class="text-[11px] text-slate-500 hover:text-red-400">
+          Didn't act on this
+        </button>
+        {% endif %}
+      </form>
+    </div>
   </section>
   {% endfor %}
 </div>

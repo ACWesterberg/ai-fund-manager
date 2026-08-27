@@ -2477,6 +2477,118 @@ def paper_status(slug: str):
                    "dropped by the guardrails)")
 
 
+@cli.command("paper-decisions")
+@click.argument("slug")
+@click.option("--limit", default=20, show_default=True, help="How many to list.")
+def paper_decisions(slug: str, limit: int):
+    """List a book's decisions, newest first, with the model that produced each.
+
+    Run the same sleeve against two models and this is the comparison: both
+    calls side by side, each scored on its own merits once the outcomes mature,
+    whichever one you actually followed."""
+    from fundmgr import paper
+
+    try:
+        _meta, store = paper.open_portfolio(slug)
+    except KeyError:
+        click.echo(f"No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+
+    with store._conn() as conn:
+        rows = conn.execute(
+            "SELECT run_id, timestamp, actions_json, prompt_snapshot, dismissed_at, "
+            "dismissed_reason FROM recommendations ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    if not rows:
+        click.echo("No decisions recorded for this book yet.")
+        return
+
+    click.echo(f"\n─── Decisions for {slug} ───")
+    for r in rows:
+        try:
+            acts = json.loads(r["actions_json"])
+        except ValueError:
+            acts = []
+        try:
+            regime = (json.loads(r["prompt_snapshot"] or "{}") or {}).get("regime") or {}
+        except ValueError:
+            regime = {}
+        model = "/".join(x for x in (regime.get("provider"), regime.get("model_id")) if x)
+        if model and (regime.get("n_samples") or 1) > 1:
+            model += f" ×{regime['n_samples']}"
+        mark = "✗ not acted on" if r["dismissed_at"] else ""
+        click.echo(
+            f"\n  {r['timestamp'][:16].replace('T', ' ')}  {model or '—':<28} {mark}"
+        )
+        click.echo(f"    {r['run_id']}")
+        click.echo(f"    {sum(1 for a in acts if a.get('side') == 'buy')} buy · "
+                   f"{sum(1 for a in acts if a.get('side') == 'sell')} sell · "
+                   f"{sum(1 for a in acts if a.get('side') == 'hold')} hold")
+        if r["dismissed_reason"]:
+            click.echo(f"    reason: {r['dismissed_reason']}")
+    click.echo("\n  Set one aside with: fund paper-dismiss SLUG RUN_ID\n")
+
+
+@cli.command("paper-dismiss")
+@click.argument("slug")
+@click.argument("run_id")
+@click.option("--reason", default="", help="Why you didn't act on it.")
+@click.option("--restore", is_flag=True, help="Undo a dismissal.")
+@click.option("--purge", is_flag=True,
+              help="Erase it and its outcomes instead. For a run that should never "
+                   "have been recorded — not one you merely disagree with.")
+@click.option("--yes", is_flag=True, help="Skip the confirmation on --purge.")
+def paper_dismiss(slug: str, run_id: str, reason: str, restore: bool,
+                  purge: bool, yes: bool):
+    """Mark a decision as one you did not act on.
+
+    It stops being the book's current decision and is labelled in the history,
+    but stays on file and keeps being scored — so in four weeks you can see
+    whether declining it was right, and two models' calls on the same book stay
+    comparable. That is why this is not a delete."""
+    from fundmgr import paper
+
+    try:
+        _meta, store = paper.open_portfolio(slug)
+    except KeyError:
+        click.echo(f"No paper portfolio '{slug}'. See 'fund paper-list'.", err=True)
+        sys.exit(1)
+
+    if purge:
+        if restore:
+            click.echo("✗ --purge and --restore do opposite things.", err=True)
+            sys.exit(1)
+        if not yes and not click.confirm(
+                f"Erase {run_id} and every outcome seeded from it? This destroys the "
+                f"record, including any thesis verdict already reached"):
+            click.echo("Left alone.")
+            return
+        if store.purge_recommendation(run_id):
+            click.echo(f"✓ {run_id} erased.")
+        else:
+            click.echo(f"✗ No decision '{run_id}' in {slug}.", err=True)
+            sys.exit(1)
+        return
+
+    if restore:
+        if store.restore_recommendation(run_id):
+            click.echo(f"✓ {run_id} restored — it is the current decision again.")
+        else:
+            click.echo(f"✗ {run_id} was not dismissed.", err=True)
+            sys.exit(1)
+        return
+
+    if store.dismiss_recommendation(run_id, reason):
+        click.echo(f"✓ {run_id} marked as not acted on.")
+        click.echo("  It stays on file and is still scored — see 'fund paper-decisions "
+                   f"{slug}'.")
+    else:
+        click.echo(f"✗ No decision '{run_id}' in {slug}, or it is already dismissed.",
+                   err=True)
+        sys.exit(1)
+
+
 @cli.command("paper-scopes")
 @click.option("--config", "config_name", default=None,
               help="Source profile whose universe to list (default: config_global.yaml).")

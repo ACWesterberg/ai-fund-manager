@@ -28,7 +28,9 @@ What the model is shown: the sleeve's own standing work — kill criterion and
 numeric kill rules, logged kill signals and the last judged verdict, the add
 criterion, target and review prices, the add-signal gates as computed by
 `addsignal` (the same numbers the dashboard's Add-signals panel shows), review
-horizons, plan weights and drift. All of it is evidence, none of it binding: a
+horizons, plan weights and drift — plus what was previously claimed about each
+name and whether `thesis_check` found the claim survived, and the book's own
+held/broke against beat/lagged record as calibration. All of it is evidence, none of it binding: a
 target price the model disagrees with is a number it must argue against in the
 thesis, not a gate that silently blocks a trade. Guardrails remain the only
 hard constraint.
@@ -49,7 +51,9 @@ from functools import lru_cache
 
 from fundmgr.config import AppConfig, UniverseTicker, get_enabled_tickers
 from fundmgr.data.fundamentals import apply_to_features
-from fundmgr.data.news import attach_sentiment_to_features
+from fundmgr.data.news import (
+    attach_sentiment_to_features, fetch_news, score_and_cache_sentiment,
+)
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
 from fundmgr.data.universe_selection import tickers_for_feature_build
@@ -219,6 +223,79 @@ def _add_rows(store: Store) -> dict[str, dict]:
         return {}
 
 
+_VERDICT_LABEL = {
+    "held": "HELD",
+    "broke": "BROKE",
+    "unresolved": "unresolved (the evidence did not settle it)",
+}
+
+
+def _thesis_history(store: Store, ticker: str, limit: int = 2) -> list[str]:
+    """What was previously claimed about this name, and whether it survived.
+
+    `thesis_check` audits a matured decision's *claim* against the news in its
+    holding window, deliberately without seeing the return — so a verdict here
+    is independent of whether the position made money. That makes it the one
+    piece of history worth putting in front of a fresh decision: a thesis that
+    broke twice on the same name is a pattern, and one that held while the
+    position lagged says the read was right and the sizing or timing was not.
+    """
+    out = []
+    for d in store.get_decisions_for_ticker(ticker, limit=limit):
+        thesis = (d.get("thesis") or "").strip()
+        if not thesis:
+            continue
+        when = str(d.get("timestamp") or "")[:10]
+        conf = d.get("confidence")
+        head = (f"      past call {when} {str(d.get('action', '')).upper()}"
+                + (f" (conf {conf:.2f})" if conf is not None else "") + ": ")
+        out.append(head + f"\"{thesis[:200]}\"")
+        verdict = d.get("thesis_verdict")
+        if verdict:
+            label = _VERDICT_LABEL.get(verdict, verdict)
+            evidence = (d.get("thesis_evidence") or "").strip()
+            out.append(f"          → thesis {label}"
+                       + (f" — {evidence[:200]}" if evidence else ""))
+    return out
+
+
+def _thesis_record(store: Store) -> list[str]:
+    """The book's own thesis-vs-return cross-tab, as calibration.
+
+    Held-and-lagged and broke-and-beat are the cells that matter: judged on
+    return alone the second is indistinguishable from skill, and a model that
+    cannot see the split will keep learning the wrong lesson from it.
+    """
+    try:
+        stats = store.get_thesis_stats()
+    except Exception:
+        return []
+    if not stats.get("n"):
+        return []
+
+    cells = stats["cells"]
+    parts = []
+    for verdict in ("held", "broke", "unresolved"):
+        cell = cells.get(verdict)
+        if cell:
+            parts.append(f"{verdict} {cell['beat']} beat / {cell['lagged']} lagged")
+    lines = [
+        "### This book's own thesis record (audited without sight of the return)",
+        "  " + " · ".join(parts),
+    ]
+    rate = stats.get("hold_rate")
+    if rate is not None:
+        lines.append(f"  Reasoning held on {rate*100:.0f}% of {stats['resolved']} "
+                     f"resolved calls.")
+    lines += [
+        "  A thesis that held while the position lagged was a sizing or timing "
+        "error, not a bad read; one that broke while the position won was luck. "
+        "Weigh your own confidence accordingly.",
+        "",
+    ]
+    return lines
+
+
 def _add_lines(row: dict) -> list[str]:
     """One position's add plan and where each gate currently stands.
 
@@ -314,6 +391,7 @@ def _sleeve_block(meta: dict, store: Store, snap: PortfolioSnapshot) -> str:
             for hit in _kill_hits(store, ticker):
                 lines.append(f"      ⚠ KILL SIGNAL LOGGED — {hit}")
             lines += _add_lines(adds.get(ticker) or {})
+            lines += _thesis_history(store, ticker)
             horizon = horizons.get(ticker) or {}
             if horizon.get("review_date"):
                 lines.append(f"      review horizon: {horizon['review_date']}"
@@ -334,6 +412,8 @@ def _sleeve_block(meta: dict, store: Store, snap: PortfolioSnapshot) -> str:
             "",
         ]
 
+    lines += _thesis_record(store)
+
     if capex.get("trigger"):
         status = store.get_meta("paper_capex_status") or "none"
         lines += [
@@ -353,7 +433,11 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
         "Decide what to do with this sleeve *now*. Three jobs, one JSON answer:\n"
         "  1. Every position above: hold, trim (sell to a lower target weight) or "
         "exit (sell to 0). A kill signal logged against a name is a strong prior to "
-        "exit, but you own the call — say so in the thesis either way.\n"
+        "exit, but you own the call — say so in the thesis either way. Where a past "
+        "thesis on the name was audited, that verdict is about the claim and not the "
+        "return: a thesis that BROKE is reason to distrust a restatement of it, and "
+        "one that HELD while the position lagged argues for sizing or patience "
+        "rather than for exiting.\n"
         "  2. Adding to a name already held, where its add criterion, target price "
         "and gates support it. An ADD or STRONG-ADD signal is a prior in favour, a "
         "HOLD one against, and a stale target price means the valuation gate could "
@@ -463,6 +547,36 @@ class _SellsOnly:
         self.actions = actions
 
 
+def _cache_news_for_held(cfg: AppConfig, store: Store, working: list[UniverseTicker],
+                         must_have: set[str], enabled: bool) -> None:
+    """Cache news for the sleeve's own names, held and planned.
+
+    Two things need it and neither works without it. Sentiment on a held name is
+    part of deciding whether to keep it — and a sleeve store, unlike a fund's,
+    is never filled by a weekly run. More importantly the thesis audit
+    (`thesis_check`, run later by `fund paper-track`) judges a decision's claim
+    against the news published in its holding window, read from this same cache:
+    with nothing cached it reports "no evidence" forever and no verdict is ever
+    reached, so the review would show a thesis record that could never fill in.
+
+    Held names only — a few dozen at most, unlike the candidate pool — and never
+    fatal: a review without sentiment is still a review.
+    """
+    if not enabled or not cfg.data.news_feeds:
+        return
+    ours = [t for t in working if t.yahoo_ticker in must_have]
+    if not ours:
+        return
+    try:
+        ticker_news = fetch_news(cfg.data.news_feeds, ours, max_age_hours=72)
+        if ticker_news and cfg.data.sentiment.enabled:
+            score_and_cache_sentiment(
+                ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device,
+            )
+    except Exception:
+        pass
+
+
 # ── Review ────────────────────────────────────────────────────────────────────
 
 def _sek_snapshot(meta: dict, store: Store) -> PortfolioSnapshot:
@@ -565,6 +679,7 @@ def review_sleeve(
         feature_tickers, store, cfg, {t.yahoo_ticker: True for t in feature_tickers},
     )
     apply_to_features(features, store)
+    _cache_news_for_held(cfg, store, working, must_have, refresh_prices)
     attach_sentiment_to_features(
         features, store,
         since_date=(datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d"),

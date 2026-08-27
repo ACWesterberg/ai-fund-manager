@@ -824,14 +824,21 @@ class Store:
     def get_decisions_for_ticker(self, ticker: str, limit: int = 3) -> list[dict]:
         """Most recent decisions on a ticker (newest first), for stop-loss review.
 
-        Returns dicts: {timestamp, action, confidence, thesis, price_at_decision}.
+        Returns dicts: {timestamp, action, confidence, thesis, price_at_decision,
+        source, thesis_verdict, thesis_evidence}.
+
+        The verdict travels with the thesis it judged: a caller showing what was
+        claimed about a name should be able to show whether the claim survived,
+        and joining that back on afterwards is how the two drift apart.
         """
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT COALESCE(do.decision_date, r.timestamp) AS timestamp, "
                 "do.action AS action, do.confidence AS confidence, "
                 "do.thesis AS thesis, do.price_at_decision AS price_at_decision, "
-                "do.source AS source "
+                "do.source AS source, "
+                "do.thesis_verdict AS thesis_verdict, "
+                "do.thesis_evidence AS thesis_evidence "
                 "FROM decision_outcomes do "
                 "LEFT JOIN recommendations r ON do.run_id = r.run_id "
                 "WHERE do.ticker = ? ORDER BY timestamp DESC LIMIT ?",

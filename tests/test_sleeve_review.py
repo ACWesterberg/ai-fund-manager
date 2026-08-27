@@ -78,6 +78,11 @@ risk:
   stale_after_days: 5
 screener:
   top_n: 10
+data:
+  news_feeds:
+    - "https://example.invalid/news.rss"
+  sentiment:
+    enabled: true
 """)
 
     source = Store(db_path)
@@ -108,6 +113,10 @@ screener:
         return {t.yahoo_ticker: True for t in tickers}
 
     monkeypatch.setattr(sleeve_review, "fetch_and_cache_prices", fake_fetch)
+    # News is stubbed off by default so no test can reach a feed; the tests that
+    # care about news caching re-patch these two with their own doubles.
+    monkeypatch.setattr(sleeve_review, "fetch_news", lambda *a, **k: {})
+    monkeypatch.setattr(sleeve_review, "score_and_cache_sentiment", lambda *a, **k: None)
     yield {"config_dir": config_dir, "source": source}
     sleeve_review.list_scopes.cache_clear()
 
@@ -506,6 +515,116 @@ def test_sleeve_context_precedes_the_candidate_dump(env, sleeve, monkeypatch):
 
     user = capture["user"]
     assert user.index("## This Sleeve") < user.index("## Universe") < user.index("## Your Task")
+
+
+def _seed_outcome(store, ticker, thesis, *, action="buy", verdict=None,
+                  evidence="", when="2026-06-01"):
+    """A matured decision on a name, optionally with a thesis-check verdict."""
+    with store._conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO decision_outcomes (run_id, ticker, action, confidence, "
+            "thesis, decision_date, outperformed) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (f"seed-{ticker}-{when}", ticker, action, 0.8, thesis, when, 1),
+        )
+        outcome_id = cur.lastrowid
+    if verdict:
+        store.set_thesis_verdict(outcome_id, verdict, evidence)
+    return outcome_id
+
+
+def test_past_thesis_and_its_verdict_reach_the_prompt(env, sleeve, monkeypatch):
+    """thesis_check judges the claim without seeing the return, which is what
+    makes its verdict worth putting in front of the next decision on that name."""
+    _meta, store = paper.open_portfolio(sleeve)
+    _seed_outcome(store, "ALFA.ST", "Margins expand as the new plant ramps",
+                  verdict="broke", evidence="Q2 guided gross margin down 600bps")
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "Margins expand as the new plant ramps" in user
+    assert "thesis BROKE" in user
+    assert "Q2 guided gross margin down 600bps" in user
+
+
+def test_an_unaudited_past_thesis_shows_without_a_verdict(env, sleeve, monkeypatch):
+    """No verdict yet is not the same as 'unresolved' — the claim still belongs
+    in front of the model, but nothing may be asserted about how it fared."""
+    _meta, store = paper.open_portfolio(sleeve)
+    _seed_outcome(store, "ALFA.ST", "Order book converts within two quarters")
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "Order book converts within two quarters" in user
+    assert "thesis HELD" not in user
+    assert "thesis BROKE" not in user
+
+
+def test_book_thesis_record_reaches_the_prompt(env, sleeve, monkeypatch):
+    """The held-and-lagged / broke-and-beat split is the calibration a model
+    judging only on returns can never see."""
+    _meta, store = paper.open_portfolio(sleeve)
+    _seed_outcome(store, "ALFA.ST", "t1", verdict="held", when="2026-05-01")
+    _seed_outcome(store, "GAMMA.ST", "t2", verdict="broke", when="2026-05-02")
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "This book's own thesis record" in user
+    assert "held 1 beat / 0 lagged" in user
+    assert "broke 1 beat / 0 lagged" in user
+    assert "Reasoning held on 50% of 2 resolved calls." in user
+
+
+def test_thesis_record_is_omitted_when_nothing_has_been_audited(env, sleeve, monkeypatch):
+    """An empty cross-tab is noise, and a 0% hold rate would read as a finding."""
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    assert "This book's own thesis record" not in capture["user"]
+
+
+def test_review_caches_news_for_held_names_so_the_audit_has_evidence(env, sleeve, monkeypatch):
+    """thesis_check reads its evidence from the book's own news cache. A sleeve
+    store is never filled by a weekly run, so without this the audit reports
+    'no evidence' forever and no verdict is ever reached."""
+    seen = {}
+
+    def fake_fetch_news(feeds, tickers, **kwargs):
+        seen["tickers"] = [t.yahoo_ticker for t in tickers]
+        return {t.yahoo_ticker: [{"headline": "h"}] for t in tickers}
+
+    monkeypatch.setattr(sleeve_review, "fetch_news", fake_fetch_news)
+    monkeypatch.setattr(sleeve_review, "score_and_cache_sentiment",
+                        lambda *a, **k: seen.setdefault("scored", True))
+
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    # Held and planned names only — never the whole candidate pool.
+    assert set(seen["tickers"]) == {"ALFA.ST", "GAMMA.ST"}
+    assert seen.get("scored") is True
+
+
+def test_review_survives_a_failing_news_fetch(env, sleeve, monkeypatch):
+    monkeypatch.setattr(sleeve_review, "fetch_news",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("feed down")))
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")])
+    assert sleeve_review.review_sleeve(sleeve, include_macro=False)["hold_count"] == 1
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────

@@ -392,6 +392,122 @@ def test_kill_signal_reaches_the_prompt(env, sleeve, monkeypatch):
     assert "Gross margin guided down 600bps" in capture["user"]
 
 
+def test_add_criterion_and_target_price_reach_the_prompt(env, sleeve, monkeypatch):
+    """The operator's add-side work — add criterion, target price, gates — is
+    the evidence the review needs to decide whether to add to a name it holds.
+    Withholding it while asking for add recommendations is the bug this fixes."""
+    from fundmgr import addsignal, watchplan
+
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_add_text(store, "ALFA.ST", "ARR still compounding above 25%")
+    addsignal.set_plan(store, "ALFA.ST", book="A/B", max_weight_pct=20,
+                       tranche_pct=3, target_price=180, review_price=120)
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "ARR still compounding above 25%" in user     # the add criterion
+    assert "target price: 180" in user
+    assert "review price" in user
+    assert "book A/B" in user
+    assert "max weight 20.0%" in user
+
+
+def test_numeric_kill_rules_reach_the_prompt(env, sleeve, monkeypatch):
+    """The kill criterion's prose was already shown; the thresholds behind it
+    were not, so the model saw 'margins collapse' but never '-20% drawdown'."""
+    from fundmgr import watchplan
+
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_position_plan(
+        store, "ALFA.ST", max_drawdown_pct=20.0, price_below=75.0, currency="SEK",
+        fundamentals=[{"metric": "gross_margin", "op": "below", "value": 45, "quarters": 2}],
+    )
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "drawdown past 20%" in user
+    assert "price below 75.00 SEK" in user
+    assert "gross_margin below 45 for 2 consecutive quarters" in user
+
+
+def test_the_operators_levels_are_evidence_not_instructions(env, sleeve, monkeypatch):
+    """The model is told it may disagree — and told to justify it when it does.
+    A binding gate would be a different product; this one argues."""
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "not instructions you must follow" in user.replace("\n", " ")
+    assert "Where you disagree" in user
+    assert "give your reason" in user
+    # No language that turns a stored level into a hard constraint.
+    for forbidden in ("you must not buy", "is prohibited", "never buy"):
+        assert forbidden not in user.lower()
+
+
+def test_a_stale_target_price_is_flagged_as_unevaluable(env, sleeve, monkeypatch):
+    """A target set before a material event can't price the valuation gate. The
+    model must see that as missing evidence, not as a failed gate — otherwise a
+    stale number silently reads as 'too expensive'."""
+    from fundmgr import addsignal
+
+    from datetime import date
+
+    _meta, store = paper.open_portfolio(sleeve)
+    addsignal.set_plan(store, "ALFA.ST", target_price=180, review_price=120,
+                       max_weight_pct=20, tranche_pct=3,
+                       today=date.today() - timedelta(days=7))
+    # An earnings print lands after the target was set — addsignal's staleness rule.
+    store.set_meta(f"paper_earnhint:ALFA.ST:{date.today().isoformat()}",
+                   "Q3 report published")
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    assert "STALE" in capture["user"]
+    assert "missing evidence" in capture["user"]
+
+
+def test_review_survives_an_unusable_add_signal_layer(env, sleeve, monkeypatch):
+    """Add signals reach for prices and fundamentals. If that fails the review
+    is still worth having — it must degrade, not abort."""
+    monkeypatch.setattr("fundmgr.addsignal.evaluate_all",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    assert result["hold_count"] == 1
+    assert "margins collapse" in capture["user"]   # the kill criterion still lands
+
+
+def test_sleeve_context_precedes_the_candidate_dump(env, sleeve, monkeypatch):
+    """The book's own criteria belong with the portfolio state. Trailing them
+    after dozens of candidate feature blocks buries the evidence the operator
+    actually wrote."""
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert user.index("## This Sleeve") < user.index("## Universe") < user.index("## Your Task")
+
+
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 def test_review_is_saved_as_the_sleeves_latest_decision(env, sleeve, monkeypatch):

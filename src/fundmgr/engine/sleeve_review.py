@@ -24,6 +24,15 @@ Two things a sleeve doesn't have, and where they come from:
     a single-country review covers its market properly while a global one leans
     on whatever the source profile's weekly rotation has recently refreshed.
 
+What the model is shown: the sleeve's own standing work — kill criterion and
+numeric kill rules, logged kill signals and the last judged verdict, the add
+criterion, target and review prices, the add-signal gates as computed by
+`addsignal` (the same numbers the dashboard's Add-signals panel shows), review
+horizons, plan weights and drift. All of it is evidence, none of it binding: a
+target price the model disagrees with is a number it must argue against in the
+thesis, not a gate that silently blocks a trade. Guardrails remain the only
+hard constraint.
+
 Funding model: the sleeve's NAV is fixed — no new capital. A buy has to be paid
 for out of the book, so guardrails see a snapshot with the run's own sells
 already settled (`_fund_from_sells`). That is what makes "sell A, add B" pass
@@ -169,16 +178,102 @@ def _kill_hits(store: Store, ticker: str) -> list[str]:
     return [f"{r['key'].rsplit(':', 1)[1]}: {r['value']}" for r in rows]
 
 
+def _kill_verdict(store: Store, ticker: str) -> dict:
+    """The judge's most recent read of one kill criterion, or {}."""
+    try:
+        return json.loads(store.get_meta(f"paper_killverdict:{ticker}") or "{}")
+    except (ValueError, TypeError):
+        return {}
+
+
+def _rule_line(rule: dict) -> str:
+    """One position's numeric kill rule, as the thresholds actually stored."""
+    parts = []
+    if rule.get("max_drawdown_pct"):
+        anchor = rule.get("anchor_price_sek")
+        anchored = f" from {anchor:,.0f} SEK ({rule.get('anchor_date', '?')})" if anchor else ""
+        parts.append(f"drawdown past {rule['max_drawdown_pct']:.0f}%{anchored}")
+    if rule.get("price_below"):
+        parts.append(f"price below {rule['price_below']:,.2f} {rule.get('currency', '')}".strip())
+    if rule.get("price_above"):
+        parts.append(f"price above {rule['price_above']:,.2f} {rule.get('currency', '')}".strip())
+    for f in rule.get("fundamentals") or []:
+        if not isinstance(f, dict) or not f.get("metric"):
+            continue
+        quarters = int(f.get("quarters") or 1)
+        span = f" for {quarters} consecutive quarters" if quarters > 1 else ""
+        value = f.get("value")
+        shown = f"{value:g}" if isinstance(value, (int, float)) else str(value or "")
+        parts.append(f"{f['metric']} {f.get('op', '')} {shown}{span}".strip())
+    return " · ".join(parts)
+
+
+def _add_rows(store: Store) -> dict[str, dict]:
+    """Add-signal assessment per ticker — the same computation the dashboard's
+    Add-signals panel renders. Never fatal: a review is still worth having
+    without it, and this reaches out to prices and fundamentals."""
+    try:
+        from fundmgr import addsignal
+        return {r["ticker"]: r for r in addsignal.evaluate_all(store)}
+    except Exception:
+        return {}
+
+
+def _add_lines(row: dict) -> list[str]:
+    """One position's add plan and where each gate currently stands.
+
+    The gates are reported as computed, pass and fail alike — a HOLD whose only
+    blocker is a stale target is a different situation from one the valuation
+    genuinely rejects, and the model can only tell those apart if it sees which
+    gate stopped it.
+    """
+    out = []
+    if row.get("add_criterion"):
+        out.append(f"      add criterion: {row['add_criterion']}")
+    if row.get("target_price"):
+        stale = " ⚠ STALE — a material event postdates it" if row.get("valuation_status") == "stale" else ""
+        out.append(f"      target price: {row['target_price']:,.2f} "
+                   f"(set {row.get('target_set_at') or '?'}){stale}")
+    if row.get("expected_annual_return") is not None:
+        out.append(f"      implied return: {row['expected_annual_return']:.0f}%/yr over "
+                   f"{row.get('months_left') or 0:.0f}m — gate {row.get('return_gate', 0):.0f}% "
+                   f"({'clears' if row.get('valuation_ok') else 'does not clear'})")
+    if row.get("dislocation_pct") is not None:
+        out.append(f"      vs review price {row.get('review_price') or 0:,.2f}: "
+                   f"{row['dislocation_pct']:+.1f}% — gate {row.get('dislocation_gate', 0):+.0f}% "
+                   f"({'dislocated' if row.get('dislocated') else 'not dislocated'})")
+    if row.get("proof_status"):
+        # proof_reason usually already names the confirmation date; only fall
+        # back to the raw stamp when it doesn't, so the line never says it twice.
+        detail = row.get("proof_reason") or (
+            f"confirmed {row['proof_confirmed_at']}" if row.get("proof_confirmed_at") else "")
+        out.append(f"      proof: {row['proof_status']}" + (f" — {detail}" if detail else ""))
+    if row.get("max_weight_pct"):
+        out.append(f"      add plan: book {row.get('book', '?')}, "
+                   f"max weight {row['max_weight_pct']:.1f}%, "
+                   f"tranche +{row.get('tranche_pct') or 0:.1f}pp, "
+                   f"room {row.get('weight_room') or 0:.1f}pp")
+    if row.get("state"):
+        out.append(f"      ADD SIGNAL: {row['state'].upper()}"
+                   + (f" — {row['why']}" if row.get("why") else ""))
+    return out
+
+
 def _sleeve_block(meta: dict, store: Store, snap: PortfolioSnapshot) -> str:
     """The monitoring state the daily watches alert on, as prompt context.
 
     Same stored metadata the dashboard's Watch panel renders, so what the model
     reasons over and what you see on the page can't drift apart.
     """
+    from fundmgr import watchplan
+
     targets = json.loads(store.get_meta("paper_target_weights") or "{}")
-    kills = json.loads(store.get_meta("paper_kill_criteria") or "{}")
+    kills = watchplan.get_kill_text(store)
     notes = json.loads(store.get_meta("paper_position_notes") or "{}")
     capex = json.loads(store.get_meta("paper_capex_kill") or "{}")
+    rules = watchplan.get_kill_rules(store)
+    horizons = watchplan.get_horizons(store)
+    adds = _add_rows(store)
 
     lines = [
         f"## This Sleeve — {meta['name']}",
@@ -192,10 +287,10 @@ def _sleeve_block(meta: dict, store: Store, snap: PortfolioSnapshot) -> str:
     if meta.get("base_prompt"):
         lines += ["### Original sleeve mandate", meta["base_prompt"].strip(), ""]
 
-    if targets or kills:
-        lines.append("### Plan, live weight and kill lines")
+    if targets or kills or adds:
+        lines.append("### Plan, live weight, and the criteria you set for each name")
         held = {p.ticker: p for p in snap.positions if p.shares > 0}
-        for ticker in sorted(set(targets) | set(kills) | set(held)):
+        for ticker in sorted(set(targets) | set(kills) | set(held) | set(adds)):
             target = targets.get(ticker)
             weight = snap.weight_pct(ticker) if ticker in held else None
             parts = [f"  {ticker:<14}"]
@@ -207,15 +302,37 @@ def _sleeve_block(meta: dict, store: Store, snap: PortfolioSnapshot) -> str:
                     parts.append(f"⚠ drift {drift:.2f}× target")
             lines.append("  ".join(parts))
             if kills.get(ticker):
-                lines.append(f"      kill: {kills[ticker]}")
+                lines.append(f"      kill criterion: {kills[ticker]}")
+            rule_text = _rule_line(rules.get(ticker) or {})
+            if rule_text:
+                lines.append(f"      kill rule: {rule_text}")
+            verdict = _kill_verdict(store, ticker)
+            if verdict.get("verdict"):
+                lines.append(f"      last kill check ({verdict.get('date', '?')}): "
+                             f"{verdict['verdict']}"
+                             + (f" — {verdict['reason']}" if verdict.get("reason") else ""))
             for hit in _kill_hits(store, ticker):
                 lines.append(f"      ⚠ KILL SIGNAL LOGGED — {hit}")
+            lines += _add_lines(adds.get(ticker) or {})
+            horizon = horizons.get(ticker) or {}
+            if horizon.get("review_date"):
+                lines.append(f"      review horizon: {horizon['review_date']}"
+                             + (f" — {horizon['label']}" if horizon.get("label") else ""))
             if notes.get(ticker, {}).get("cluster"):
                 lines.append(f"      cluster: {notes[ticker]['cluster']}")
             nxt = notes.get(ticker, {}).get("next_earnings")
             if nxt:
                 lines.append(f"      next earnings: {nxt}")
         lines.append("")
+        lines += [
+            "These criteria, target prices and add signals are the operator's own "
+            "standing work, computed the same way the dashboard computes them — not "
+            "instructions you must follow. Use them as evidence. Where you disagree "
+            "with a target price, a gate, or an ADD/HOLD signal, say so explicitly in "
+            "the thesis and give your reason; an unexplained departure from a level "
+            "the operator set is worse than no recommendation.",
+            "",
+        ]
 
     if capex.get("trigger"):
         status = store.get_meta("paper_capex_status") or "none"
@@ -233,12 +350,18 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
     turnover = snap.nav_sek * cfg.risk.max_turnover_pct / 100
     return (
         "## Your Task\n"
-        "Decide what to do with this sleeve *now*. Two jobs, one JSON answer:\n"
+        "Decide what to do with this sleeve *now*. Three jobs, one JSON answer:\n"
         "  1. Every position above: hold, trim (sell to a lower target weight) or "
         "exit (sell to 0). A kill signal logged against a name is a strong prior to "
         "exit, but you own the call — say so in the thesis either way.\n"
-        f"  2. Add-ons from the candidate universe below ({scope_label}). A new name "
-        "must earn its place against what it displaces.\n\n"
+        "  2. Adding to a name already held, where its add criterion, target price "
+        "and gates support it. An ADD or STRONG-ADD signal is a prior in favour, a "
+        "HOLD one against, and a stale target price means the valuation gate could "
+        "not be evaluated at all rather than that it failed — treat that as missing "
+        "evidence, not as a rejection.\n"
+        f"  3. Add-ons from the candidate universe below ({scope_label}). A new name "
+        "must earn its place against what it displaces — including against adding to "
+        "a name you already own and already understand.\n\n"
         f"There is NO new capital. NAV is {snap.nav_sek:,.0f} SEK and stays there, so "
         f"every buy is funded from cash on hand ({snap.cash_sek:,.0f} SEK) plus the "
         "proceeds of the sells you recommend in this same run. Recommending a buy "

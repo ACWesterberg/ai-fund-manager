@@ -356,11 +356,14 @@ def build_prompt(
         sections.append(learnings_block)
         sections.append("")
 
-    sections.append(universe)
-
+    # Before the universe, not after it: a caller's own context is about the
+    # book being decided on, and belongs with the portfolio state rather than
+    # trailing a candidate dump that can run to dozens of feature blocks.
     if extra_context:
-        sections.append("")
         sections.append(extra_context)
+        sections.append("")
+
+    sections.append(universe)
 
     sections.append(
         task_override or (

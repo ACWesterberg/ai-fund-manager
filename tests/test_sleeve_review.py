@@ -6,6 +6,7 @@ The LLM and every market fetch are stubbed — nothing here touches the network.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -962,6 +963,107 @@ def test_web_review_accepts_risk_overrides(client, sleeve, monkeypatch):
             break
     assert job["status"] == "done", job.get("error")
     assert job["result"]["risk"]["max_turnover_pct"] == 45
+
+
+# ── Seeing the decision afterwards ────────────────────────────────────────────
+
+def _run_a_review(sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="hold", target_weight_pct=50, sek_estimate=0,
+               confidence=0.6, thesis="thesis intact, keep it"),
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=20, sek_estimate=5_000,
+               confidence=0.8, thesis="new name"),
+    ])
+    return sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+
+def test_the_book_has_its_own_decision_history(client, sleeve, monkeypatch):
+    """The dashboard shows one decision. Without a history for the book there
+    was nowhere to see any other, and the 'All decisions' link led to the main
+    fund's — so a review that saved perfectly still looked lost."""
+    result = _run_a_review(sleeve, monkeypatch)
+
+    r = client.get(f"/live/{sleeve}/history")
+    assert r.status_code == 200
+    assert result["id"] in r.text          # the review
+    assert "REVIEW" in r.text
+    assert "PLAN" in r.text                # and the import it started from
+    assert "new name" in r.text
+
+
+def test_history_shows_holds_not_just_trades(client, sleeve, monkeypatch):
+    """A review that decided to keep everything decided something."""
+    _run_a_review(sleeve, monkeypatch)
+    r = client.get(f"/live/{sleeve}/history")
+    assert "thesis intact, keep it" in r.text
+    assert "HOLD" in r.text
+
+
+def test_the_dashboard_links_to_this_book_not_the_main_fund(client, sleeve):
+    """The "All decisions" link used to send you to the Nordic fund's history,
+    which is the most direct way to conclude a sleeve review vanished."""
+    r = client.get(f"/live/{sleeve}")
+    panel = r.text[r.text.index("Last Decision"):]
+    assert f'href="/live/{sleeve}/history"' in panel
+    assert 'href="/history"' not in panel
+
+
+def test_the_latest_decision_panel_shows_holds(client, sleeve, monkeypatch):
+    _run_a_review(sleeve, monkeypatch)
+    r = client.get(f"/live/{sleeve}")
+    assert "thesis intact, keep it" in r.text
+
+
+def test_history_of_an_unknown_book_is_404(client, env):
+    assert client.get("/live/nope/history").status_code == 404
+
+
+def test_an_unrenderable_decision_does_not_read_as_no_decision(client, sleeve):
+    """A decision on disk that cannot be parsed used to be swallowed, leaving
+    'No decisions yet' — indistinguishable from a review that never ran."""
+    from fundmgr.state.models import RecommendationLog
+
+    _meta, store = paper.open_portfolio(sleeve)
+    store.save_recommendation(RecommendationLog(
+        run_id="review-broken", timestamp=datetime.utcnow(),
+        prompt_snapshot="{}", llm_response="not json at all",
+        guardrail_log="{}", actions_json="[]",
+    ))
+
+    r = client.get(f"/live/{sleeve}")
+    assert "could not be rendered" in r.text
+    assert "No decisions yet" not in r.text
+
+
+def test_the_page_reattaches_to_a_review_left_running(client, sleeve):
+    """A review outlives the page that started it, so a reload must pick the
+    thread back up instead of showing a blank form over a run in progress."""
+    from fundmgr.web import paper as web_paper
+
+    web_paper._review_job = {
+        "id": "abc123", "slug": sleeve, "status": "running", "params": {},
+        "result": None, "error": None, "started": time.time() - 42,
+    }
+    try:
+        r = client.get(f"/live/{sleeve}")
+        assert "abc123" in r.text
+        assert "already running" in r.text
+    finally:
+        web_paper._review_job = None
+
+
+def test_another_books_review_is_not_reattached(client, sleeve):
+    from fundmgr.web import paper as web_paper
+
+    web_paper._review_job = {
+        "id": "other", "slug": "someone-else", "status": "running", "params": {},
+        "result": None, "error": None, "started": time.time(),
+    }
+    try:
+        # No job to resume for this book, whatever another one is doing.
+        assert "const RESUME  = null;" in client.get(f"/live/{sleeve}").text
+    finally:
+        web_paper._review_job = None
 
 
 def test_unknown_review_job_is_404(client, sleeve):

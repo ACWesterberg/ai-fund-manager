@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Decisions — {{ book_name }}{% endblock %}
+{% block page_title %}Decision History{% endblock %}
+
+{% block content %}
+
+<div class="mb-5">
+  <h1 class="font-display text-2xl font-extrabold text-white tracking-tight">Decisions</h1>
+  <p class="text-sm text-slate-500 mt-1">
+    Every decision recorded for <b class="text-sky-400">{{ book_name }}</b>, newest first —
+    the plan it was imported with, and each review since. Holds are shown too: a review that
+    decided to keep everything is still a decision.
+  </p>
+</div>
+
+{% if recommendations %}
+<div class="space-y-4">
+  {% for r in recommendations %}
+  <section class="card">
+    <div class="card-header">
+      <div class="flex items-center gap-2 flex-wrap">
+        {% if r.is_review %}
+        <span class="badge" style="background:rgba(14,165,233,.15);color:#38bdf8">REVIEW</span>
+        {% else %}
+        <span class="badge" style="background:rgba(148,163,184,.15);color:#94a3b8">PLAN</span>
+        {% endif %}
+        <h2 class="card-title">{{ r.timestamp }}</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="badge badge-buy">{{ r.buys }} buy</span>
+        <span class="badge badge-sell">{{ r.sells }} sell</span>
+        <span class="badge badge-hold">{{ r.holds }} hold</span>
+      </div>
+    </div>
+
+    {% if r.market_summary %}
+    <p class="text-xs text-slate-400 leading-relaxed mb-3">{{ r.market_summary }}</p>
+    {% endif %}
+
+    {% if r.actions %}
+    <div class="overflow-x-auto -mx-1 mb-3">
+      <table class="data-table" style="font-size:11px">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th class="num">≈ SEK</th>
+            <th class="num">Weight</th>
+            <th class="num">Conf</th>
+            <th class="num">Stop</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in r.actions %}
+          <tr>
+            <td>
+              {% if a.side == "buy" %}<span class="badge badge-buy">BUY</span>
+              {% elif a.side == "sell" %}<span class="badge badge-sell">SELL</span>
+              {% else %}<span class="badge badge-hold">HOLD</span>{% endif %}
+              <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
+            </td>
+            <td class="num text-slate-300">{% if a.sek_estimate %}{{ "{:,.0f}".format(a.sek_estimate) }}{% else %}—{% endif %}</td>
+            <td class="num text-slate-300">{{ a.target_weight_pct }}%</td>
+            <td class="num text-slate-300">{{ "%.2f"|format(a.confidence) }}</td>
+            <td class="num text-slate-500">{% if a.stop_loss_pct %}-{{ a.stop_loss_pct }}%{% else %}—{% endif %}</td>
+          </tr>
+          {% if a.thesis %}
+          <tr>
+            <td colspan="5" class="text-slate-500" style="font-size:10px;padding-top:0;padding-bottom:6px">{{ a.thesis }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty" style="padding:12px 0">
+      Nothing was approved in this run — every proposed trade was rejected or dropped by the
+      guardrails. The run id below identifies it in the logs.
+    </p>
+    {% endif %}
+
+    {% if r.notes %}
+    <p class="text-xs text-slate-600 leading-relaxed italic mb-2">{{ r.notes }}</p>
+    {% endif %}
+    <p class="text-[10px] text-slate-700 font-mono">{{ r.run_id }}</p>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<section class="card">
+  <p class="empty">
+    No decisions recorded for this book yet.<br>
+    Use <b class="text-sky-400">Review this sleeve</b> on the dashboard, or run
+    <code class="text-slate-500">fund paper-review {{ sim_label }}</code>.
+  </p>
+</section>
+{% endif %}
+
+{% endblock %}

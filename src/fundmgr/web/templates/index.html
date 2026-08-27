@@ -820,6 +820,7 @@
 
 <script>
 (function () {
+  const details = document.getElementById('rv-details');
   const btn     = document.getElementById('rv-run');
   const status  = document.getElementById('rv-status');
   const out     = document.getElementById('rv-result');
@@ -828,6 +829,7 @@
   const ACTION  = {{ review.action|tojson }};
   const JOBS    = {{ review.jobs_url|tojson }};
   const SCOPES  = {{ review.scopes_url|tojson }};
+  const RESUME  = {{ review.job|tojson }};
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -918,6 +920,18 @@
   function fail(err) {
     btn.disabled = false;
     status.innerHTML = `<span class="text-red-400">✗ ${esc(err.message)}</span>`;
+  }
+
+  // A review outlives the page that started it. On load, pick the thread back
+  // up rather than showing a blank form over a run in progress — or over one
+  // that already failed, which is otherwise invisible entirely.
+  if (RESUME) {
+    details.open = true;
+    btn.disabled = RESUME.status === 'running';
+    status.textContent = RESUME.status === 'running'
+      ? `A review is already running (${Math.round(RESUME.elapsed_s)}s so far) — reattaching…`
+      : 'Showing the last review from this session.';
+    poll(RESUME.id, Date.now() - RESUME.elapsed_s * 1000).catch(fail);
   }
 
   btn.addEventListener('click', async () => {
@@ -1169,7 +1183,8 @@
             vol {{ stats.volatility_ann_pct }}% ann. &middot; fees {{ "{:.2f}".format(fees_paid) }} SEK
           </span>
         {% endif %}
-        <a href="/history" class="text-xs text-blue-400 hover:text-blue-300 transition-colors">All decisions →</a>
+        <a href="{% if book_prefix is defined %}{{ book_prefix }}/history{% else %}/history{% endif %}"
+           class="text-xs text-blue-400 hover:text-blue-300 transition-colors">All decisions →</a>
       </div>
     </div>
 
@@ -1200,7 +1215,8 @@
               <tr>
                 <td>
                   {% if a.side == "buy" %}<span class="badge badge-buy">BUY</span>
-                  {% else %}<span class="badge badge-sell">SELL</span>{% endif %}
+                  {% elif a.side == "sell" %}<span class="badge badge-sell">SELL</span>
+                  {% else %}<span class="badge badge-hold">HOLD</span>{% endif %}
                   <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
                 </td>
                 <td class="num text-slate-300">{{ "{:,.0f}".format(a.sek_estimate) }}</td>

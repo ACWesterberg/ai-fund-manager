@@ -1062,6 +1062,119 @@ def test_share_counts_reach_the_dashboard_and_history(client, sleeve, monkeypatc
         assert ">100<" in body.replace(" ", "").replace("\n", ""), url
 
 
+# ── Setting a decision aside ──────────────────────────────────────────────────
+
+def test_a_dismissed_decision_stops_being_the_current_one(env, sleeve, monkeypatch):
+    """Disagreeing with a call should not leave it standing as the book's
+    position, but the earlier one it replaced is still valid."""
+    _meta, store = paper.open_portfolio(sleeve)
+    plan = store.get_last_recommendation().run_id
+
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="sell", target_weight_pct=0,
+                                   sek_estimate=10_000, confidence=0.9, thesis="exit")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert store.get_last_recommendation().run_id == review
+    assert store.dismiss_recommendation(review, "too aggressive") is True
+    assert store.get_last_recommendation().run_id == plan
+
+
+def test_a_dismissed_decision_is_still_scored(env, sleeve, monkeypatch):
+    """The point of keeping it. A call you declined is still a call, and only
+    its outcome says whether declining it was right — delete it and you have
+    thrown away the one thing that would settle it."""
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="sell", target_weight_pct=0,
+                                   sek_estimate=10_000, confidence=0.9, thesis="exit")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    store.dismiss_recommendation(review)
+    with store._conn() as conn:
+        n = conn.execute("SELECT COUNT(*) c FROM decision_outcomes WHERE run_id = ?",
+                         (review,)).fetchone()["c"]
+    assert n == 1
+
+
+def test_dismissing_is_reversible(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="keep")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    store.dismiss_recommendation(review)
+    assert store.restore_recommendation(review) is True
+    assert store.get_last_recommendation().run_id == review
+    assert store.restore_recommendation(review) is False     # already restored
+
+
+def test_dismissing_an_unknown_or_dismissed_run_reports_it(env, sleeve):
+    _meta, store = paper.open_portfolio(sleeve)
+    plan = store.get_last_recommendation().run_id
+    assert store.dismiss_recommendation("no-such-run") is False
+    assert store.dismiss_recommendation(plan) is True
+    assert store.dismiss_recommendation(plan) is False        # not twice
+
+
+def test_purge_erases_the_decision_and_its_outcomes(env, sleeve, monkeypatch):
+    """The escape hatch for a run that should never have been recorded. It
+    destroys evidence, which is exactly why it is not what dismissing does."""
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="sell", target_weight_pct=0,
+                                   sek_estimate=10_000, confidence=0.9, thesis="exit")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert store.purge_recommendation(review) is True
+    with store._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM decision_outcomes WHERE run_id = ?",
+                            (review,)).fetchone()["c"] == 0
+    assert store.get_recommendation_by_run_id(review) is None
+    assert store.purge_recommendation(review) is False
+
+
+def test_history_labels_the_model_behind_each_decision(client, sleeve, monkeypatch):
+    """Two models on the same book are only comparable if you can see which
+    produced which."""
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="keep")])
+    sleeve_review.review_sleeve(sleeve, include_macro=False,
+                               provider="openai", model_id="gpt-5.6-sol")
+
+    assert "openai/gpt-5.6-sol" in client.get(f"/live/{sleeve}/history").text
+
+
+def test_history_can_dismiss_and_restore(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="keep")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    r = client.post(f"/live/{sleeve}/history/dismiss",
+                    data={"run_id": review, "reason": "disagree"}, follow_redirects=True)
+    assert r.status_code == 200
+    assert "NOT ACTED ON" in r.text
+    assert "disagree" in r.text
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert store.get_last_recommendation().run_id != review
+
+    r = client.post(f"/live/{sleeve}/history/dismiss",
+                    data={"run_id": review, "restore": "1"}, follow_redirects=True)
+    assert "NOT ACTED ON" not in r.text
+    _meta, store = paper.open_portfolio(sleeve)
+    assert store.get_last_recommendation().run_id == review
+
+
+def test_a_dismissed_decision_leaves_the_dashboard_panel(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [Action(ticker="BETA.ST", side="buy", target_weight_pct=20,
+                                   sek_estimate=5_000, confidence=0.8, thesis="a new name")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+    assert "a new name" in client.get(f"/live/{sleeve}").text
+
+    _meta, store = paper.open_portfolio(sleeve)
+    store.dismiss_recommendation(review)
+    assert "a new name" not in client.get(f"/live/{sleeve}").text
+
+
 # ── Seeing the decision afterwards ────────────────────────────────────────────
 
 def _run_a_review(sleeve, monkeypatch):

@@ -268,6 +268,12 @@ class Store:
             "ALTER TABLE decision_outcomes ADD COLUMN thesis_verdict TEXT",
             "ALTER TABLE decision_outcomes ADD COLUMN thesis_evidence TEXT",
             "ALTER TABLE decision_outcomes ADD COLUMN horizon_days INTEGER",
+            # A decision the operator looked at and chose not to act on. Kept
+            # rather than deleted: it is still a call the model made, it is still
+            # scored 28 days later, and that scoring is the only way to find out
+            # whether declining it was right.
+            "ALTER TABLE recommendations ADD COLUMN dismissed_at TEXT",
+            "ALTER TABLE recommendations ADD COLUMN dismissed_reason TEXT",
         ]:
             with self._conn() as conn:
                 try:
@@ -539,10 +545,52 @@ class Store:
                 ),
             )
 
+    def dismiss_recommendation(self, run_id: str, reason: str = "") -> bool:
+        """Mark a decision as one you did not act on. Returns False if unknown.
+
+        Deliberately not a delete. The outcome rows stay, so the call is still
+        graded on its own merits in four weeks — which is the whole point of
+        recording a decision you disagreed with, and the only way to compare two
+        models' calls after the fact. It stops being the book's current decision
+        and is labelled in the history; nothing else changes.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE recommendations SET dismissed_at = ?, dismissed_reason = ? "
+                "WHERE run_id = ? AND dismissed_at IS NULL",
+                (datetime.utcnow().isoformat(), reason.strip(), run_id),
+            )
+            return cur.rowcount > 0
+
+    def restore_recommendation(self, run_id: str) -> bool:
+        """Undo a dismissal. Returns False if it wasn't dismissed."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE recommendations SET dismissed_at = NULL, dismissed_reason = NULL "
+                "WHERE run_id = ? AND dismissed_at IS NOT NULL",
+                (run_id,),
+            )
+            return cur.rowcount > 0
+
+    def purge_recommendation(self, run_id: str) -> bool:
+        """Erase a decision and the outcome rows seeded from it.
+
+        For a run that should never have been recorded — one that saved garbage,
+        or a duplicate — not for one you merely disagree with. Dismissing keeps
+        the evidence; this destroys it, including any thesis verdict already
+        reached against it.
+        """
+        with self._conn() as conn:
+            conn.execute("DELETE FROM decision_outcomes WHERE run_id = ?", (run_id,))
+            cur = conn.execute("DELETE FROM recommendations WHERE run_id = ?", (run_id,))
+            return cur.rowcount > 0
+
     def get_last_recommendation(self) -> RecommendationLog | None:
+        """The book's current decision — the newest one not dismissed."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM recommendations ORDER BY timestamp DESC LIMIT 1"
+                "SELECT * FROM recommendations WHERE dismissed_at IS NULL "
+                "ORDER BY timestamp DESC LIMIT 1"
             ).fetchone()
         if not row:
             return None

@@ -1203,6 +1203,120 @@ def test_share_counts_reach_the_dashboard_and_history(client, sleeve, monkeypatc
         assert ">100<" in body.replace(" ", "").replace("\n", ""), url
 
 
+# ── Undoing what a decision wrote ─────────────────────────────────────────────
+
+def test_dismissing_rolls_back_the_plan_it_installed(env, sleeve, monkeypatch):
+    """A criterion or target price installed by a call you declined would keep
+    steering the daily watches. Dismissing has to unwind them."""
+    from fundmgr import addsignal, watchplan
+
+    _stub_llm(monkeypatch, [_new_name()])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "BETA.ST" in watchplan.get_kill_text(store)
+
+    ok, reverted = sleeve_review.dismiss(store, review, "not convinced")
+    assert ok and "BETA.ST" in reverted
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "BETA.ST" not in watchplan.get_kill_text(store)
+    assert "BETA.ST" not in watchplan.get_add_text(store)
+    assert addsignal.get_plan(store, "BETA.ST") == {}
+    assert "BETA.ST" not in json.loads(store.get_meta("paper_target_weights"))
+
+
+def test_dismissing_rolls_back_the_levels_it_set(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_new_name(stop_loss_pct=12, take_profit_pct=40)])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert store.get_position_stops()["BETA.ST"]["stop_pct"] == 12
+
+    sleeve_review.dismiss(store, review)
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "BETA.ST" not in store.get_position_stops()
+
+
+def test_restoring_puts_the_plan_back(env, sleeve, monkeypatch):
+    from fundmgr import watchplan
+
+    _stub_llm(monkeypatch, [_new_name()])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    sleeve_review.dismiss(store, review)
+    ok, reverted = sleeve_review.restore(store, review)
+    assert ok and "BETA.ST" in reverted
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert watchplan.get_kill_text(store)["BETA.ST"].startswith("ARR growth below 15%")
+
+
+def test_a_rollback_never_overwrites_an_edit_you_made_since(env, sleeve, monkeypatch):
+    """A dismissal is a statement about the decision, not a licence to discard
+    work done after it. Only values still exactly as the decision left them are
+    unwound."""
+    from fundmgr import watchplan
+
+    _stub_llm(monkeypatch, [_new_name()])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_position_plan(store, "BETA.ST",
+                                kill_criterion="my own line, written after the fact")
+
+    sleeve_review.dismiss(store, review)
+    _meta, store = paper.open_portfolio(sleeve)
+    assert watchplan.get_kill_text(store)["BETA.ST"] == "my own line, written after the fact"
+    # The untouched half of the same decision still rolls back.
+    assert "BETA.ST" not in watchplan.get_add_text(store)
+
+
+def test_a_rollback_restores_rather_than_deletes_a_prior_criterion(env, sleeve, monkeypatch):
+    """Reverting a name that already had a criterion means putting the old one
+    back, not clearing the field."""
+    from fundmgr import watchplan
+
+    _stub_llm(monkeypatch, [_new_name(ticker="GAMMA.ST", target_weight_pct=20,
+                                      kill_criterion="the model's replacement line")])
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_position_plan(store, "GAMMA.ST", kill_criterion="the original line")
+
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+    _meta, store = paper.open_portfolio(sleeve)
+    # GAMMA.ST is planned but unfilled, so it counts as not held and is re-planned.
+    assert watchplan.get_kill_text(store)["GAMMA.ST"] == "the model's replacement line"
+
+    sleeve_review.dismiss(store, review)
+    _meta, store = paper.open_portfolio(sleeve)
+    assert watchplan.get_kill_text(store)["GAMMA.ST"] == "the original line"
+
+
+def test_dismissing_a_decision_that_wrote_nothing_is_harmless(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="keep")])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    _meta, store = paper.open_portfolio(sleeve)
+    ok, _reverted = sleeve_review.dismiss(store, review)
+    assert ok is True
+
+
+def test_dismissing_an_unknown_run_reverts_nothing(env, sleeve):
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.dismiss(store, "no-such-run") == (False, [])
+
+
+def test_the_web_dismiss_says_what_it_rolled_back(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_new_name()])
+    review = sleeve_review.review_sleeve(sleeve, include_macro=False)["id"]
+
+    r = client.post(f"/live/{sleeve}/history/dismiss",
+                    data={"run_id": review}, follow_redirects=True)
+    assert "Plan rolled back for BETA.ST" in r.text
+
+
 # ── Setting a decision aside ──────────────────────────────────────────────────
 
 def test_a_dismissed_decision_stops_being_the_current_one(env, sleeve, monkeypatch):

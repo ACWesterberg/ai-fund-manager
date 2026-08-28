@@ -37,6 +37,13 @@ target price the model disagrees with is a number it must argue against in the
 thesis, not a gate that silently blocks a trade. Guardrails remain the only
 hard constraint.
 
+A review writes to the book, not only to its decision log: stop and take-profit
+levels, and for a name it opens the kill and add criteria, target price and
+sizing plan that the watches and the add gates read. So dismissing a decision
+unwinds those writes too (`dismiss` / `revert_plan_writes`) — but only where the
+value is still exactly what the decision left, since an edit you made afterwards
+is yours to keep.
+
 Funding model: the sleeve's NAV is fixed — no new capital. A buy has to be paid
 for out of the book, so guardrails see a snapshot with the run's own sells
 already settled (`_fund_from_sells`). That is what makes "sell A, add B" pass
@@ -571,6 +578,108 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
         "first, so lead with your best ideas.\n\n"
         f"Return a DecisionRun JSON. Run ID must be: {run_id}"
     )
+
+
+# ── Undoing a decision you didn't act on ──────────────────────────────────────
+
+# Book state a review writes, all of it {ticker: value} maps in app_meta. The
+# stop levels live in their own table and are handled alongside.
+_PLAN_KEYS = (
+    "paper_kill_criteria", "paper_add_criteria", "paper_add_plan",
+    "paper_target_weights", "paper_position_notes",
+)
+_REVERT_KEY = "paper_review_revert"
+
+
+def _plan_state(store: Store, tickers: set[str]) -> dict:
+    """The book's plan and levels for these tickers, as they stand now."""
+    out: dict = {}
+    for key in _PLAN_KEYS:
+        try:
+            data = json.loads(store.get_meta(key) or "{}")
+        except (ValueError, TypeError):
+            data = {}
+        out[key] = {t: data.get(t) for t in tickers}
+    stops = store.get_position_stops()
+    out["stops"] = {t: stops.get(t) for t in tickers}
+    return out
+
+
+def _record_revert(store: Store, run_id: str, before: dict, after: dict) -> None:
+    store.set_meta(f"{_REVERT_KEY}:{run_id}", json.dumps({"before": before, "after": after}))
+
+
+def revert_plan_writes(store: Store, run_id: str, forward: bool = False) -> list[str]:
+    """Undo the plan and levels a decision wrote — or re-apply them.
+
+    Only where the current value is still exactly what the decision left. If you
+    have since edited a criterion by hand, that edit is yours and stays: a
+    dismissal is a statement about the decision, not a licence to overwrite work
+    done after it. Returns the tickers actually changed.
+    """
+    try:
+        saved = json.loads(store.get_meta(f"{_REVERT_KEY}:{run_id}") or "{}")
+    except (ValueError, TypeError):
+        return []
+    source, target = ("before", "after") if forward else ("after", "before")
+    expected, wanted = saved.get(source) or {}, saved.get(target) or {}
+    if not wanted:
+        return []
+
+    touched: set[str] = set()
+    for key in _PLAN_KEYS:
+        want, have_expected = wanted.get(key) or {}, expected.get(key) or {}
+        if not want and not have_expected:
+            continue
+        try:
+            data = json.loads(store.get_meta(key) or "{}")
+        except (ValueError, TypeError):
+            continue
+        changed = False
+        for ticker in set(want) | set(have_expected):
+            if data.get(ticker) != have_expected.get(ticker):
+                continue                      # edited since — leave it alone
+            value = want.get(ticker)
+            if value is None:
+                data.pop(ticker, None)
+            else:
+                data[ticker] = value
+            changed = True
+            touched.add(ticker)
+        if changed:
+            store.set_meta(key, json.dumps(data))
+
+    stops_now = store.get_position_stops()
+    for ticker, level in (wanted.get("stops") or {}).items():
+        if stops_now.get(ticker) != (expected.get("stops") or {}).get(ticker):
+            continue
+        if level is None:
+            store.clear_position_stop(ticker)
+        else:
+            store.set_position_stop(ticker, stop_pct=level.get("stop_pct"),
+                                    take_profit_pct=level.get("take_profit_pct"))
+        touched.add(ticker)
+    return sorted(touched)
+
+
+def dismiss(store: Store, run_id: str, reason: str = "") -> tuple[bool, list[str]]:
+    """Mark a decision as not acted on and undo what it wrote to the book.
+
+    Returns (ok, tickers_reverted). The decision itself stays on file and keeps
+    being scored — only its side effects on the plan are unwound, because a
+    criterion or a target price installed by a call you declined would otherwise
+    keep steering the watches.
+    """
+    if not store.dismiss_recommendation(run_id, reason):
+        return False, []
+    return True, revert_plan_writes(store, run_id)
+
+
+def restore(store: Store, run_id: str) -> tuple[bool, list[str]]:
+    """Undo a dismissal, putting back the plan the decision installed."""
+    if not store.restore_recommendation(run_id):
+        return False, []
+    return True, revert_plan_writes(store, run_id, forward=True)
 
 
 # ── Monitoring for a newly opened name ────────────────────────────────────────
@@ -1142,6 +1251,13 @@ def review_sleeve(
                     for a in guardrails.approved_actions
                     if a.ticker in features and features[a.ticker].last_price},
         )
+        # Everything below writes to the book's plan, not just its decision log.
+        # Snapshot the affected names first so dismissing this decision can undo
+        # exactly what it did — a criterion or target price installed by a call
+        # you declined would otherwise keep steering the watches.
+        touched = {a.ticker for a in guardrails.approved_actions}
+        plan_before = _plan_state(store, touched)
+
         # Persist the stop and take-profit the model just argued for. Without
         # this the levels are discarded at the end of the run and the *next*
         # review sees a book with no levels on it — build_prompt renders stored
@@ -1157,6 +1273,7 @@ def review_sleeve(
             elif action.side == "sell" and action.target_weight_pct == 0:
                 store.clear_position_stop(action.ticker)
         _install_monitoring(store, guardrails.approved_actions, held_tickers)
+        _record_revert(store, run_id, plan_before, _plan_state(store, touched))
 
         # Remember the scope and caps so the next review — and the form —
         # default to them.

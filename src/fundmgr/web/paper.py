@@ -1239,15 +1239,23 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         except KeyError:
             return _not_found()
 
+        # Through sleeve_review, not the store directly: a decision writes kill
+        # criteria, target prices and stop levels into the book, and undoing the
+        # decision has to undo those too or a call you declined keeps steering
+        # the watches.
         if restore:
-            ok = store.restore_recommendation(run_id)
+            ok, reverted = sleeve_review.restore(store, run_id)
             msg = ("Decision restored — it is the book's current decision again."
                    if ok else "That decision was not dismissed.")
+            if ok and reverted:
+                msg += f" Plan put back for {', '.join(reverted)}."
         else:
-            ok = store.dismiss_recommendation(run_id, reason)
+            ok, reverted = sleeve_review.dismiss(store, run_id, reason)
             msg = ("Dismissed. It stays on file and is still scored, so you will "
                    "see whether declining it was right." if ok else
                    "Could not dismiss that decision — unknown, or already dismissed.")
+            if ok and reverted:
+                msg += f" Plan rolled back for {', '.join(reverted)}."
         return RedirectResponse(
             url=f"{prefix}/{slug}/history?" + urlencode({"msg": msg, "ok": int(ok)}),
             status_code=303)

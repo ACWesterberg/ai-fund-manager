@@ -2771,6 +2771,23 @@ def _print_review(result: dict, slug: str, dry_run: bool) -> None:
         )
         if a["reason"]:
             click.echo(f"      {a['reason']}")
+        plan = a.get("plan")
+        if plan:
+            if plan.get("kill_criterion"):
+                click.echo(f"      kill: {plan['kill_criterion']}")
+            if plan.get("add_criterion"):
+                click.echo(f"      add:  {plan['add_criterion']}")
+            bits = []
+            if plan.get("target_price"):
+                bits.append(f"target {plan['target_price']:,.2f}")
+            if plan.get("max_weight_pct"):
+                bits.append(f"max weight {plan['max_weight_pct']:.1f}%")
+            if plan.get("tranche_pct"):
+                bits.append(f"tranche +{plan['tranche_pct']:.1f}pp")
+            if plan.get("next_earnings"):
+                bits.append(f"earnings {plan['next_earnings']}")
+            if bits:
+                click.echo(f"      plan: {' · '.join(bits)}")
 
     click.echo(
         f"\n  {result['buy_count']} buy ({result['add_on_count']} new) · "

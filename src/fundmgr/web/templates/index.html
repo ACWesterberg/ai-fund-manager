@@ -847,6 +847,21 @@
     } catch (e) { /* keep the previous list */ }
   });
 
+  // A new name arrives with the monitoring that will watch it. Showing it here
+  // is the only chance to disagree before it is written into the plan.
+  function planLine(p) {
+    const bits = [];
+    if (p.target_price)   bits.push(`target ${(+p.target_price).toLocaleString()}`);
+    if (p.max_weight_pct) bits.push(`max ${p.max_weight_pct}%`);
+    if (p.tranche_pct)    bits.push(`tranche +${p.tranche_pct}pp`);
+    if (p.next_earnings)  bits.push(`earnings ${esc(p.next_earnings)}`);
+    let out = '';
+    if (p.kill_criterion) out += `<br><span class="text-slate-400">kill:</span> ${esc(p.kill_criterion)}`;
+    if (p.add_criterion)  out += `<br><span class="text-slate-400">add:</span> ${esc(p.add_criterion)}`;
+    if (bits.length)      out += `<br><span class="text-slate-400">plan:</span> ${bits.join(' · ')}`;
+    return out;
+  }
+
   function render(res) {
     const rows = res.actions.map(a => {
       const cls = a.side === 'buy' ? 'badge-buy' : (a.side === 'sell' ? 'badge-sell' : 'badge-hold');
@@ -864,7 +879,8 @@
           <td class="text-slate-500" style="font-size:10px">${esc(a.status)}${a.reason ? ' — ' + esc(a.reason) : ''}</td>
         </tr>
         <tr style="${dim}"><td colspan="6" class="text-slate-500"
-            style="font-size:10px;padding-top:0;padding-bottom:6px">${esc(a.thesis)}</td></tr>`;
+            style="font-size:10px;padding-top:0;padding-bottom:6px">${esc(a.thesis)}${
+              a.plan ? planLine(a.plan) : ''}</td></tr>`;
     }).join('');
 
     out.innerHTML = `

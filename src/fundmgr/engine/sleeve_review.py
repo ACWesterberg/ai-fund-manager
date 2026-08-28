@@ -552,6 +552,16 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
         f"  3. Add-ons from the candidate universe below ({scope_label}). A new name "
         "must earn its place against what it displaces — including against adding to "
         "a name you already own and already understand.\n\n"
+        "Every name you open must arrive with its monitoring plan: kill_criterion, "
+        "add_criterion, target_price, max_weight_pct and tranche_pct, plus "
+        "next_earnings where you know it. These are not paperwork — the daily "
+        "watches, the add gates and the next review all read them, and a position "
+        "without them is one nothing can watch and nothing can later justify adding "
+        "to. Write both criteria so they could be checked against a report or a "
+        "headline rather than re-argued: name the metric and the level. Set "
+        "target_price in the stock's own trading currency, at the level your thesis "
+        "actually implies, since the expected return it gives is what any later add "
+        "is measured against.\n\n"
         f"There is NO new capital. NAV is {snap.nav_sek:,.0f} SEK and stays there, so "
         f"every buy is funded from cash on hand ({snap.cash_sek:,.0f} SEK) plus the "
         "proceeds of the sells you recommend in this same run. Recommending a buy "
@@ -561,6 +571,71 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
         "first, so lead with your best ideas.\n\n"
         f"Return a DecisionRun JSON. Run ID must be: {run_id}"
     )
+
+
+# ── Monitoring for a newly opened name ────────────────────────────────────────
+
+def _install_monitoring(store: Store, approved, held: set[str]) -> list[str]:
+    """Write a new position's kill/add criteria, target price and sizing plan.
+
+    A name the review opens has no monitoring behind it — no kill line for the
+    daily watches, no add criterion or target price for the gates, no target
+    weight for the drift check. It would sit in the book unwatched until someone
+    wrote all of that by hand, which is exactly the step that does not get done.
+
+    Only for approved buys, and only where the model actually supplied a value:
+    a field left blank is left alone rather than cleared, so re-running a review
+    never quietly erases a criterion you have since refined yourself. Target
+    weights follow the decision both ways — a name opened joins the plan, a name
+    fully exited leaves it, so the plan keeps describing the book that is meant
+    to exist.
+    """
+    from fundmgr import addsignal, watchplan
+
+    installed: list[str] = []
+    targets = json.loads(store.get_meta("paper_target_weights") or "{}")
+    notes = json.loads(store.get_meta("paper_position_notes") or "{}")
+    changed = False
+
+    for action in approved:
+        if action.side == "sell" and action.target_weight_pct <= 0:
+            if targets.pop(action.ticker, None) is not None:
+                changed = True
+            continue
+        if action.side != "buy":
+            continue
+
+        targets[action.ticker] = round(float(action.target_weight_pct), 4)
+        changed = True
+
+        if action.ticker in held:
+            continue        # already has whatever plan it was opened with
+
+        try:
+            if action.kill_criterion:
+                watchplan.set_position_plan(
+                    store, action.ticker, kill_criterion=action.kill_criterion)
+            if action.add_criterion:
+                watchplan.set_add_text(store, action.ticker, action.add_criterion)
+            if action.target_price or action.max_weight_pct or action.tranche_pct:
+                addsignal.set_plan(
+                    store, action.ticker,
+                    target_price=action.target_price,
+                    max_weight_pct=action.max_weight_pct,
+                    tranche_pct=action.tranche_pct,
+                )
+            if action.next_earnings:
+                notes.setdefault(action.ticker, {})["next_earnings"] = action.next_earnings
+                changed = True
+        except Exception:
+            # A malformed criterion must not cost the decision that carried it.
+            continue
+        installed.append(action.ticker)
+
+    if changed:
+        store.set_meta("paper_target_weights", json.dumps(targets))
+        store.set_meta("paper_position_notes", json.dumps(notes))
+    return installed
 
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
@@ -940,6 +1015,17 @@ def review_sleeve(
             "shares": (sizing.get(a.ticker) or {}).get("shares"),
             "price_sek": (sizing.get(a.ticker) or {}).get("price_sek"),
             "held": a.ticker in held_tickers,
+            # The monitoring a new name arrives with, so it can be checked
+            # before it is acted on rather than discovered on the watch page.
+            "plan": {
+                "kill_criterion": a.kill_criterion,
+                "add_criterion": a.add_criterion,
+                "target_price": a.target_price,
+                "max_weight_pct": a.max_weight_pct,
+                "tranche_pct": a.tranche_pct,
+                "next_earnings": a.next_earnings,
+            } if (a.side == "buy" and a.ticker not in held_tickers
+                  and any((a.kill_criterion, a.add_criterion, a.target_price))) else None,
             # An approved buy in a name the plan never had is the add-on this
             # review exists to surface — flag it so the UI can say so.
             "add_on": a.side == "buy" and a.ticker not in held_tickers and a.ticker not in targets,
@@ -1070,6 +1156,8 @@ def review_sleeve(
                     action.ticker, stop_pct=merged[0], take_profit_pct=merged[1])
             elif action.side == "sell" and action.target_weight_pct == 0:
                 store.clear_position_stop(action.ticker)
+        _install_monitoring(store, guardrails.approved_actions, held_tickers)
+
         # Remember the scope and caps so the next review — and the form —
         # default to them.
         store.set_meta(META_CONFIG, config_name)

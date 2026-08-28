@@ -48,6 +48,55 @@ class Action(BaseModel):
         description="Optional upside target as % gain from entry. Helps define the risk/reward.",
     )
 
+    # ── Monitoring plan, for a name being opened ──────────────────────────────
+    #
+    # A position without these is one nothing can ever watch: the kill and add
+    # criteria, the target price and the sizing plan are what the daily watches,
+    # the add-signal gates and the next review all read. They are optional and
+    # unmentioned unless a caller's task asks for them, so a run that only ever
+    # trades names already carrying a plan is unaffected.
+    kill_criterion: str | None = Field(
+        default=None, max_length=400,
+        description=(
+            "For a NEW position: the falsifiable condition that would mean the "
+            "thesis is broken and the position should be exited. Write it so it "
+            "could be checked against a report or a headline — 'gross margin "
+            "below 45% for two consecutive quarters', not 'if it goes badly'."
+        ),
+    )
+    add_criterion: str | None = Field(
+        default=None, max_length=400,
+        description=(
+            "For a NEW position: what must stay true for the thesis to still be "
+            "working, checkable the same way. This is the test for adding to the "
+            "position later, not for opening it."
+        ),
+    )
+    target_price: float | None = Field(
+        default=None, gt=0,
+        description=(
+            "For a NEW position: your fair-value target in the stock's own "
+            "trading currency. Used to compute the expected return that gates "
+            "any later add, so give the level your thesis actually implies."
+        ),
+    )
+    max_weight_pct: float | None = Field(
+        default=None, gt=0, le=100,
+        description=(
+            "For a NEW position: the largest share of NAV this name should ever "
+            "reach, including later adds. Usually above the opening weight."
+        ),
+    )
+    tranche_pct: float | None = Field(
+        default=None, gt=0, le=100,
+        description="For a NEW position: how much NAV one later add should buy, in "
+                    "percentage points.",
+    )
+    next_earnings: str | None = Field(
+        default=None, max_length=20,
+        description="For a NEW position: next scheduled report date (YYYY-MM-DD) if known.",
+    )
+
     @field_validator("ticker")
     @classmethod
     def ticker_uppercase(cls, v: str) -> str:

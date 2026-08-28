@@ -965,6 +965,147 @@ def test_web_review_accepts_risk_overrides(client, sleeve, monkeypatch):
     assert job["result"]["risk"]["max_turnover_pct"] == 45
 
 
+# ── Monitoring for a newly opened name ────────────────────────────────────────
+
+def _new_name(**over):
+    fields = dict(
+        ticker="BETA.ST", side="buy", target_weight_pct=12, sek_estimate=5_000,
+        confidence=0.8, thesis="new name",
+        kill_criterion="ARR growth below 15% for two consecutive quarters",
+        add_criterion="net retention stays above 110%",
+        target_price=180.0, max_weight_pct=20.0, tranche_pct=3.0,
+        next_earnings="2026-10-24",
+    )
+    fields.update(over)
+    return Action(**fields)
+
+
+def test_a_new_name_arrives_with_its_monitoring_installed(env, sleeve, monkeypatch):
+    """A position nothing can watch is the one that quietly rots. The criteria,
+    target price and sizing plan go in where the daily watches and the add gates
+    actually read them."""
+    from fundmgr import addsignal, watchplan
+
+    _stub_llm(monkeypatch, [_new_name()])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert watchplan.get_kill_text(store)["BETA.ST"].startswith("ARR growth below 15%")
+    assert watchplan.get_add_text(store)["BETA.ST"] == "net retention stays above 110%"
+
+    plan = addsignal.get_plan(store, "BETA.ST")
+    assert plan["target_price"] == 180.0
+    assert plan["max_weight_pct"] == 20.0
+    assert plan["tranche_pct"] == 3.0
+
+    targets = json.loads(store.get_meta("paper_target_weights"))
+    assert targets["BETA.ST"] == 12.0
+    notes = json.loads(store.get_meta("paper_position_notes"))
+    assert notes["BETA.ST"]["next_earnings"] == "2026-10-24"
+
+
+def test_the_plan_is_shown_before_it_is_acted_on(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_new_name()])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    beta = next(a for a in result["actions"] if a["ticker"] == "BETA.ST")
+    assert beta["plan"]["kill_criterion"].startswith("ARR growth below 15%")
+    assert beta["plan"]["target_price"] == 180.0
+
+
+def test_the_installed_plan_reaches_the_next_review(env, sleeve, monkeypatch):
+    """The point of writing it: the next review reads its own criteria back."""
+    _stub_llm(monkeypatch, [_new_name()])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "ARR growth below 15% for two consecutive quarters" in user
+    assert "net retention stays above 110%" in user
+    assert "target price: 180.00" in user
+
+
+def test_a_review_never_erases_a_criterion_you_refined(env, sleeve, monkeypatch):
+    """A field the model left blank means 'no opinion', not 'clear it'. Anything
+    else would quietly undo hand-written work on every run."""
+    from fundmgr import watchplan
+
+    _meta, store = paper.open_portfolio(sleeve)
+    watchplan.set_add_text(store, "BETA.ST", "my own carefully written add test")
+
+    _stub_llm(monkeypatch, [_new_name(add_criterion=None, kill_criterion=None)])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert watchplan.get_add_text(store)["BETA.ST"] == "my own carefully written add test"
+
+
+def test_an_existing_holding_keeps_the_plan_it_was_opened_with(env, sleeve, monkeypatch):
+    """Adding to a name you hold is not opening it, so its criteria stand."""
+    from fundmgr import watchplan
+
+    _stub_llm(monkeypatch, [_new_name(ticker="ALFA.ST", target_weight_pct=60,
+                                      kill_criterion="something else entirely")])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert watchplan.get_kill_text(store)["ALFA.ST"] == "margins collapse"
+
+
+def test_a_full_exit_leaves_the_plan(env, sleeve, monkeypatch):
+    """The plan should describe the book that is meant to exist. A name exited
+    is no longer part of it, and leaving it in reports drift against a target
+    for something you deliberately sold."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0, sek_estimate=10_000,
+               confidence=0.9, thesis="exit"),
+    ])
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "ALFA.ST" not in json.loads(store.get_meta("paper_target_weights"))
+
+
+def test_a_rejected_buy_installs_nothing(env, sleeve, monkeypatch):
+    """Only approved actions shape the plan; a trade the guardrails refused must
+    not leave a criterion behind for a position that was never opened."""
+    from fundmgr import watchplan
+
+    _stub_llm(monkeypatch, [_new_name(sek_estimate=500)])      # below min_trade_sek
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    assert next(a for a in result["actions"] if a["ticker"] == "BETA.ST")["approved"] is False
+    _meta, store = paper.open_portfolio(sleeve)
+    assert "BETA.ST" not in watchplan.get_kill_text(store)
+
+
+def test_a_plain_buy_without_a_plan_still_works(env, sleeve, monkeypatch):
+    """The fields are optional. A model that omits them costs a plan, not a run."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=12, sek_estimate=5_000,
+               confidence=0.8, thesis="no plan given"),
+    ])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)
+    assert result["buy_count"] == 1
+    assert next(a for a in result["actions"] if a["ticker"] == "BETA.ST")["plan"] is None
+
+
+def test_the_prompt_asks_for_the_monitoring_plan(env, sleeve, monkeypatch):
+    capture = {}
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                                   sek_estimate=0, confidence=0.6, thesis="hold")], capture)
+    sleeve_review.review_sleeve(sleeve, include_macro=False)
+
+    user = capture["user"]
+    assert "must arrive with its monitoring plan" in user
+    for field in ("kill_criterion", "add_criterion", "target_price"):
+        assert field in user
+
+
 # ── Share counts ──────────────────────────────────────────────────────────────
 
 def test_a_full_exit_reports_the_whole_holding(env, sleeve, monkeypatch):

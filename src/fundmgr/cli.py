@@ -2571,22 +2571,28 @@ def paper_dismiss(slug: str, run_id: str, reason: str, restore: bool,
             sys.exit(1)
         return
 
+    from fundmgr.engine import sleeve_review
+
     if restore:
-        if store.restore_recommendation(run_id):
-            click.echo(f"✓ {run_id} restored — it is the current decision again.")
-        else:
+        ok, reverted = sleeve_review.restore(store, run_id)
+        if not ok:
             click.echo(f"✗ {run_id} was not dismissed.", err=True)
             sys.exit(1)
+        click.echo(f"✓ {run_id} restored — it is the current decision again.")
+        if reverted:
+            click.echo(f"  Plan put back for: {', '.join(reverted)}")
         return
 
-    if store.dismiss_recommendation(run_id, reason):
-        click.echo(f"✓ {run_id} marked as not acted on.")
-        click.echo("  It stays on file and is still scored — see 'fund paper-decisions "
-                   f"{slug}'.")
-    else:
+    ok, reverted = sleeve_review.dismiss(store, run_id, reason)
+    if not ok:
         click.echo(f"✗ No decision '{run_id}' in {slug}, or it is already dismissed.",
                    err=True)
         sys.exit(1)
+    click.echo(f"✓ {run_id} marked as not acted on.")
+    if reverted:
+        click.echo(f"  Plan rolled back for: {', '.join(reverted)}")
+    click.echo("  It stays on file and is still scored — see 'fund paper-decisions "
+               f"{slug}'.")
 
 
 @cli.command("paper-scopes")

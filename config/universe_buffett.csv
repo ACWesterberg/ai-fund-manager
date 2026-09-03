@@ -1,4 +1,5 @@
 name,yahoo_ticker,isin,country,exchange,sector,enabled
+Apple Inc.,AAPL,,US,NASDAQ,"Technology Hardware, Storage and Peripherals",true
 Adobe Inc.,ADBE,,US,NASDAQ,Software,true
 "AppFolio, Inc.",APPF,,US,NASDAQ,Software,true
 "BioCryst Pharmaceuticals, Inc.",BCRX,,US,NASDAQ,Biotechnology,true
@@ -14,6 +15,7 @@ Booking Holdings Inc.,BKNG,,US,NASDAQ,"Hotels, Restaurants and Leisure",true
 "ExlService Holdings, Inc.",EXLS,,US,NASDAQ,Professional Services,true
 "First Solar, Inc.",FSLR,,US,NASDAQ,Semiconductors and Semiconductor Equipment,true
 "Frontdoor, Inc.",FTDR,,US,NASDAQ,Diversified Consumer Services,true
+Alphabet Inc.,GOOGL,,US,NASDAQ,Interactive Media and Services,true
 "Grand Canyon Education, Inc.",LOPE,,US,NASDAQ,Diversified Consumer Services,true
 "Halozyme Therapeutics, Inc.",HALO,,US,NASDAQ,Biotechnology,true
 "Harmony Biosciences Holdings, Inc.",HRMY,,US,NASDAQ,Pharmaceuticals,true

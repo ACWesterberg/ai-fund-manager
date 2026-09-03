@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from fundmgr.engine.whatif import (
     MAX_RUNS, MODEL_OPTIONS, generate_whatif, list_profiles, list_results,
+    promote_to_sleeve,
 )
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -46,6 +47,10 @@ class GenerateRequest(BaseModel):
     deploy_full: bool = False
     # Refetch the screened candidates before deciding. Off = cache-only, fast.
     refresh_prices: bool = True
+    # Ask each opened name for its kill/add criteria, target price and sizing
+    # plan. Off by default — it costs output tokens and only pays off for a run
+    # that might be promoted to a live sleeve.
+    monitoring_plan: bool = False
 
 
 def _run_job(job_id: str, req: GenerateRequest) -> None:
@@ -60,6 +65,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             capital_sek=req.capital_sek,
             deploy_full=req.deploy_full,
             refresh_prices=req.refresh_prices,
+            monitoring_plan=req.monitoring_plan,
         )
         with _job_lock:
             if _job and _job["id"] == job_id:
@@ -128,3 +134,28 @@ def api_job_status(job_id: str):
             "result": _job["result"],
             "error": _job["error"],
         }
+
+
+class PromoteRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    capital_sek: float | None = Field(default=None, gt=0, le=MAX_CAPITAL_SEK)
+    # False imports the plan only and lets positions appear as fills are
+    # recorded — the same default as `fund paper-import`, and the safe one:
+    # True spends the capital at live prices immediately.
+    execute: bool = False
+
+
+@router.post("/api/results/{run_id}/promote")
+def api_promote(run_id: str, req: PromoteRequest):
+    """Turn a stored what-if into a live sleeve watched by `fund paper-track`."""
+    try:
+        return promote_to_sleeve(
+            run_id,
+            name=req.name,
+            capital_sek=req.capital_sek,
+            execute=req.execute,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

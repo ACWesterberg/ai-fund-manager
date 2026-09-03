@@ -128,6 +128,16 @@
           </span>
         </span>
       </label>
+      <label class="flex items-center gap-2 mb-3 text-sm text-slate-300 select-none cursor-pointer">
+        <input id="f-monitoring" type="checkbox"
+               class="rounded bg-slate-900 border-slate-600 text-blue-500 focus:ring-blue-500/40">
+        <span>Ask for a monitoring plan
+          <span class="block text-[10px] text-slate-500 leading-snug">
+            Kill &amp; add criteria, target price and sizing per name — what a live sleeve is
+            watched by. Costs extra output tokens; needed if you might promote this run.
+          </span>
+        </span>
+      </label>
       <button id="f-submit" type="submit"
               class="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed
                      text-white text-sm font-semibold rounded-lg px-4 py-2 transition-colors">
@@ -339,7 +349,20 @@
       st.appendChild(stSpan);
       if (a.reason) st.appendChild(el('div', 'text-[10px] text-slate-600 max-w-[160px]', a.reason));
       tr.appendChild(st);
-      tr.appendChild(el('td', 'text-xs text-slate-400 leading-snug min-w-[260px]', a.thesis || ''));
+      const thesisTd = el('td', 'text-xs text-slate-400 leading-snug min-w-[260px]');
+      thesisTd.appendChild(el('div', '', a.thesis || ''));
+      // Model output — appended as text nodes, never innerHTML.
+      if (a.kill_criterion) {
+        thesisTd.appendChild(el('div', 'text-[10px] text-red-300/80 mt-1.5', 'Kill: ' + a.kill_criterion));
+      }
+      if (a.add_criterion) {
+        thesisTd.appendChild(el('div', 'text-[10px] text-emerald-300/80 mt-1', 'Add: ' + a.add_criterion));
+      }
+      if (a.target_price != null) {
+        thesisTd.appendChild(el('div', 'text-[10px] text-slate-500 mt-1',
+          'Target ' + a.target_price + (a.max_weight_pct != null ? ` · max ${a.max_weight_pct}%` : '')));
+      }
+      tr.appendChild(thesisTd);
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
@@ -351,7 +374,71 @@
       notes.textContent = 'Notes: ' + r.notes;
       body.appendChild(notes);
     }
+    body.appendChild(promoteBar(r));
     return card;
+  }
+
+  // ── Promote to a live sleeve ────────────────────────────────────────────
+  function promoteBar(r) {
+    const bar = el('div', 'mt-4 pt-3 border-t border-slate-800/60');
+    const buys = (r.actions || []).filter(a => a.side === 'buy' && a.approved);
+    if (!buys.length) {
+      bar.appendChild(el('p', 'text-xs text-slate-600', 'No approved buys — nothing to promote.'));
+      return bar;
+    }
+
+    const row = el('div', 'flex flex-wrap items-center gap-3');
+    const btn = el('button', 'bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 ' +
+      'disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg px-3 py-1.5 transition-colors',
+      `Promote ${buys.length} name${buys.length > 1 ? 's' : ''} to a live sleeve`);
+    row.appendChild(btn);
+
+    const exec = el('label', 'flex items-center gap-1.5 text-[11px] text-slate-400 select-none cursor-pointer');
+    const execBox = el('input');
+    execBox.type = 'checkbox';
+    execBox.className = 'rounded bg-slate-900 border-slate-600 text-emerald-500 focus:ring-emerald-500/40';
+    exec.appendChild(execBox);
+    exec.appendChild(el('span', '', 'buy now at live prices'));
+    row.appendChild(exec);
+    bar.appendChild(row);
+
+    // The monitoring plan is opt-in, so a run without one can still be
+    // promoted — but paper-track reads kill criteria, so say what will be lost.
+    const missing = buys.filter(a => !a.kill_criterion).length;
+    if (missing) {
+      bar.appendChild(el('p', 'text-[10px] text-amber-400/90 mt-2',
+        `${missing} of ${buys.length} name${buys.length > 1 ? 's have' : ' has'} no kill criterion — ` +
+        `the daily watch will have nothing to check. Re-run with "Ask for a monitoring plan" to get them.`));
+    }
+    const status = el('p', 'text-xs mt-2 hidden');
+    bar.appendChild(status);
+
+    btn.addEventListener('click', async () => {
+      const wording = execBox.checked
+        ? `Buy ${buys.length} position(s) now at live prices?`
+        : `Import ${buys.length} position(s) as a plan? Nothing is bought until you record fills.`;
+      if (!window.confirm(wording)) return;
+      btn.disabled = true;
+      status.className = 'text-xs mt-2 text-slate-400';
+      status.textContent = 'Promoting…';
+      try {
+        const res = await fetch(`/whatif/api/results/${encodeURIComponent(r.id)}/promote`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({execute: execBox.checked}),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        status.className = 'text-xs mt-2 text-emerald-400';
+        status.textContent = `✓ Created sleeve '${data.slug}' with ${data.positions} position(s)` +
+          (data.executed ? ' — bought at live prices.' : ' — plan only; record fills to open them.');
+      } catch (e) {
+        btn.disabled = false;
+        status.className = 'text-xs mt-2 text-red-400';
+        status.textContent = 'Promote failed: ' + e.message;
+      }
+    });
+    return bar;
   }
 
   // Past results
@@ -403,6 +490,7 @@
       capital_sek: Number.isFinite(amount) && amount > 0 ? amount : null,
       deploy_full: document.querySelector('input[name="deploy"]:checked').value === 'full',
       refresh_prices: $('f-refresh').checked,
+      monitoring_plan: $('f-monitoring').checked,
     };
     setBusy(true, 'Starting…');
     try {

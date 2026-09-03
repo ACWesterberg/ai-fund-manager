@@ -630,3 +630,168 @@ def test_a_failed_refresh_does_not_take_the_run_down(profile, monkeypatch):
     assert result["data"]["refresh"]["fundamentals_refreshed"] == 0
     assert result["data"]["refresh"]["benchmark_ok"] is False
     assert result["data"]["candidates_to_llm"] > 0
+
+
+# ── Monitoring plan (opt-in) ──────────────────────────────────────────────────
+
+def _plan_action(**over):
+    base = dict(ticker="ALFA.ST", side="buy", target_weight_pct=15, sek_estimate=15000,
+                confidence=0.8, thesis="t", kill_criterion="gross margin below 40% for 2Q",
+                add_criterion="revenue growth stays above 15%", target_price=180.0,
+                max_weight_pct=18.0, tranche_pct=5.0, next_earnings="2026-11-04")
+    base.update(over)
+    return Action(**base)
+
+
+def test_monitoring_plan_is_not_requested_by_default(profile, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus([_plan_action()]))
+    orig = whatif.call_llm_consensus
+
+    def _capture(system, user, cfg):
+        captured["user"] = user
+        return orig(system, user, cfg)
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
+    result = whatif.generate_whatif("config_test.yaml", refresh_prices=False, include_macro=False)
+
+    assert "kill_criterion" not in captured["user"]
+    assert result["monitoring_plan"] is False
+
+
+def test_monitoring_plan_directive_added_when_requested(profile, monkeypatch):
+    captured = {}
+    stub = _stub_consensus([_plan_action()])
+
+    def _capture(system, user, cfg):
+        captured["user"] = user
+        return stub(system, user, cfg)
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
+    result = whatif.generate_whatif(
+        "config_test.yaml", refresh_prices=False, include_macro=False, monitoring_plan=True,
+    )
+
+    for field in ("kill_criterion", "add_criterion", "target_price",
+                  "max_weight_pct", "tranche_pct"):
+        assert field in captured["user"], field
+    assert result["monitoring_plan"] is True
+
+
+def test_plan_fields_stored_only_when_asked_for(profile, monkeypatch):
+    """The model can fill these off the schema descriptions alone, but an
+    unrequested value is a guess — promote must not read it as a plan."""
+    monkeypatch.setattr(whatif, "call_llm_consensus", _stub_consensus([_plan_action()]))
+
+    off = whatif.generate_whatif("config_test.yaml", refresh_prices=False, include_macro=False)
+    on = whatif.generate_whatif(
+        "config_test.yaml", refresh_prices=False, include_macro=False, monitoring_plan=True,
+    )
+
+    assert "kill_criterion" not in off["actions"][0]
+    assert on["actions"][0]["kill_criterion"] == "gross margin below 40% for 2Q"
+    assert on["actions"][0]["target_price"] == 180.0
+
+
+# ── Promotion to a live sleeve ────────────────────────────────────────────────
+
+def _stored_result(profile, actions: list[dict], run_id="whatif-2026-09-02-abc123") -> str:
+    whatif.WHATIF_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "id": run_id,
+        "profile": {"name": "🧪 Test Fund", "benchmark": "^OMXSPI", "capital_sek": 100000},
+        "deployment": {"placed_sek": 100000},
+        "model": {"model_id": "gpt-5.6-sol"},
+        "actions": actions,
+    }
+    (whatif.WHATIF_DIR / f"{run_id}.json").write_text(json.dumps(payload))
+    return run_id
+
+
+@pytest.fixture
+def captured_sleeve(monkeypatch):
+    """Stub paper.create_portfolio and record the book it was handed."""
+    from fundmgr import paper
+    seen = {}
+
+    def _create(**kwargs):
+        seen.update(kwargs)
+        return "test-sleeve", ["created"]
+
+    monkeypatch.setattr(paper, "create_portfolio", _create)
+    return seen
+
+
+def test_promote_carries_only_approved_buys(profile, captured_sleeve):
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "confidence": 0.8,
+         "kill_criterion": "margin below 40%", "add_criterion": "growth holds",
+         "next_earnings": "2026-11-04"},
+        {"ticker": "BETA.ST", "name": "Beta AB", "side": "buy", "approved": False,
+         "target_weight_pct": 10, "thesis": "rejected"},
+        {"ticker": "GAMMA.ST", "name": "Gamma AB", "side": "sell", "approved": True,
+         "target_weight_pct": 0, "thesis": "sell"},
+    ])
+
+    out = whatif.promote_to_sleeve(run_id)
+
+    assert out["positions"] == 1
+    held = captured_sleeve["holdings_override"]
+    assert [h["ticker"] for h in held] == ["ALFA.ST"]
+    assert held[0]["kill_criterion"] == "margin below 40%"
+    assert captured_sleeve["position_meta"]["ALFA.ST"]["watch"] == "growth holds"
+    # A live sleeve imports the plan; nothing is bought until fills are recorded.
+    assert captured_sleeve["kind"] == "live"
+    assert captured_sleeve["execute_buys"] is False
+
+
+def test_promote_can_execute_immediately(profile, captured_sleeve):
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "kill_criterion": "k"},
+    ])
+    out = whatif.promote_to_sleeve(run_id, execute=True)
+    assert captured_sleeve["execute_buys"] is True
+    assert out["executed"] is True
+
+
+def test_promote_reports_names_nothing_can_watch(profile, captured_sleeve):
+    """The plan is opt-in, so promoting without one is allowed — but paper-track
+    reads kill criteria, so the caller has to be told which names lack them."""
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "kill_criterion": "k"},
+        {"ticker": "BETA.ST", "name": "Beta AB", "side": "buy", "approved": True,
+         "target_weight_pct": 10, "thesis": "no plan"},
+    ])
+    out = whatif.promote_to_sleeve(run_id)
+    assert out["unwatched_tickers"] == ["BETA.ST"]
+
+
+def test_promote_refuses_a_run_with_no_approved_buys(profile, captured_sleeve):
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": False,
+         "target_weight_pct": 15, "thesis": "rejected"},
+    ])
+    with pytest.raises(ValueError, match="no buys"):
+        whatif.promote_to_sleeve(run_id)
+
+
+def test_promote_honours_a_capital_override(profile, captured_sleeve):
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "kill_criterion": "k"},
+    ])
+    whatif.promote_to_sleeve(run_id, capital_sek=250000)
+    assert captured_sleeve["capital_sek"] == 250000
+
+
+@pytest.mark.parametrize("bad", [
+    "../../etc/passwd", "whatif-2026-09-02-abc123/../../secrets",
+    "not-a-run", "whatif-bad", "../config",
+])
+def test_load_result_rejects_anything_but_a_run_id(profile, bad):
+    """run_id arrives from a URL path segment."""
+    with pytest.raises(FileNotFoundError):
+        whatif.load_result(bad)

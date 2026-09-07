@@ -116,18 +116,57 @@ def reset(capital: float | None, purge_cache: bool, yes: bool):
     click.echo("\nNext step: run 'fund run' to generate the first decision of the fresh sim.")
 
 
+def _skip_on_market_holiday(cfg) -> bool:
+    """True when this profile's main market holds no session today.
+
+    Cron fires on a fixed weekly schedule and knows nothing about holidays,
+    while the only calendar check in the pipeline sits down in auto_fill, per
+    ticker, *after* the model has been paid for. So a US-dominant fund on a US
+    holiday bought a full consensus run and then skipped every fill one by one
+    — and skipped fills are not queued for the next open, they wait for the
+    next weekly run.
+
+    Gated on the dominant calendar rather than each name's, because a run whose
+    main market is shut is deciding on stale prices whatever the minority can
+    still trade. Fails open: an unknown calendar runs as before.
+    """
+    from fundmgr.data.market_hours import dominant_calendar, is_trading_day, next_session
+
+    mic = dominant_calendar(cfg.universe_path)
+    if mic is None or is_trading_day(mic) is not False:
+        return False
+
+    nxt = next_session(mic)
+    when = f"next session {nxt}" if nxt else "next session unknown"
+    click.echo(f"\n⏸ {cfg.display_name}: {mic} holds no session today — "
+               f"skipping this run ({when}).")
+    click.echo("   Re-run with --force to decide anyway.")
+    from fundmgr.notify.send import send_telegram
+    send_telegram(
+        f"<b>{cfg.display_name}</b>\n⏸ Market holiday — run skipped\n"
+        f"{mic} holds no session today. {when.capitalize()}."
+    )
+    return True
+
+
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Run pipeline but skip saving recommendation")
 @click.option("--force-refresh", is_flag=True, help="Re-fetch all prices even if cached")
 @click.option("--skip-news", is_flag=True, help="Skip Nordic RSS + FinBERT sentiment step (faster)")
 @click.option("--skip-macro", is_flag=True, help="Skip global macro context fetch (no yfinance indicator or news fetch)")
 @click.option("--skip-fundamentals", is_flag=True, help="Skip fundamentals cache refresh (use cached data as-is)")
-def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool, skip_fundamentals: bool):
+@click.option("--force", is_flag=True,
+              help="Run even when this universe's main market is shut for the day")
+def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
+        skip_fundamentals: bool, force: bool):
     """Ingest data, call the LLM, apply guardrails, and emit the action list."""
     cfg, store = _get_store()
     if not store.is_initialised():
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
+
+    if not force and _skip_on_market_holiday(cfg):
+        return
 
     tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}

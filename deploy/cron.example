@@ -11,6 +11,10 @@
 
 # Weekly decision run — Monday 09:30 CET
 # 30 min after open: price discovery done, spreads tight, full day ahead
+# `fund run` skips itself when this universe's dominant market holds no session
+# that day (US holiday for the Global/Buffett funds, a Swedish one here) and
+# says so on Telegram. Cron stays weekly — a skipped week is reconsidered at the
+# next scheduled run, not deferred. Pass --force to decide anyway.
 30 9 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund run >> data/logs/weekly.log 2>&1
 
 # News trigger checks — weekdays during Nordic trading hours

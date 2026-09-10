@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -62,12 +63,41 @@ MAX_RUNS = 5  # cap on consensus samples per what-if generation
 # Deployment directive appended to the user message when the full-deploy toggle
 # is on. The rendered risk-limits block already carries the lifted caps; this
 # states the intent in words so the model doesn't hedge into cash anyway.
+# run_id is generated as whatif-<date>-<hex>; anchor a matching pattern so a
+# value arriving from a URL can never escape WHATIF_DIR.
+_RUN_ID_RE = re.compile(r"^whatif-\d{4}-\d{2}-\d{2}-[0-9a-f]{6}$")
+
 _FULL_DEPLOY_DIRECTIVE = (
     "\n\n## Deployment Instruction\n"
     "Deploy the ENTIRE amount in this single run. Hold no cash back: the cash "
     "target is 0% and there is no staged-entry turnover cap. Size positions so "
     "the approved buys account for essentially all of NAV. Do not phase in over "
     "future runs — this is a one-shot allocation of the full amount."
+)
+
+
+# Opt-in, because a what-if is usually a sketch: asking for the plan costs
+# output tokens and only earns its keep if the result might become a real
+# sleeve. Wording mirrors the sleeve review's block — that is the prompt these
+# fields were designed against, and the two should not drift apart.
+_MONITORING_PLAN_DIRECTIVE = (
+    "\n\n## Monitoring Plan\n"
+    "Every name you open must arrive with its monitoring plan: kill_criterion, "
+    "add_criterion, target_price, max_weight_pct and tranche_pct, plus "
+    "next_earnings where you know it. These are not paperwork — if this book is "
+    "ever run for real, the daily watches and the add gates read them, and a "
+    "position without them is one nothing can watch and nothing can later "
+    "justify adding to. Write both criteria so they could be checked against a "
+    "report or a headline rather than re-argued: name the metric and the level. "
+    "Set target_price in the stock's own trading currency, at the level your "
+    "thesis actually implies, since the expected return it gives is what any "
+    "later add is measured against."
+)
+
+# Carried from each action into the stored result when the plan was requested.
+_PLAN_FIELDS = (
+    "kill_criterion", "add_criterion", "target_price",
+    "max_weight_pct", "tranche_pct", "next_earnings",
 )
 
 
@@ -222,6 +252,7 @@ def generate_whatif(
     capital_sek: float | None = None,
     deploy_full: bool = False,
     refresh_prices: bool = True,
+    monitoring_plan: bool = False,
 ) -> dict:
     """
     Generate a hypothetical from-scratch portfolio for one fund profile.
@@ -238,6 +269,12 @@ def generate_whatif(
     candidates before the model sees them, so an on-demand what-if is built on
     today's market rather than the profile's last weekly run. Turn it off for a
     fast, cache-only run.
+
+    monitoring_plan asks each opened name for its kill criterion, add criterion,
+    target price and sizing plan — the fields a live sleeve is watched by. Off
+    by default: it costs output tokens and only pays off for a run you might
+    promote. promote_to_sleeve() works either way but says so when they're
+    missing.
 
     Blocking — call from a background thread in the web layer.
     """
@@ -331,6 +368,8 @@ def generate_whatif(
     )
     if deploy_full:
         user_msg += _FULL_DEPLOY_DIRECTIVE
+    if monitoring_plan:
+        user_msg += _MONITORING_PLAN_DIRECTIVE
 
     decision, _raw, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, effective_cfg)
 
@@ -359,6 +398,10 @@ def generate_whatif(
             "reason": v.rejection_reason or v.clip_note or "",
             "last_price": feat.last_price if feat else None,
             "approved": (a.ticker, a.side) in approved,
+            # Only when asked for: the model can populate these off the schema
+            # descriptions alone, but an unrequested value is a guess rather
+            # than an answer, and promote must not treat it as a plan.
+            **({f: getattr(a, f, None) for f in _PLAN_FIELDS} if monitoring_plan else {}),
         })
     # Turnover-cap drops happen after per-action verdicts — reflect them
     for row in actions:
@@ -399,6 +442,7 @@ def generate_whatif(
         },
         "sampling": sampling,
         "consensus": vote_counts is not None,
+        "monitoring_plan": monitoring_plan,
         "market_summary": decision.market_summary,
         "notes": decision.notes,
         "cash_target_pct": guardrails.cash_target_pct,
@@ -421,6 +465,96 @@ def generate_whatif(
     WHATIF_DIR.mkdir(parents=True, exist_ok=True)
     (WHATIF_DIR / f"{run_id}.json").write_text(json.dumps(result, indent=2))
     return result
+
+
+def load_result(run_id: str) -> dict:
+    """One stored what-if by id. Raises FileNotFoundError if it has aged out."""
+    # Guard the path: run_id reaches this from a URL and would otherwise be able
+    # to name any json on disk.
+    if not _RUN_ID_RE.match(run_id):
+        raise FileNotFoundError(f"Unknown what-if run: {run_id!r}")
+    path = WHATIF_DIR / f"{run_id}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Unknown what-if run: {run_id!r}")
+    return json.loads(path.read_text())
+
+
+def promote_to_sleeve(
+    run_id: str,
+    name: str | None = None,
+    capital_sek: float | None = None,
+    execute: bool = False,
+) -> dict:
+    """Turn a stored what-if into a live sleeve watched by `fund paper-track`.
+
+    Only approved buys carry over — a rejected or turnover-dropped action is
+    not part of the book the run actually proposed.
+
+    execute=False (the default) imports the plan only, matching `fund
+    paper-import`: positions appear as fills are recorded. True opens
+    everything now at live prices.
+    """
+    from fundmgr import paper
+
+    result = load_result(run_id)
+    buys = [a for a in result.get("actions") or []
+            if a.get("side") == "buy" and a.get("approved")]
+    if not buys:
+        raise ValueError("This what-if approved no buys — there is no book to promote.")
+
+    # Built here rather than through paper.parse_structured_portfolio: that
+    # function exists to translate *broker* tickers, and these are already
+    # canonical Yahoo symbols read from the profile's universe.csv. Sending
+    # them through the broker map would let an entry like ASML be silently
+    # rewritten to a different listing than the one that was screened.
+    holdings, position_meta = [], {}
+    for a in buys:
+        ticker = a["ticker"]
+        holdings.append({
+            "ticker": ticker,
+            "name": a.get("name") or ticker,
+            "weight_pct": a.get("target_weight_pct"),
+            "thesis": a.get("thesis") or "",
+            "kill_criterion": a.get("kill_criterion") or "",
+            "cluster": "",
+            "confidence": a.get("confidence"),
+        })
+        position_meta[ticker] = {
+            "watch": a.get("add_criterion") or "",
+            "thesis": a.get("thesis") or "",
+            "bear_case": "",
+            "next_earnings": a.get("next_earnings") or "",
+        }
+
+    unwatched = [h["ticker"] for h in holdings if not h["kill_criterion"]]
+    capital = float(capital_sek if capital_sek is not None
+                    else result["deployment"]["placed_sek"])
+    profile = result.get("profile") or {}
+    label = name or f"{profile.get('name') or 'What-if'} — {result['id']}"
+
+    slug, log = paper.create_portfolio(
+        name=label,
+        capital_sek=capital,
+        holdings_text=json.dumps(result, indent=2, ensure_ascii=False),
+        model_label=(result.get("model") or {}).get("model_id", ""),
+        benchmark=profile.get("benchmark") or paper.DEFAULT_BENCHMARK,
+        holdings_override=holdings,
+        position_meta=position_meta,
+        kind="live",
+        execute_buys=execute,
+    )
+    return {
+        "slug": slug,
+        "name": label,
+        "log": log,
+        "positions": len(holdings),
+        "capital_sek": capital,
+        "executed": execute,
+        # Reported, not blocked: the monitoring plan is opt-in, so promoting
+        # without one is a choice. But paper-track reads kill criteria, so a
+        # sleeve missing them is one the daily watch cannot act on.
+        "unwatched_tickers": unwatched,
+    }
 
 
 def list_results(limit: int = 20) -> list[dict]:

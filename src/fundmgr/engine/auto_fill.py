@@ -12,11 +12,32 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from fundmgr.config import AppConfig
 from fundmgr.data.benchmark import get_benchmark_return_pct
+from fundmgr.levels import (
+    SKIP_AT_TARGET,
+    SKIP_BELOW_MIN,
+    SKIP_MARKET_CLOSED,
+    SKIP_NOT_HELD,
+    SKIP_NO_PRICE,
+)
 from fundmgr.state.models import NavPoint, Transaction
 from fundmgr.state.store import Store
+
+
+class FillOutcome(NamedTuple):
+    """What the filler did: log lines, and why each action that didn't fill didn't.
+
+    `skipped` maps ticker -> a `levels.SKIP_*` reason. It exists because a
+    caller cannot infer the reason from the book: check-stops reads unsold
+    shares and used to call every one of them a closed market, which is true of
+    a European name after its venue shuts and false of a fill that simply had
+    no price.
+    """
+    log: list[str]
+    skipped: dict[str, str]
 
 
 def _fetch_price(ticker: str) -> float | None:
@@ -38,7 +59,7 @@ def execute_paper_fills(
     *,
     max_wait_secs: int = 0,
     notify_skips: bool = True,
-) -> list[str]:
+) -> FillOutcome:
     """
     Execute paper fills for all approved buy/sell actions.
 
@@ -47,9 +68,11 @@ def execute_paper_fills(
     notify_skips: if True, send a Telegram reminder when fills are skipped
                   because their exchange is closed (holiday/off-hours)
 
-    Returns list of log lines describing what was executed.
+    Returns a FillOutcome: the log lines describing what was executed, and the
+    reason every skipped action was skipped.
     """
     log: list[str] = []
+    skipped: dict[str, str] = {}
     positions = store.get_positions()
     pos_map = {p.ticker: p for p in positions}
     nav = sum(p.shares * (p.current_price_sek or p.avg_cost_sek) for p in positions) + store.get_cash()
@@ -73,6 +96,7 @@ def execute_paper_fills(
         exchange = exch_by_ticker.get(ticker, "")
         if is_exchange_open(exchange) is False:
             skipped_closed.append((ticker, side, exchange or "?"))
+            skipped[ticker] = SKIP_MARKET_CLOSED
             log.append(f"  ⏸ {ticker}: {exchange or '?'} closed — fill skipped")
             continue
 
@@ -87,6 +111,7 @@ def execute_paper_fills(
             waited += 30
 
         if not price:
+            skipped[ticker] = SKIP_NO_PRICE
             log.append(f"  ⚠ {ticker}: could not fetch price — skipped")
             continue
 
@@ -96,10 +121,12 @@ def execute_paper_fills(
             )
             weight_gap = target_weight_pct - current_weight
             if weight_gap <= 0:
+                skipped[ticker] = SKIP_AT_TARGET
                 log.append(f"  {ticker}: already at/above target weight — skipped")
                 continue
             buy_sek = nav * weight_gap / 100.0
             if buy_sek < cfg.risk.min_trade_sek:
+                skipped[ticker] = SKIP_BELOW_MIN
                 log.append(f"  {ticker}: trade size {buy_sek:.0f} SEK below minimum — skipped")
                 continue
             shares = buy_sek / price
@@ -107,6 +134,7 @@ def execute_paper_fills(
 
         elif side == "sell":
             if ticker not in pos_map:
+                skipped[ticker] = SKIP_NOT_HELD
                 log.append(f"  {ticker}: not held — skipped sell")
                 continue
             pos = pos_map[ticker]
@@ -118,6 +146,7 @@ def execute_paper_fills(
                 current_sek = pos.shares * price
                 sell_sek = current_sek - target_sek
                 if sell_sek < cfg.risk.min_trade_sek:
+                    skipped[ticker] = SKIP_BELOW_MIN
                     log.append(f"  {ticker}: sell size {sell_sek:.0f} SEK below minimum — skipped")
                     continue
                 shares = sell_sek / price
@@ -166,4 +195,4 @@ def execute_paper_fills(
     except Exception:
         pass
 
-    return log
+    return FillOutcome(log, skipped)

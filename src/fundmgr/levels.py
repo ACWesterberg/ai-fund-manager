@@ -8,6 +8,43 @@ about fetching prices.
 from __future__ import annotations
 
 
+# Why an action didn't fill. The filler is the only thing that knows, so it
+# reports in this vocabulary and callers describe what it reported — see
+# `deferred_note` for the failure that motivated saying it that way round.
+SKIP_MARKET_CLOSED = "market_closed"
+SKIP_NO_PRICE = "no_price"
+SKIP_NOT_HELD = "not_held"
+SKIP_BELOW_MIN = "below_min"
+SKIP_AT_TARGET = "at_target"
+
+_DEFERRED_NOTES: dict[str, str] = {
+    SKIP_MARKET_CLOSED: "market closed, sells on the next open",
+    SKIP_NO_PRICE: "no live price, retries next cycle",
+    SKIP_NOT_HELD: "no longer held",
+    SKIP_BELOW_MIN: "below the minimum trade size",
+    SKIP_AT_TARGET: "already at target weight",
+}
+
+# Said when the filler recorded no reason at all. Names the consequence, which
+# holds whatever the cause was, and claims nothing about the cause.
+_DEFERRED_UNKNOWN = "not filled this cycle, the level stands"
+
+
+def deferred_note(reason: str | None) -> str:
+    """How to describe a triggered sell that didn't settle.
+
+    The reason has to come from the filler. `check-stops` runs one fund-wide
+    schedule (15:00–22:00 CET) across venues that shut at different times, so
+    "market closed" is true of some deferrals and false of others — and it was
+    asserted for all of them. It reached Telegram about a Norwegian name at
+    15:00 with Oslo trading for another 80 minutes, in the same line that
+    quoted the live price the alert had just fetched.
+
+    A reason we don't have is reported as a reason we don't have.
+    """
+    return _DEFERRED_NOTES.get(reason or "", _DEFERRED_UNKNOWN)
+
+
 def merged_levels(action, prior: dict | None) -> tuple[float | None, float | None] | None:
     """
     Stop and take-profit to store for `action`, or None to leave it alone.

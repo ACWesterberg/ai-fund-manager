@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from fundmgr import paper, watchplan
+from fundmgr import paper, regions, watchplan
 from fundmgr.engine import sleeve_review
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
@@ -71,6 +71,11 @@ class ReviewRequest(BaseModel):
     # Per-sleeve risk caps. Empty = keep whatever the sleeve already stores;
     # the engine cleans and validates before any of it reaches a guardrail.
     risk: dict = Field(default_factory=dict)
+    # Geographic mix for this book, {region code: % of NAV}. Unlike `risk` this
+    # is always sent through as given, empty included: the form renders the
+    # stored mix, so submitting it cleared is how a mix is removed.
+    region_targets: dict[str, float] = Field(default_factory=dict)
+    region_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
 
 
 def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
@@ -86,6 +91,10 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
             include_macro=req.include_macro,
             refresh_prices=req.refresh_prices,
             risk=req.risk or None,
+            region_mix={
+                "targets": req.region_targets,
+                "tolerance_pct": req.region_tolerance_pct,
+            },
         )
         with _review_lock:
             if _review_job and _review_job["id"] == job_id:
@@ -944,6 +953,14 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             valid = {(m["provider"], m["model_id"]) for m in sleeve_review.MODEL_OPTIONS}
             if (req.provider, req.model_id) not in valid:
                 raise HTTPException(status_code=400, detail="Unknown provider/model combination")
+        unknown = sorted(set(req.region_targets) - set(regions.REGION_BY_CODE))
+        if unknown:
+            raise HTTPException(status_code=400,
+                                detail=f"Unknown region(s): {', '.join(unknown)}")
+        try:
+            regions.clean_targets(req.region_targets)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
 
         with _review_lock:
             if _review_job and _review_job["status"] == "running":
@@ -1112,6 +1129,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "config": defaults["config"],
                 "country": defaults["country"],
                 "risk": defaults["risk"],
+                "regions": regions.options(),
+                "region_targets": (defaults["regions"].get("targets") or {}),
+                "region_tolerance_pct": defaults["regions"].get(
+                    "tolerance_pct", regions.DEFAULT_TOLERANCE_PCT),
                 # The profile's own caps, so the form can show what an empty
                 # override field will actually run under.
                 "profile_risk": _profile_risk(defaults["config"]),

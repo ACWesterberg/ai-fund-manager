@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fundmgr import regions
 from fundmgr.data.prices import TickerFeatures
 
 
@@ -145,25 +146,56 @@ def screen(
     held_tickers: set[str],
     top_n: int = 75,
     pinned_tickers: set[str] | None = None,
+    region_quotas: dict[str, int] | None = None,
+    excluded_regions: set[str] | None = None,
 ) -> tuple[dict[str, TickerFeatures], int]:
     """Return top_n candidates by score, always including held + pinned positions.
+
+    `region_quotas` reserves slots per region (see fundmgr.regions) before the
+    ranking is allowed to spend the rest. Without it a regional target is
+    unbuildable rather than merely hard: the score is blind to geography, so a
+    week where momentum sits in US large caps hands the model a list with four
+    Nordic names in it and no way to reach 30% Nordics from there. Reserved
+    slots are a floor on choice, not a cap — the free remainder still goes to
+    whatever scored best, region regardless.
+
+    `excluded_regions` drops a region the mix asks for none of, so the prompt
+    isn't paying to show names whose buys the guardrails would reject anyway.
+    Held and pinned names are never dropped by it: you must be able to sell
+    what you own, wherever it is listed.
 
     Returns (filtered_features, total_screened_out).
     """
     pinned = pinned_tickers or set()
     always = held_tickers | pinned
+    region_of_ticker = regions.regions_of(features)
 
     scored = sorted(
         ((sym, _score(feat), feat) for sym, feat in features.items()),
         key=lambda x: x[1],
         reverse=True,
     )
+    if excluded_regions:
+        scored = [
+            row for row in scored
+            if row[0] in always or region_of_ticker.get(row[0]) not in excluded_regions
+        ]
 
     selected: dict[str, TickerFeatures] = {}
 
     for sym, _, feat in scored:
         if sym in always:
             selected[sym] = feat
+
+    for code, quota in _quota_order(region_quotas):
+        need = quota - sum(1 for sym in selected if region_of_ticker.get(sym) == code)
+        for sym, _, feat in scored:
+            if need <= 0 or len(selected) >= top_n:
+                break
+            if sym in selected or region_of_ticker.get(sym) != code:
+                continue
+            selected[sym] = feat
+            need -= 1
 
     remaining = max(0, top_n - len(selected))
     count = 0
@@ -176,3 +208,9 @@ def screen(
 
     screened_out = len(features) - len(selected)
     return selected, screened_out
+
+
+def _quota_order(region_quotas: dict[str, int] | None) -> list[tuple[str, int]]:
+    """Quotas in a fixed region order, so a screen is reproducible."""
+    quotas = region_quotas or {}
+    return [(r.code, quotas[r.code]) for r in regions.REGIONS if quotas.get(r.code)]

@@ -43,6 +43,7 @@ The two Global and two Buffett funds are deliberately **paired across providers 
   - Dominant, not per-name: a run whose main market is shut is deciding on stale prices whatever the minority can still trade.
   - Dominant by **holiday schedule**, not by MIC. XNYS and XNAS share the US calendar, and counting them separately makes **London** the plurality of `universe_global.csv` (3,940 vs 3,782) — LSE trades on US holidays, so the naive version would have let exactly that run proceed into a closed market. Nothing else is grouped: the Nordic exchanges genuinely differ from each other on national holidays.
   - Fails open throughout — unreadable universe, unmapped exchange or calendar error all run as before. Blocking a run on a guess is worse than the spend it saves.
+- **A regional mix is reserved in the screen, capped in the guardrails, and reported at the end.** `regions.py` groups the universe's `country` column into Nordics / North America / UK & Ireland / Europe ex-Nordics / Asia-Pacific / Other, and the What-If Lab and sleeve reviews take a per-region % of NAV. Three layers have to agree on it: the **screener** reserves candidate slots in proportion to each target — without that the mix is unbuildable rather than merely hard, since the score is blind to geography and a week where momentum sits in US large caps hands the model four Nordic names; the **prompt** states the brief and tags each candidate with its region; the **guardrails** reject a buy past target + tolerance. Only the ceiling binds. A guardrail can refuse a trade but cannot invent one, so "at least 30% Nordics" is a brief and a number reported back, while "at most 40%" is mechanical — anything claiming to enforce a floor is claiming a guardrail can create a buy. A region nobody named is unconstrained; an explicit **0%** is an exclusion, so it caps at zero rather than at the tolerance band and drops that region's names from the candidate list (held and pinned excepted — you must be able to sell what you own).
 - **The universe is screened before the model sees it.** `screener.py` scores every ticker on momentum (1/5/20/60-day, weighted), trend alignment (above MA50/MA200), and RSI (penalising overbought, rewarding room to run), then passes the top `screener.top_n`. **Held and pinned tickers are always included** regardless of score — the model must be able to sell what it owns. At `top_n: 100` against a 96-name universe the Buffett funds see everything; the Global funds see 120 of 17k, and the Nordic fund 75 of 1,605.
 - **Fills never book at a stale price.** `auto_fill` checks each ticker's exchange calendar and skips the fill when that venue is closed, with a Telegram reminder. `check-stops` is the same idea on a faster clock: pure price arithmetic, **no LLM calls**, every 15 min during trading hours — separate from the weekly decision entirely. (DeepSwing copied this split.)
 - **Outcomes are scored at a horizon the mandate chooses.** `evaluation_horizon_days` (28) is a property of the mandate, not a system constant — a momentum book and a quality-compounder screen are not the same question asked at 28 days. The learning loop reads the horizon back and will tell a fund to stop taking positions it cannot score inside it, so shortening it quietly rewrites the strategy.
@@ -84,9 +85,10 @@ News and FinBERT run on **screener candidates only**, never the full universe �
 
 Generates a hypothetical from-scratch portfolio for any fund profile against a **synthetic clean-slate snapshot** (full amount in cash, zero positions), so it answers "what would this mandate buy today with this money" rather than "what should it do next". Model, sample count, amount, macro and price-refresh are all per-run overrides. Results are written to disk and listed newest-first; generation runs in a daemon thread with a single job slot.
 
-Two things it does that the weekly run doesn't:
+Three things it does that the weekly run doesn't:
 
 - **Monitoring plan (opt-in toggle).** `DecisionRun` has carried `kill_criterion`, `add_criterion`, `target_price`, `max_weight_pct` and `tranche_pct` since the sleeve review learned to specify monitoring, but only `sleeve_review` asks for them. The Lab asks too when the toggle is on. It is **off by default** because it costs output tokens and only earns them on a run that might become real. The directive deliberately mirrors `sleeve_review`'s wording — that is the prompt these fields were designed against, and the two should not drift apart. Plan values are stored **only when requested**: OpenAI structured outputs put the field descriptions in front of the model whether or not you ask, so an unrequested value is a guess rather than an answer, and promotion must not read it as a plan.
+- **Regional mix (optional).** Per-region % of NAV, blank = unconstrained, 0 = excluded. The result reports target vs achieved per region and names any region the run left short — the floor is not enforceable, so the shortfall is the run's own caveat rather than something the pipeline quietly papers over. The mix travels on promotion, so a sleeve promoted from a 30%-Nordics run is reviewed against that mix instead of drifting back to whatever the ranking favours.
 - **Promote to a live sleeve.** `promote_to_sleeve` turns a stored result into a real monitored sleeve via `paper.create_portfolio(kind="live")`. Only **approved buys** carry over — a rejected or turnover-dropped action was never part of the book the run proposed. It defaults to **plan-only** (like `fund paper-import`), so promoting never spends money by surprise. Promoting without a monitoring plan is **reported, not blocked** — the toggle exists so the choice is the user's — but the response and the UI name the positions `paper-track` will have nothing to watch.
   - It builds the holdings **directly**, not through `paper.parse_structured_portfolio`. That function exists to translate *broker* tickers; these are canonical Yahoo symbols read from the profile's `universe.csv`, and routing them through the broker map would let an entry like `ASML` be silently rewritten to a different listing than the one screened.
   - `run_id` reaches `load_result` from a URL path segment, so it is matched against the generated id format rather than joined onto a directory.
@@ -99,6 +101,8 @@ Two things it does that the weekly run doesn't:
 
 - **`paper`** — a simulation book. `execute_buys=True`: every position opens now at live prices.
 - **`live`** — a mirror of a real broker account. `execute_buys=False`: the *plan* is imported and positions appear as you record fills (`fund paper-fill`, or a Telegram screenshot through OCR). Watched daily by `fund paper-track` against its kill criteria, capex trigger, earnings dates and drift.
+
+`sleeve_review` re-decides a live sleeve against its current book. It borrows a source profile for universe, mandate and risk limits, and carries three remembered settings of its own: the country scope, per-sleeve risk caps, and the regional mix. All three are stored on the sleeve, so a book keeps being reviewed the way it was set up rather than needing them retyped each run.
 
 See **[docs/MONITORING.md](docs/MONITORING.md)** for the full monitoring model — kill and add criteria, how criterion text is read, staleness, add signals, and the evidence sources behind each.
 
@@ -116,6 +120,8 @@ See **[docs/MONITORING.md](docs/MONITORING.md)** for the full monitoring model �
 | `max_turnover_pct` | 25 | per run; excess dropped lowest-confidence first |
 | `stale_after_days` | 5 | stale data blocks **buys** only |
 | `cold_start_*` | 80 / 50 | lift the turnover cap when deploying from cash |
+| `region_targets` | `{}` | % of NAV per region; only the ceiling (target + tolerance) is enforced |
+| `region_tolerance_pct` | 10 | band around each regional target |
 
 Fees: `rate` 0.10% with a 1–99 SEK floor/ceiling (`FeeConfig.calc`).
 
@@ -165,6 +171,7 @@ src/fundmgr/engine/whatif.py       What-If Lab: generate, load_result, promote_t
 src/fundmgr/engine/sleeve_review.py  Review a live sleeve; the monitoring-plan prompt lives here
 src/fundmgr/engine/auto_fill.py    Paper fills; skips closed venues
 src/fundmgr/guardrails/rules.py    Every mechanical risk check; the audit log
+src/fundmgr/regions.py        Geographic grouping + the mix: quotas, caps, exposure, reporting
 src/fundmgr/data/screener.py       Momentum + trend + RSI score → top_n candidates
 src/fundmgr/data/market_hours.py   Exchange calendars: is_exchange_open, dominant_calendar,
                                    is_trading_day, next_session

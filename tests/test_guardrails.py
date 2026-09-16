@@ -7,6 +7,7 @@ from datetime import datetime
 
 import pytest
 
+from fundmgr import regions
 from fundmgr.config import AppConfig, FeeConfig, RiskConfig
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.engine.schema import Action, DecisionRun
@@ -264,3 +265,138 @@ def test_hold_always_approved():
     result = apply_guardrails(decision, snap, {}, UNIVERSE, cfg)
     holds = [a for a in result.approved_actions if a.side == "hold"]
     assert len(holds) == 1
+
+
+# ── Regional allocation ceiling ───────────────────────────────────────────────
+#
+# Only the ceiling is enforceable. Nothing here can make a book buy Nordics; it
+# can only stop it buying past the band. Tests that appear to check a floor are
+# checking that the floor is *not* enforced.
+
+def _regional_cfg(targets: dict, tolerance: float = 10.0, **overrides) -> AppConfig:
+    cfg = _cfg(**overrides)
+    cfg.risk.region_targets = targets
+    cfg.risk.region_tolerance_pct = tolerance
+    return cfg
+
+
+def _geo_feat(ticker: str, country: str, price: float = 100.0) -> TickerFeatures:
+    feat = _feat(ticker, price=price)
+    feat.country = country
+    return feat
+
+
+def _geo_features() -> dict[str, TickerFeatures]:
+    return {
+        "VOLV-B.ST": _geo_feat("VOLV-B.ST", "SE"),
+        "SAND.ST":   _geo_feat("SAND.ST", "SE"),
+        "ERIC-B.ST": _geo_feat("ERIC-B.ST", "SE"),
+        "ABB.ST":    _geo_feat("ABB.ST", "US"),
+        "HM-B.ST":   _geo_feat("HM-B.ST", "DE"),
+    }
+
+
+def test_buy_within_the_regional_band_is_approved():
+    cfg = _regional_cfg({"nordics": 30.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("VOLV-B.ST", 25.0, 25_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_buy_past_the_regional_ceiling_is_rejected():
+    cfg = _regional_cfg({"nordics": 30.0}, min_cash_pct=0, max_position_pct=50)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("VOLV-B.ST", 45.0, 45_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    v = result.verdicts[0]
+    assert not v.approved
+    assert "Nordics" in v.rejection_reason
+    assert "cap 40%" in v.rejection_reason
+
+
+def test_the_ceiling_counts_what_the_region_already_holds():
+    """Two buys that each fit still cannot both fit — the second sees the first."""
+    cfg = _regional_cfg({"nordics": 30.0}, min_cash_pct=0)
+    snap = _snap(cash=65_000, positions=[Position("VOLV-B.ST", 350, 100.0)])
+    decision = _decision([_buy("SAND.ST", 10.0, 10_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    assert not result.verdicts[0].approved
+    assert "Nordics" in result.verdicts[0].rejection_reason
+
+
+def test_a_region_the_mix_never_named_is_unconstrained():
+    """Asking for 30% Nordics says nothing about where the other 70% goes."""
+    cfg = _regional_cfg({"nordics": 30.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("HM-B.ST", 16.0, 16_000)])   # Germany — not named
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_a_zero_target_excludes_the_region_outright():
+    """"No North America" must not permit a tolerance band's worth of it."""
+    cfg = _regional_cfg({"north_america": 0.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("ABB.ST", 5.0, 5_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    v = result.verdicts[0]
+    assert not v.approved
+    assert "set to 0%" in v.rejection_reason
+
+
+def test_a_sell_out_of_a_capped_region_is_never_blocked():
+    """Selling is how an over-weight region gets back inside its band."""
+    cfg = _regional_cfg({"nordics": 10.0}, min_cash_pct=0)
+    snap = _snap(cash=20_000, positions=[Position("VOLV-B.ST", 800, 100.0)])
+    decision = _decision([_sell("VOLV-B.ST", 5.0, 40_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_a_region_left_short_is_not_forced_anywhere():
+    """The floor is advisory: a run that buys nothing Nordic still passes."""
+    cfg = _regional_cfg({"nordics": 30.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("HM-B.ST", 15.0, 15_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+    assert not [v for v in result.verdicts if not v.approved]
+
+
+def test_no_mix_means_no_regional_check():
+    cfg = _cfg(min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("VOLV-B.ST", 15.0, 15_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_a_name_with_no_country_is_measured_as_other():
+    cfg = _regional_cfg({regions.OTHER_CODE: 0.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    features = _geo_features() | {"INVE-B.ST": _feat("INVE-B.ST")}  # no country set
+    decision = _decision([_buy("INVE-B.ST", 5.0, 5_000)])
+    result = apply_guardrails(decision, snap, features, UNIVERSE, cfg)
+    assert not result.verdicts[0].approved
+
+
+def test_the_region_is_measured_on_the_clipped_trade_not_the_requested_one():
+    """A 40% request clipped to 12% is a 12% trade — and a 15% ceiling clears it."""
+    cfg = _regional_cfg({"nordics": 10.0}, tolerance=5.0, max_position_pct=12, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("VOLV-B.ST", 40.0, 40_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    v = result.verdicts[0]
+    assert v.clipped and v.approved
+    assert v.action.target_weight_pct == 12.0
+
+
+def test_a_clipped_trade_still_breaching_its_region_is_rejected():
+    cfg = _regional_cfg({"nordics": 10.0}, tolerance=0.0, max_position_pct=12, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("VOLV-B.ST", 40.0, 40_000)])
+    result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)
+    v = result.verdicts[0]
+    assert not v.approved
+    assert "Nordics would reach 12.0%" in v.rejection_reason

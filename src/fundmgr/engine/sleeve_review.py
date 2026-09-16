@@ -58,6 +58,7 @@ import uuid
 from datetime import datetime, timedelta
 from functools import lru_cache
 
+from fundmgr import regions
 from fundmgr.config import AppConfig, UniverseTicker, get_enabled_tickers
 from fundmgr.data.fundamentals import apply_to_features
 from fundmgr.data.news import (
@@ -87,6 +88,7 @@ DEFAULT_MAX_CANDIDATES = 750
 META_CONFIG = "paper_review_config"
 META_COUNTRY = "paper_review_country"
 META_RISK = "paper_review_risk"
+META_REGIONS = "paper_review_regions"
 
 # Risk caps a sleeve may carry its own value for. Everything else — sector caps,
 # minimum trade size, staleness — stays the source profile's, because those are
@@ -147,6 +149,7 @@ def review_defaults(store: Store) -> dict:
         "config": config_name,
         "country": store.get_meta(META_COUNTRY) or "",
         "risk": stored_risk(store),
+        "regions": stored_regions(store),
     }
 
 
@@ -176,6 +179,31 @@ def stored_risk(store: Store) -> dict:
     """This sleeve's own risk caps, as far as it sets any."""
     try:
         return clean_risk(json.loads(store.get_meta(META_RISK) or "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+def clean_regions(raw: dict | None) -> dict:
+    """A stored or submitted geographic mix, validated.
+
+    Same boundary role as clean_risk: a mix that cannot be parsed falls back to
+    "no mix" rather than reaching the guardrails as a half-read dict. A sum past
+    100% is the one case worth raising on, since it describes a book that cannot
+    exist and silently dropping part of it would build a different one.
+    """
+    targets = regions.clean_targets((raw or {}).get("targets"))
+    if not targets:
+        return {}
+    return {
+        "targets": targets,
+        "tolerance_pct": regions.clean_tolerance((raw or {}).get("tolerance_pct")),
+    }
+
+
+def stored_regions(store: Store) -> dict:
+    """This sleeve's own geographic mix, as far as it sets one."""
+    try:
+        return clean_regions(json.loads(store.get_meta(META_REGIONS) or "{}"))
     except (ValueError, TypeError):
         return {}
 
@@ -976,6 +1004,7 @@ def review_sleeve(
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     refresh_prices: bool = True,
     risk: dict | None = None,
+    region_mix: dict | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Re-decide one sleeve against its current book and a scoped universe.
@@ -987,6 +1016,13 @@ def review_sleeve(
 
     `risk` overrides the profile's caps for this run (see OVERRIDABLE_RISK) and,
     like the scope, is remembered on the sleeve for the next one.
+
+    `region_mix` is {"targets": {region code: % of NAV}, "tolerance_pct": n} —
+    the geographic allocation this book is held to (see fundmgr.regions). It is
+    remembered the same way, so a sleeve promoted from a 30%-Nordics what-if
+    keeps being reviewed against that mix rather than drifting back to whatever
+    the screener's ranking favours. Ceilings bind; a region left short is
+    reported in the result.
     """
     from fundmgr import paper
 
@@ -998,10 +1034,16 @@ def review_sleeve(
     config_name = config_name or defaults["config"]
     country = (country if country is not None else defaults["country"]) or None
     risk = defaults["risk"] if risk is None else clean_risk(risk)
+    region_mix = defaults["regions"] if region_mix is None else clean_regions(region_mix)
+    region_targets = region_mix.get("targets") or {}
+    region_tolerance = region_mix.get("tolerance_pct", regions.DEFAULT_TOLERANCE_PCT)
 
     cfg = load_profile_config(config_name)
     cfg, risk_applied = apply_risk_overrides(cfg, risk)
     cfg = copy.copy(cfg)
+    cfg.risk = copy.copy(cfg.risk)
+    cfg.risk.region_targets = region_targets
+    cfg.risk.region_tolerance_pct = region_tolerance
     cfg.llm = copy.copy(cfg.llm)
     if provider and model_id:
         cfg.llm.provider = provider
@@ -1062,6 +1104,8 @@ def review_sleeve(
         features, held_tickers,
         top_n=cfg.screener.top_n,
         pinned_tickers=set(cfg.screener.pinned_tickers) & set(features),
+        region_quotas=regions.candidate_quotas(region_targets, cfg.screener.top_n),
+        excluded_regions=regions.excluded(region_targets),
     )
 
     macro_block = ""
@@ -1168,6 +1212,16 @@ def review_sleeve(
     }
     ages = sorted(f.data_age_trading_days for f in screened.values())
 
+    # Projected against `snap`, not `funded`: the mix describes the book this
+    # review would leave behind, and the funding pass is an accounting step on
+    # the way there rather than a state the sleeve is ever in.
+    region_by_ticker = regions.regions_of(features)
+    region_rows = regions.mix_rows(
+        region_targets, region_tolerance,
+        regions.projected_exposure(snap, guardrails.approved_actions, region_by_ticker),
+        regions.candidate_counts(regions.regions_of(screened)),
+    )
+
     result = {
         "id": run_id,
         "slug": slug,
@@ -1205,6 +1259,12 @@ def review_sleeve(
             "max_position_pct": cfg.risk.max_position_pct,
             "max_positions": cfg.risk.max_positions,
             "min_cash_pct": cfg.risk.min_cash_pct,
+        },
+        "regions": {
+            "targets": region_targets,
+            "tolerance_pct": region_tolerance,
+            "rows": region_rows,
+            "shortfalls": regions.shortfalls(region_rows),
         },
         "turnover": turnover,
         "buy_count": len(buys),
@@ -1280,6 +1340,7 @@ def review_sleeve(
         store.set_meta(META_CONFIG, config_name)
         store.set_meta(META_COUNTRY, (country or "").upper())
         store.set_meta(META_RISK, json.dumps(risk))
+        store.set_meta(META_REGIONS, json.dumps(region_mix))
 
     return result
 

@@ -37,6 +37,12 @@ class RiskConfig:
     stale_after_days: int = 5
     cold_start_cash_threshold: float = 80.0  # if cash% above this, use cold_start_turnover_pct
     cold_start_turnover_pct: float = 50.0    # turnover cap when deploying from near-100% cash
+    # Geographic mix, {region code: % of NAV} — see fundmgr.regions. Empty means
+    # the book's geography is whatever the screener's ranking happens to produce.
+    # Only named regions constrain anything; the ceiling (target + tolerance) is
+    # enforced here, the floor is not, because no guardrail can force a buy.
+    region_targets: dict[str, float] = field(default_factory=dict)
+    region_tolerance_pct: float = 10.0       # band around each regional target
 
 
 @dataclass

@@ -55,6 +55,8 @@ class TickerFeatures:
     rel_volume: float | None = None          # latest day volume / 20d avg volume
     # ── Classification ───────────────────────────────────────────────────────
     sector: str | None = None               # GICS sector from universe CSV
+    country: str | None = None              # ISO-alpha-2 from universe CSV; the
+                                            # only place a name's region comes from
     # ── Sentiment (filled by news pipeline) ──────────────────────────────────
     sentiment_label: str | None = None    # positive | negative | neutral
     sentiment_score: float | None = None
@@ -70,8 +72,13 @@ class TickerFeatures:
     def is_stale(self) -> bool:
         return self.data_age_trading_days > 5
 
-    def to_prompt_block(self) -> str:
-        """Compact text block for the LLM prompt."""
+    def to_prompt_block(self, show_region: bool = False) -> str:
+        """Compact text block for the LLM prompt.
+
+        `show_region` tags the name with its region. Only worth the tokens when
+        a regional mix is being managed — otherwise the line says nothing the
+        decision uses.
+        """
         lines = [f"[{self.ticker}] {self.name}"]
 
         price_line = f"  Price: {self.last_price:.2f}  (as of {self.last_date})"
@@ -162,8 +169,14 @@ class TickerFeatures:
             lines.append(f"  Volume: {self.rel_volume:.1f}x 20d avg")
 
         # Sector / classification
+        class_parts = []
         if self.sector:
-            lines.append(f"  Sector: {self.sector}")
+            class_parts.append(f"Sector: {self.sector}")
+        if show_region:
+            from fundmgr import regions
+            class_parts.append(f"Region: {regions.label_of(regions.region_of(self.country))}")
+        if class_parts:
+            lines.append("  " + "  ·  ".join(class_parts))
 
         # Sentiment + recent headlines (raw text for the LLM to interpret directly).
         # The FinBERT label is a hint; the headlines/snippets are the primary signal.
@@ -267,6 +280,7 @@ def compute_features(
         currency=ticker.currency,
         needs_fx=ticker.needs_fx,
         sector=ticker.sector or None,
+        country=(ticker.country or "").strip().upper() or None,
         return_1d_pct=pct_return(closes, 1),
         return_5d_pct=pct_return(closes, 5),
         return_20d_pct=pct_return(closes, 20),

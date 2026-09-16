@@ -31,6 +31,7 @@ from pathlib import Path
 
 import yaml
 
+from fundmgr import regions
 from fundmgr.config import CONFIG_DIR, DATA_DIR, AppConfig, get_enabled_tickers, load_config
 from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import fetch_and_cache_fundamentals
@@ -253,6 +254,8 @@ def generate_whatif(
     deploy_full: bool = False,
     refresh_prices: bool = True,
     monitoring_plan: bool = False,
+    region_targets: dict[str, float] | None = None,
+    region_tolerance_pct: float | None = None,
 ) -> dict:
     """
     Generate a hypothetical from-scratch portfolio for one fund profile.
@@ -275,6 +278,12 @@ def generate_whatif(
     by default: it costs output tokens and only pays off for a run you might
     promote. promote_to_sleeve() works either way but says so when they're
     missing.
+
+    region_targets holds the book to a geographic mix ({region code: % of NAV},
+    see fundmgr.regions) — the screener reserves candidate slots per region, the
+    prompt states the brief, and the guardrails reject a buy past a region's
+    ceiling. Only the ceiling is enforced; a region the run leaves short is
+    reported in the result rather than filled, since nothing can force a buy.
 
     Blocking — call from a background thread in the web layer.
     """
@@ -301,6 +310,14 @@ def generate_whatif(
             raise ValueError("Amount to place must be greater than 0.")
         cfg.capital_sek = capital_sek
 
+    # Resolved before the screen, not after: the quotas below decide which names
+    # the model is ever offered, and a mix applied only at guardrail time would
+    # reject its way to an empty run instead of building the book asked for.
+    targets = regions.clean_targets(region_targets)
+    tolerance = regions.clean_tolerance(region_tolerance_pct, cfg.risk.region_tolerance_pct)
+    quotas = regions.candidate_quotas(targets, cfg.screener.top_n)
+    excluded_regions = regions.excluded(targets)
+
     hard_floor, comfortable_floor = deployment_floors(cfg)
     if cfg.capital_sek < hard_floor:
         raise ValueError(
@@ -320,7 +337,10 @@ def generate_whatif(
         )
 
     pinned = set(cfg.screener.pinned_tickers)
-    screened_features, _ = screen(features, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned)
+    screened_features, _ = screen(
+        features, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned,
+        region_quotas=quotas, excluded_regions=excluded_regions,
+    )
 
     refresh_report: dict = {"refreshed": False}
     if refresh_prices:
@@ -330,7 +350,8 @@ def generate_whatif(
             # Re-screen on the refreshed numbers so ordering and any staleness
             # gate reflect today, not the fund's last weekly run.
             screened_features, _ = screen(
-                fresh, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned
+                fresh, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned,
+                region_quotas=quotas, excluded_regions=excluded_regions,
             )
 
     macro_block = ""
@@ -350,6 +371,8 @@ def generate_whatif(
 
     effective_cfg = copy.copy(cfg)
     effective_cfg.risk = copy.copy(cfg.risk)
+    effective_cfg.risk.region_targets = targets
+    effective_cfg.risk.region_tolerance_pct = tolerance
     if deploy_full:
         # Put everything to work now: no staged-entry cap, no cash held back.
         # max_cash_pct goes to 0 too, otherwise the guardrail would happily
@@ -412,6 +435,18 @@ def generate_whatif(
     buys = [r for r in actions if r["side"] == "buy" and r["approved"]]
     invested_pct = round(sum(r["target_weight_pct"] for r in buys), 1)
 
+    # What the mix actually came out as. Reported whether or not one was asked
+    # for: a run with no target still has a geography, and seeing it is how you
+    # decide whether to set one next time.
+    region_by_ticker = regions.regions_of(features)
+    achieved = regions.projected_exposure(
+        snap, guardrails.approved_actions, region_by_ticker
+    )
+    region_rows = regions.mix_rows(
+        targets, tolerance, achieved,
+        regions.candidate_counts(regions.regions_of(screened_features)),
+    )
+
     result = {
         "id": run_id,
         "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
@@ -443,6 +478,16 @@ def generate_whatif(
         "sampling": sampling,
         "consensus": vote_counts is not None,
         "monitoring_plan": monitoring_plan,
+        "regions": {
+            "targets": targets,
+            "tolerance_pct": tolerance,
+            "rows": region_rows,
+            # Named, not merely visible in the table: a mix that came back short
+            # is the run's main caveat, and a promoted sleeve inherits it.
+            "shortfalls": regions.shortfalls(region_rows),
+            "quotas": quotas,
+            "excluded": sorted(excluded_regions),
+        },
         "market_summary": decision.market_summary,
         "notes": decision.notes,
         "cash_target_pct": guardrails.cash_target_pct,
@@ -543,6 +588,27 @@ def promote_to_sleeve(
         kind="live",
         execute_buys=execute,
     )
+
+    # The mix travels with the book. A sleeve promoted from a 30%-Nordics run
+    # whose next review defaults back to "anywhere" would quietly undo the thing
+    # the run was generated for. Fails open: the sleeve exists by the time this
+    # runs, so losing it over a remembered preference would be the worse outcome
+    # — the response says what was actually carried.
+    region_meta = result.get("regions") or {}
+    carried: dict[str, float] = {}
+    try:
+        carried = regions.clean_targets(region_meta.get("targets"))
+        if carried:
+            from fundmgr.engine import sleeve_review  # imports whatif — keep it local
+            _meta, store = paper.open_portfolio(slug)
+            store.set_meta(sleeve_review.META_REGIONS, json.dumps({
+                "targets": carried,
+                "tolerance_pct": regions.clean_tolerance(region_meta.get("tolerance_pct")),
+            }))
+    except Exception as exc:
+        logger.warning("What-if: could not carry the regional mix to %s: %s", slug, exc)
+        carried = {}
+
     return {
         "slug": slug,
         "name": label,
@@ -554,6 +620,7 @@ def promote_to_sleeve(
         # without one is a choice. But paper-track reads kill criteria, so a
         # sleeve missing them is one the daily watch cannot act on.
         "unwatched_tickers": unwatched,
+        "region_targets": carried,
     }
 
 

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from fundmgr import regions as regions_mod
 from fundmgr.engine import whatif
 from fundmgr.engine.schema import Action, DecisionRun
 from fundmgr.state.store import Store
@@ -795,3 +796,317 @@ def test_load_result_rejects_anything_but_a_run_id(profile, bad):
     """run_id arrives from a URL path segment."""
     with pytest.raises(FileNotFoundError):
         whatif.load_result(bad)
+
+
+# ── Regional allocation ───────────────────────────────────────────────────────
+#
+# The Lab's whole point is answering "what would this mandate buy today", so
+# "…with 30% of it in the Nordics" has to survive every stage: the screen that
+# decides what is offered, the prompt that states the brief, and the guardrails
+# that hold the ceiling.
+
+GEO_UNIVERSE_CSV = """name,yahoo_ticker,isin,country,exchange,sector,enabled
+Alfa AB,ALFA.ST,SE0001,SE,OMXS,Industrials,true
+Beta AB,BETA.ST,SE0002,SE,OMXS,Technology,true
+Gamma Inc,GAMMA,US0003,US,NASDAQ,Technology,true
+Delta Inc,DELTA,US0004,US,NYSE,Healthcare,true
+Epsilon SE,EPS.DE,DE0005,DE,XETRA,Industrials,true
+"""
+
+
+@pytest.fixture
+def geo_profile(tmp_path, monkeypatch):
+    """A profile whose universe spans three regions, so a mix has somewhere to go."""
+    config_dir = tmp_path / "geo_config"
+    data_dir = tmp_path / "geo_data"
+    config_dir.mkdir()
+    data_dir.mkdir()
+
+    (config_dir / "universe_geo.csv").write_text(GEO_UNIVERSE_CSV)
+    (config_dir / "mandate_geo.md").write_text(MANDATE)
+    db_path = data_dir / "fund_geo.db"
+    (config_dir / "config_geo.yaml").write_text(f"""
+name: "🌍 Geo Fund"
+capital_sek: 100000
+benchmark: "^OMXSPI"
+db_path: "{db_path}"
+mandate_path: "{config_dir / 'mandate_geo.md'}"
+universe_path: "{config_dir / 'universe_geo.csv'}"
+llm:
+  provider: openai
+  model_id: "gpt-5.6-sol"
+  n_samples: 1
+risk:
+  max_position_pct: 40
+  max_positions: 5
+  min_cash_pct: 0
+  max_cash_pct: 10
+  min_trade_sek: 1000
+  max_turnover_pct: 100
+  cold_start_cash_threshold: 80
+  cold_start_turnover_pct: 100
+screener:
+  top_n: 10
+""")
+
+    store = Store(db_path)
+    store.initialise(100000)
+    for ticker in ("ALFA.ST", "BETA.ST", "GAMMA", "DELTA", "EPS.DE"):
+        store.save_prices(ticker, _price_rows())
+
+    monkeypatch.setattr(whatif, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(whatif, "WHATIF_DIR", data_dir / "whatif")
+    return {"config_dir": config_dir, "data_dir": data_dir, "db_path": db_path}
+
+
+def _geo_buy(ticker: str, weight: float, sek: float) -> Action:
+    return Action(ticker=ticker, side="buy", target_weight_pct=weight,
+                  sek_estimate=sek, confidence=0.8, thesis="Test thesis.")
+
+
+def _capture_prompt(monkeypatch, actions: list[Action]) -> dict:
+    captured: dict = {}
+    stub = _stub_consensus(actions, n=1)
+
+    def _capture(system, user, cfg):
+        captured["user"] = user
+        captured["cfg"] = cfg
+        return stub(system, user, cfg)
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _capture)
+    return captured
+
+
+def test_no_mix_leaves_the_prompt_untagged(geo_profile, monkeypatch):
+    """Region tags cost tokens on every candidate — not spent unless in use."""
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False)
+
+    assert "Region:" not in captured["user"]
+    assert "Regional allocation target" not in captured["user"]
+    assert result["regions"]["targets"] == {}
+
+
+def test_the_mix_reaches_the_prompt_and_tags_each_candidate(geo_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30}, region_tolerance_pct=10,
+    )
+
+    assert "Regional allocation target" in captured["user"]
+    assert "Nordics" in captured["user"] and "20–40%" in captured["user"]
+    assert "Region: North America" in captured["user"]
+
+
+def test_the_ceiling_is_enforced_on_the_result(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 35, 35_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 20}, region_tolerance_pct=5,
+    )
+    row = result["actions"][0]
+    assert row["status"] == "REJECTED"
+    assert "Nordics" in row["reason"]
+
+
+def test_a_region_left_short_is_reported_not_forced(geo_profile, monkeypatch):
+    """Nothing can make the book buy Nordics — but the run must say it didn't."""
+    _capture_prompt(monkeypatch, [_geo_buy("GAMMA", 30, 30_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30}, region_tolerance_pct=10,
+    )
+    assert result["actions"][0]["approved"] is True
+    rows = {r["code"]: r for r in result["regions"]["rows"]}
+    assert rows["nordics"]["status"] == "short"
+    assert any("Nordics" in line for line in result["regions"]["shortfalls"])
+
+
+def test_the_achieved_mix_is_reported_for_every_run(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [
+        _geo_buy("ALFA.ST", 30, 30_000), _geo_buy("GAMMA", 20, 20_000),
+    ])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30}, region_tolerance_pct=10,
+    )
+    rows = {r["code"]: r for r in result["regions"]["rows"]}
+    assert rows["nordics"]["achieved_pct"] == 30.0
+    assert rows["nordics"]["status"] == "on_target"
+    assert rows["north_america"]["achieved_pct"] == 20.0
+    assert rows["north_america"]["status"] == "unconstrained"
+
+
+def test_an_excluded_region_never_reaches_the_prompt(geo_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"north_america": 0},
+    )
+    assert "[GAMMA]" not in captured["user"] and "[DELTA]" not in captured["user"]
+    assert "[ALFA.ST]" in captured["user"]
+    assert result["regions"]["excluded"] == ["north_america"]
+
+
+def test_the_screener_reserves_slots_for_the_targeted_region(geo_profile, monkeypatch):
+    seen = {}
+    real_screen = whatif.screen
+
+    def _spy(features, held, top_n, pinned_tickers=None, region_quotas=None,
+             excluded_regions=None):
+        seen["quotas"] = region_quotas
+        seen["excluded"] = excluded_regions
+        return real_screen(features, held, top_n, pinned_tickers,
+                           region_quotas, excluded_regions)
+
+    monkeypatch.setattr(whatif, "screen", _spy)
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30, "north_america": 0},
+    )
+    assert seen["quotas"] == {"nordics": 3}
+    assert seen["excluded"] == {"north_america"}
+
+
+def test_a_mix_summing_past_one_hundred_is_refused_before_any_llm_call(geo_profile, monkeypatch):
+    def _never(*a, **k):
+        raise AssertionError("the model must not be called for an impossible mix")
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _never)
+    with pytest.raises(ValueError, match="cannot exceed 100"):
+        whatif.generate_whatif(
+            "config_geo.yaml", refresh_prices=False, include_macro=False,
+            region_targets={"nordics": 60, "north_america": 60},
+        )
+
+
+def test_a_mix_does_not_leak_into_the_profiles_own_config(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30},
+    )
+    assert whatif.load_profile_config("config_geo.yaml").risk.region_targets == {}
+
+
+def test_promote_carries_the_mix_onto_the_sleeve(profile, captured_sleeve, monkeypatch):
+    """A sleeve promoted from a 30%-Nordics run must not review as "anywhere"."""
+    from fundmgr import paper
+    from fundmgr.engine import sleeve_review
+
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "kill_criterion": "k"},
+    ])
+    payload = json.loads((whatif.WHATIF_DIR / f"{run_id}.json").read_text())
+    payload["regions"] = {"targets": {"nordics": 30.0}, "tolerance_pct": 7.5}
+    (whatif.WHATIF_DIR / f"{run_id}.json").write_text(json.dumps(payload))
+
+    store = Store(profile["data_dir"] / "sleeve.db")
+    store.initialise(100000)
+    monkeypatch.setattr(paper, "open_portfolio", lambda slug: ({"name": slug}, store))
+
+    out = whatif.promote_to_sleeve(run_id)
+
+    assert out["region_targets"] == {"nordics": 30.0}
+    assert sleeve_review.stored_regions(store) == {
+        "targets": {"nordics": 30.0}, "tolerance_pct": 7.5,
+    }
+
+
+def test_promote_survives_a_mix_it_cannot_carry(profile, captured_sleeve, monkeypatch):
+    """The sleeve exists by then — losing it over a remembered preference is worse."""
+    from fundmgr import paper
+
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "kill_criterion": "k"},
+    ])
+    payload = json.loads((whatif.WHATIF_DIR / f"{run_id}.json").read_text())
+    payload["regions"] = {"targets": {"nordics": 30.0}}
+    (whatif.WHATIF_DIR / f"{run_id}.json").write_text(json.dumps(payload))
+
+    def _boom(slug):
+        raise KeyError(slug)
+
+    monkeypatch.setattr(paper, "open_portfolio", _boom)
+    out = whatif.promote_to_sleeve(run_id)
+
+    assert out["slug"] == "test-sleeve"
+    assert out["region_targets"] == {}
+
+
+# ── Regional mix over the web ─────────────────────────────────────────────────
+
+def test_whatif_page_offers_every_region(client):
+    html = client.get("/whatif/").text
+    for code in ("nordics", "north_america", "uk_ireland", "europe", "asia_pacific"):
+        assert f'data-region="{code}"' in html
+
+
+def test_generate_rejects_an_unknown_region(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "region_targets": {"atlantis": 30},
+    })
+    assert res.status_code == 400
+    assert "atlantis" in res.json()["detail"]
+
+
+def test_generate_rejects_a_mix_over_one_hundred_percent(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "region_targets": {"nordics": 60, "north_america": 60},
+    })
+    assert res.status_code == 400
+    assert "100%" in res.json()["detail"]
+
+
+def test_regional_options_reach_the_engine(client, monkeypatch):
+    from fundmgr.web import whatif as web_whatif
+
+    seen = {}
+
+    def _capture(**kwargs):
+        seen.update(kwargs)
+        return {"id": "whatif-stub", "actions": [], "profile": {"name": "x"}}
+
+    monkeypatch.setattr(web_whatif, "generate_whatif", _capture)
+    monkeypatch.setattr(web_whatif, "_job", None)
+
+    job_id = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "n_runs": 1,
+        "region_targets": {"nordics": 30, "north_america": 0},
+        "region_tolerance_pct": 5,
+    }).json()["job_id"]
+
+    for _ in range(50):
+        job = client.get(f"/whatif/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        __import__("time").sleep(0.1)
+
+    assert seen["region_targets"] == {"nordics": 30, "north_america": 0}
+    assert seen["region_tolerance_pct"] == 5
+
+
+def test_an_unset_tolerance_falls_back_to_the_default_band(geo_profile, monkeypatch):
+    """A cleared field means "use the default", not "hold me to the target exactly"."""
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30}, region_tolerance_pct=None,
+    )
+    assert result["regions"]["tolerance_pct"] == regions_mod.DEFAULT_TOLERANCE_PCT
+    assert "20–40%" in captured["user"]
+
+
+def test_a_zero_tolerance_is_honoured_rather_than_defaulted(geo_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30}, region_tolerance_pct=0,
+    )
+    assert result["regions"]["tolerance_pct"] == 0
+    assert "30–30%" in captured["user"]

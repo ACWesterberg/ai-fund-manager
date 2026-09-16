@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from fundmgr import regions
 from fundmgr.config import load_config, get_enabled_tickers
 from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
@@ -235,11 +236,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
 
     pinned = set(cfg.screener.pinned_tickers)
+    # A mandate that sets risk.region_targets needs the candidate list built to
+    # that mix too, not just the guardrails holding it: a cap the screener never
+    # fed would reject its way towards the target instead of reaching it.
     screened_features, screened_out = screen(
         features,
         held_tickers,
         top_n=cfg.screener.top_n,
         pinned_tickers=pinned,
+        region_quotas=regions.candidate_quotas(
+            cfg.risk.region_targets, cfg.screener.top_n),
+        excluded_regions=regions.excluded(cfg.risk.region_targets),
     )
     if screened_out > 0:
         click.echo(f"      Screener: {len(screened_features)} candidates → LLM "

@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from fundmgr import regions
 from fundmgr.config import AppConfig, UniverseTicker
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.data.prices import TickerFeatures
@@ -89,12 +90,36 @@ def _sector_weights_block(
     return "\n".join(lines)
 
 
+def _region_targets_block(
+    cfg: AppConfig,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+) -> str:
+    """The geographic mix this run is being built to, or "" when none is set.
+
+    Rendered with the risk limits rather than as a section of its own, because
+    half of it *is* a risk limit — the ceiling is enforced by the same pass that
+    enforces the sector cap — and because the other half only makes sense read
+    against it.
+    """
+    if not cfg.risk.region_targets:
+        return ""
+    region_by_ticker = regions.regions_of(features)
+    return regions.prompt_block(
+        cfg.risk.region_targets,
+        cfg.risk.region_tolerance_pct,
+        regions.exposure(snap, region_by_ticker),
+        regions.candidate_counts(region_by_ticker),
+    )
+
+
 def _risk_limits_block(
     cfg: AppConfig,
     snap: PortfolioSnapshot,
     features: dict[str, TickerFeatures],
 ) -> str:
     sector_block = _sector_weights_block(snap, features, cfg.risk.max_sector_pct)
+    region_block = _region_targets_block(cfg, snap, features)
     lines = [
         "## Risk Limits (hard constraints)",
         f"  Max single-name weight: {cfg.risk.max_position_pct}%",
@@ -111,6 +136,8 @@ def _risk_limits_block(
     ]
     if sector_block:
         lines.append(sector_block)
+    if region_block:
+        lines.append(region_block)
     lines.append("Guardrails enforce these mechanically — size your recommendations within them.")
     return "\n".join(lines)
 
@@ -231,6 +258,7 @@ def _signal_score(f: TickerFeatures) -> float:
 def _features_block(
     features: dict[str, TickerFeatures],
     current_tickers: set[str],
+    show_region: bool = False,
 ) -> str:
     held = {t: f for t, f in features.items() if t in current_tickers}
     rest = {t: f for t, f in features.items() if t not in current_tickers}
@@ -249,11 +277,11 @@ def _features_block(
     )
 
     for f in held.values():
-        lines.append("★ " + f.to_prompt_block())
+        lines.append("★ " + f.to_prompt_block(show_region=show_region))
         lines.append("")
 
     for f in top_candidates:
-        lines.append("  " + f.to_prompt_block())
+        lines.append("  " + f.to_prompt_block(show_region=show_region))
         lines.append("")
 
     return "\n".join(lines)
@@ -324,7 +352,12 @@ def build_prompt(
     portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops())
     risk_limits     = _risk_limits_block(cfg, snap, features)
     learnings_block = _learnings_block(learnings)
-    universe        = _features_block(features, current_tickers)
+    # Region tags cost tokens on every candidate, so they are only rendered when
+    # a mix is actually being managed — otherwise the weekly run's prompt is
+    # unchanged, and so is the regime its outcomes are scored under.
+    universe        = _features_block(
+        features, current_tickers, show_region=bool(cfg.risk.region_targets)
+    )
 
     fields = {
         "mandate":         mandate,

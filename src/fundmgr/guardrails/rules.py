@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+from fundmgr import regions
 from fundmgr.config import AppConfig
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.engine.schema import Action, DecisionRun
@@ -63,10 +64,16 @@ def apply_guardrails(
 
     nav = snap.nav_sek
     current_positions = {p.ticker for p in snap.positions if p.shares > 0}
+    # Regional ceilings, empty unless this run was given a mix. Computed once:
+    # every buy is measured against the same set.
+    region_ceilings = regions.ceilings(
+        cfg.risk.region_targets, cfg.risk.region_tolerance_pct
+    )
 
     for action in decision.actions:
         verdict = _check_action(
-            action, snap, features, universe_tickers, current_positions, cfg, nav
+            action, snap, features, universe_tickers, current_positions, cfg, nav,
+            region_ceilings,
         )
         verdicts.append(verdict)
         if verdict.approved:
@@ -100,6 +107,7 @@ def _check_action(
     current_positions: set[str],
     cfg: AppConfig,
     nav: float,
+    region_ceilings: dict[str, float] | None = None,
 ) -> GuardrailVerdict:
     v = GuardrailVerdict(action=action, approved=True)
 
@@ -176,14 +184,48 @@ def _check_action(
                 )
                 return v
 
-    # 6. New position count limit
+    # 6. Regional allocation ceiling
+    #
+    # Same shape as the sector cap and for the same reason — a mix is only a mix
+    # if something enforces it — but only the ceiling is enforceable. Nothing
+    # here can make the book buy Nordics; it can only stop it buying past the
+    # band. A region the mix never named has no entry and is not checked.
+    if action.side == "buy" and region_ceilings:
+        feat = features.get(action.ticker)
+        code = regions.region_of(feat.country if feat else None)
+        ceiling = region_ceilings.get(code)
+        if ceiling is not None:
+            region_value_now = sum(
+                p.market_value_sek
+                for p in snap.positions
+                if p.shares > 0
+                and regions.region_of(
+                    getattr(features.get(p.ticker), "country", None)
+                ) == code
+            )
+            projected_region_pct = (
+                (region_value_now + action.sek_estimate) / nav * 100 if nav > 0 else 0
+            )
+            if projected_region_pct > ceiling + 1e-9:
+                target = cfg.risk.region_targets.get(code, 0.0)
+                label = regions.label_of(code)
+                v.approved = False
+                v.rejection_reason = (
+                    f"Region excluded by the allocation mix: {label} is set to 0%"
+                    if ceiling <= 0 else
+                    f"Region cap breach: {label} would reach {projected_region_pct:.1f}% "
+                    f"(target {target:.0f}%, cap {ceiling:.0f}%)"
+                )
+                return v
+
+    # 7. New position count limit
     if action.side == "buy" and action.ticker not in current_positions:
         if len(current_positions) >= cfg.risk.max_positions:
             v.approved = False
             v.rejection_reason = f"Max positions ({cfg.risk.max_positions}) already reached"
             return v
 
-    # 7. Cash floor check for buys
+    # 8. Cash floor check for buys
     if action.side == "buy":
         projected_cash = snap.cash_sek - action.sek_estimate
         projected_cash_pct = projected_cash / nav * 100 if nav > 0 else 0

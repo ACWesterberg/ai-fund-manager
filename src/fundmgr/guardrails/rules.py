@@ -75,14 +75,29 @@ def apply_guardrails(
     current_positions = {p.ticker for p in snap.positions if p.shares > 0}
     mix_ceilings = _mix_ceilings(cfg)
 
+    # The book as this run would leave it, grown as buys are approved. It used
+    # to be the pre-run set, computed once and never touched, so the position
+    # cap only ever fired when the book was ALREADY at the limit before the run
+    # — it never once limited how many names a run opens. A clean-slate what-if
+    # starts at zero, so the cap was inert there entirely; a live book holding 8
+    # against a cap of 10 would approve five new buys and end at 13. Only the
+    # prompt was holding the count down, and prose is not a guardrail.
+    projected_positions = set(current_positions)
+
     for action in decision.actions:
         verdict = _check_action(
-            action, snap, features, universe_tickers, current_positions, cfg, nav,
+            action, snap, features, universe_tickers, projected_positions, cfg, nav,
             mix_ceilings,
         )
         verdicts.append(verdict)
         if verdict.approved:
             approved.append(verdict.action)
+            if verdict.action.side == "buy":
+                projected_positions.add(verdict.action.ticker)
+            elif verdict.action.side == "sell" and verdict.action.target_weight_pct <= 0:
+                # A full exit frees a slot for a later buy in the same run —
+                # that is what makes "sell A, open B" fit a full book.
+                projected_positions.discard(verdict.action.ticker)
 
     # Turnover cap: if aggregate trade value exceeds max, drop lowest-confidence trades
     approved = _apply_turnover_cap(approved, nav, cfg)
@@ -129,6 +144,10 @@ def _check_action(
     nav: float,
     mix_ceilings: list[tuple] | None = None,
 ) -> GuardrailVerdict:
+    """`current_positions` is the book as this run would leave it so far — the
+    caller grows it as buys are approved, so the Nth new name sees the N-1
+    before it. Arrival order decides who gets the last slot, the same way the
+    sector and cash checks in this pass already work."""
     v = GuardrailVerdict(action=action, approved=True)
 
     # 1. Universe check

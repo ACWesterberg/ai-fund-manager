@@ -32,7 +32,10 @@ from pathlib import Path
 import yaml
 
 from fundmgr import regions, styles
-from fundmgr.config import CONFIG_DIR, DATA_DIR, AppConfig, get_enabled_tickers, load_config
+from fundmgr.config import (
+    CONFIG_DIR, DATA_DIR, AppConfig, apply_risk_overrides, get_enabled_tickers,
+    load_config, risk_override_note,
+)
 from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import fetch_and_cache_fundamentals
 from fundmgr.data.fundamentals import apply_to_features
@@ -272,6 +275,7 @@ def generate_whatif(
     style_targets: dict[str, float] | None = None,
     style_tolerance_pct: float | None = None,
     style_brief: str = "",
+    risk: dict | None = None,
 ) -> dict:
     """
     Generate a hypothetical from-scratch portfolio for one fund profile.
@@ -313,6 +317,15 @@ def generate_whatif(
     style_brief is free text appended to the prompt for the tilt no bucket
     captures. It steers selection within the mandate; it relaxes nothing.
 
+    risk overrides the profile's caps for this run (see config.OVERRIDABLE_RISK).
+    The one that matters here is max_positions: it is a fixed 10 in every
+    profile and does not move with `capital_sek`, so the same cap that spreads a
+    50,000 SEK book over ten names spreads a 2,000,000 SEK one over ten names of
+    200,000 each. Nothing mechanical forces that — min_trade_sek allows 800
+    names at that size and the fee ceiling makes 9 names and 30 names cost
+    0.045% and 0.100% respectively — so the count is a preference, and this is
+    where it is expressed per run.
+
     Blocking — call from a background thread in the web layer.
     """
     started = time.time()
@@ -322,9 +335,15 @@ def generate_whatif(
     profile_name = cfg.display_name
     profile_capital = cfg.capital_sek
 
+    # Risk caps first: max_position_pct feeds the deployment floors below, so an
+    # override has to land before they are computed or the run warns about an
+    # amount its own limits no longer consider small.
+    cfg, risk_applied = apply_risk_overrides(cfg, risk or {})
+
     # Model override + sample count. copy so the module-level config cache in
     # load_config callers is never mutated.
     cfg = copy.copy(cfg)
+    cfg.risk = copy.copy(cfg.risk)
     cfg.llm = copy.copy(cfg.llm)
     if provider and model_id:
         cfg.llm.provider = provider
@@ -431,6 +450,9 @@ def generate_whatif(
         user_msg += _FULL_DEPLOY_DIRECTIVE
     if monitoring_plan:
         user_msg += _MONITORING_PLAN_DIRECTIVE
+    # Every mandate restates its caps in prose, and nothing keeps that text in
+    # sync with RiskConfig — so a raised cap has to say which figure wins.
+    user_msg += risk_override_note(risk_applied)
     if style_brief:
         user_msg += _STYLE_BRIEF_HEADER + style_brief
 
@@ -514,6 +536,19 @@ def generate_whatif(
             "min_cash_pct": effective_cfg.risk.min_cash_pct,
             "undersized": undersized,
             "comfortable_floor_sek": round(comfortable_floor),
+            # What one name is worth at the position cap. The cap is a fixed 10
+            # everywhere and does not scale with the amount, so this is the
+            # number that quietly decides how concentrated a large run comes out.
+            "max_positions": effective_cfg.risk.max_positions,
+            "sek_per_name_at_cap": round(
+                cfg.capital_sek / effective_cfg.risk.max_positions
+            ) if effective_cfg.risk.max_positions > 0 else None,
+        },
+        "risk": {
+            "overrides": dict(risk or {}),
+            "applied": risk_applied,
+            "max_positions": effective_cfg.risk.max_positions,
+            "max_position_pct": effective_cfg.risk.max_position_pct,
         },
         "model": {
             "provider": cfg.llm.provider,

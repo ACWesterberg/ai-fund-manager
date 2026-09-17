@@ -1365,3 +1365,149 @@ def test_style_options_reach_the_engine(client, monkeypatch):
     assert seen["style_targets"] == {"quality": 40, "speculative": 20}
     assert seen["style_tolerance_pct"] == 5
     assert seen["style_brief"] == "founder-led only"
+
+
+# ── Risk caps per run ─────────────────────────────────────────────────────────
+#
+# max_positions is a fixed 10 in every profile and does not move with the amount
+# placed, so the same cap that spreads 50,000 SEK over ten names spreads
+# 2,000,000 SEK over ten names of 200,000 each. Nothing mechanical forces that —
+# these tests pin the knob that lets a run say otherwise.
+
+def test_every_profile_ships_the_same_position_cap_whatever_its_capital():
+    """The observation behind this control: the cap is not a function of money."""
+    caps = {}
+    for p in whatif.list_profiles():
+        cfg = whatif.load_profile_config(p["config"])
+        caps[p["config"]] = (cfg.capital_sek, cfg.risk.max_positions)
+    assert len({c for _, c in caps.values()}) == 1, caps
+    assert len({cap for cap, _ in caps.values()}) > 1, "capital does vary across profiles"
+
+
+def test_the_position_cap_can_be_raised_for_one_run(geo_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": 25},
+    )
+    assert "Max open positions: 25" in captured["user"]
+    assert result["risk"]["max_positions"] == 25
+    assert result["risk"]["applied"]["max_positions"] == {"from": 5, "to": 25}
+
+
+def test_a_raised_cap_says_which_figure_beats_the_mandate_prose(geo_profile, monkeypatch):
+    """Every mandate restates its caps in prose and nothing keeps that in sync,
+    so without this the model reads two numbers and believes the emphatic one."""
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": 25},
+    )
+    assert "Risk Limits For This Run" in captured["user"]
+    assert "max_positions: 5 → 25" in captured["user"]
+    assert "the numbers in the Risk Limits block are the ones enforced" in captured["user"]
+
+
+def test_no_override_leaves_the_prompt_as_it_was(geo_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif("config_geo.yaml", refresh_prices=False, include_macro=False)
+    assert "Risk Limits For This Run" not in captured["user"]
+
+
+def test_a_cap_set_to_its_existing_value_is_not_reported_as_a_change(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": 5},           # the profile's own
+    )
+    assert result["risk"]["applied"] == {}
+
+
+def test_a_raised_cap_actually_admits_more_names(geo_profile, monkeypatch):
+    """With the profile's cap of 5 the sixth buy is refused; at 25 it is not."""
+    buys = [_geo_buy(t, 8, 8_000) for t in
+            ("ALFA.ST", "BETA.ST", "GAMMA", "DELTA", "EPS.DE")]
+    _capture_prompt(monkeypatch, buys)
+
+    tight = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": 3})
+    wide = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": 25})
+
+    assert tight["buy_count"] == 3
+    assert any("Max positions" in a["reason"] for a in tight["actions"])
+    assert wide["buy_count"] == 5
+
+
+def test_the_result_says_what_one_name_is_worth_at_the_cap(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        capital_sek=2_000_000, risk={"max_positions": 10},
+    )
+    assert result["deployment"]["max_positions"] == 10
+    assert result["deployment"]["sek_per_name_at_cap"] == 200_000
+
+
+def test_an_unusable_cap_falls_back_to_the_profiles_own(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": "many", "bogus": 3, "max_position_pct": -5},
+    )
+    assert result["risk"]["applied"] == {}
+    assert result["risk"]["max_positions"] == 5
+
+
+def test_a_risk_override_does_not_leak_into_the_profiles_own_config(geo_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        risk={"max_positions": 25})
+    assert whatif.load_profile_config("config_geo.yaml").risk.max_positions == 5
+
+
+def test_a_raised_single_name_cap_moves_the_undersized_floor(geo_profile, monkeypatch):
+    """max_position_pct feeds the deployment floors, so the override has to land
+    before they are computed or the run warns about an amount its own limits no
+    longer consider small."""
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        capital_sek=3_000, risk={"max_position_pct": 80},
+    )
+    assert result["deployment"]["comfortable_floor_sek"] == 1_250   # 1000 / 0.80
+    assert result["deployment"]["undersized"] is False
+
+
+def test_risk_overrides_reach_the_engine_from_the_web(client, monkeypatch):
+    from fundmgr.web import whatif as web_whatif
+
+    seen = {}
+
+    def _capture(**kwargs):
+        seen.update(kwargs)
+        return {"id": "whatif-stub", "actions": [], "profile": {"name": "x"}}
+
+    monkeypatch.setattr(web_whatif, "generate_whatif", _capture)
+    monkeypatch.setattr(web_whatif, "_job", None)
+
+    job_id = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "n_runs": 1, "risk": {"max_positions": 25},
+    }).json()["job_id"]
+
+    for _ in range(50):
+        job = client.get(f"/whatif/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        __import__("time").sleep(0.1)
+
+    assert seen["risk"] == {"max_positions": 25}
+
+
+def test_the_form_offers_the_position_cap(client):
+    html = client.get("/whatif/").text
+    assert 'data-risk="max_positions"' in html
+    assert 'data-risk="max_position_pct"' in html

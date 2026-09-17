@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from fundmgr import paper, regions, styles, watchplan
+from fundmgr import config, paper, regions, styles, watchplan
 from fundmgr.engine import sleeve_review
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
@@ -339,7 +339,7 @@ def _profile_risk(config_name: str) -> dict:
         cfg = sleeve_review.load_profile_config(config_name)
     except ValueError:
         return {}
-    return {k: getattr(cfg.risk, k) for k in sleeve_review.OVERRIDABLE_RISK}
+    return {k: getattr(cfg.risk, k) for k in config.OVERRIDABLE_RISK}
 
 
 def _not_found() -> HTMLResponse:

@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 
-from fundmgr import regions, styles
+from fundmgr import config, regions, styles
 from fundmgr.engine.whatif import (
     MAX_RUNS, MAX_STYLE_BRIEF, MODEL_OPTIONS, generate_whatif, list_profiles,
     list_results, promote_to_sleeve,
@@ -62,6 +62,9 @@ class GenerateRequest(BaseModel):
     # Free text for the tilt no bucket captures. Steers selection inside the
     # mandate; relaxes nothing.
     style_brief: str = Field(default="", max_length=MAX_STYLE_BRIEF)
+    # Per-run risk caps. Empty = the profile's own; the engine cleans and
+    # validates before any of it reaches a guardrail.
+    risk: dict = Field(default_factory=dict)
 
 
 def _run_job(job_id: str, req: GenerateRequest) -> None:
@@ -82,6 +85,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             style_targets=req.style_targets,
             style_tolerance_pct=req.style_tolerance_pct,
             style_brief=req.style_brief,
+            risk=req.risk,
         )
         with _job_lock:
             if _job and _job["id"] == job_id:
@@ -101,6 +105,7 @@ def whatif_page(request: Request):
         request=request,
         profiles=list_profiles(),
         model_options=MODEL_OPTIONS,
+        overridable_risk=list(config.OVERRIDABLE_RISK),
         region_options=regions.options(),
         region_tolerance_pct=regions.DEFAULT_TOLERANCE_PCT,
         style_options=styles.options(),

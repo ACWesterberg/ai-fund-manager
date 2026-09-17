@@ -232,6 +232,87 @@ class UniverseTicker:
         return self.currency != "SEK"
 
 
+# Risk caps a single run may carry its own value for. Everything else — minimum
+# trade size, staleness, fees — stays the profile's, because those are
+# properties of the market and the broker rather than of one run's brief.
+#
+# These live here rather than in either engine because both the What-If Lab and
+# the sleeve review take them, and two copies of "validate a number before it
+# reaches a guardrail" would drift.
+OVERRIDABLE_RISK = ("max_turnover_pct", "max_position_pct", "max_positions", "min_cash_pct")
+
+
+def clean_risk(raw: dict | None) -> dict:
+    """Keep only known, numeric, positive risk caps.
+
+    This is the boundary between user input and a guardrail, so anything
+    unrecognised or unparseable is dropped rather than carried forward: a
+    typo'd cap must fall back to the profile's, never reach apply_guardrails
+    as a string or a zero that silently forbids every trade.
+    """
+    out: dict = {}
+    for key in OVERRIDABLE_RISK:
+        value = (raw or {}).get(key)
+        if value is None or value == "":
+            continue
+        try:
+            parsed = int(value) if key == "max_positions" else float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            out[key] = parsed
+    return out
+
+
+def apply_risk_overrides(cfg: AppConfig, overrides: dict) -> tuple[AppConfig, dict]:
+    """cfg with this run's own caps in place of the profile's.
+
+    Returns (cfg, applied) where `applied` names only the caps that actually
+    changed something, so a run can report what it ran under rather than
+    leaving the operator to infer it from the profile.
+    """
+    import copy
+
+    clean = clean_risk(overrides)
+    if not clean:
+        return cfg, {}
+    cfg = copy.copy(cfg)
+    cfg.risk = copy.copy(cfg.risk)
+    applied = {}
+    for key, value in clean.items():
+        before = getattr(cfg.risk, key)
+        value = int(value) if key == "max_positions" else float(value)
+        if value != before:
+            applied[key] = {"from": before, "to": value}
+        setattr(cfg.risk, key, value)
+    return cfg, applied
+
+
+def risk_override_note(applied: dict) -> str:
+    """A directive telling the model which figure wins when two disagree.
+
+    Every mandate restates its caps in prose ("Max open positions: 10 names"),
+    and nothing keeps that text in sync with RiskConfig — so the moment a run
+    raises a cap, the system message contradicts the rendered Risk Limits and
+    the model is left to guess which is real. It guesses the mandate, because
+    that is the more emphatic of the two, and the override does nothing.
+    """
+    if not applied:
+        return ""
+    lines = [
+        "\n\n## Risk Limits For This Run",
+        "This run overrides the mandate's standing caps:",
+    ]
+    for key, change in applied.items():
+        lines.append(f"  {key}: {change['from']} → {change['to']}")
+    lines.append(
+        "Where the mandate text above states a different figure, the numbers in "
+        "the Risk Limits block are the ones enforced and the ones to size to. "
+        "The mandate's prose is out of date for this run, not a second opinion."
+    )
+    return "\n".join(lines)
+
+
 def load_config(config_path: Path | None = None) -> AppConfig:
     load_dotenv(ROOT / ".env")
 

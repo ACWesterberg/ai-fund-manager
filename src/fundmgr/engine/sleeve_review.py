@@ -59,7 +59,10 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 
 from fundmgr import regions, styles
-from fundmgr.config import AppConfig, UniverseTicker, get_enabled_tickers
+from fundmgr.config import (
+    AppConfig, UniverseTicker, apply_risk_overrides, clean_risk,
+    get_enabled_tickers, risk_override_note,
+)
 from fundmgr.data.fundamentals import apply_to_features
 from fundmgr.data.news import (
     attach_sentiment_to_features, fetch_news, score_and_cache_sentiment,
@@ -91,17 +94,15 @@ META_RISK = "paper_review_risk"
 META_REGIONS = "paper_review_regions"
 META_STYLES = "paper_review_styles"
 
-# Risk caps a sleeve may carry its own value for. Everything else — sector caps,
-# minimum trade size, staleness — stays the source profile's, because those are
-# properties of the market and the broker rather than of this book's mandate.
+# OVERRIDABLE_RISK, clean_risk and apply_risk_overrides now live in config.py,
+# shared with the What-If Lab, and are re-exported above.
 #
-# max_turnover_pct is the one that actually bites. A weekly rebalance drifts a
-# book; a sleeve review swaps positions, and a swap costs turnover twice — an
-# 18% exit plus an 18% replacement is 36% against a profile cap of 25%. Left
-# inherited, the cap truncates exactly the paired trades a review exists to
-# produce, and the funding pass then drops the orphaned buy, so the review
-# returns nothing at all.
-OVERRIDABLE_RISK = ("max_turnover_pct", "max_position_pct", "max_positions", "min_cash_pct")
+# For a sleeve it is max_turnover_pct that actually bites. A weekly rebalance
+# drifts a book; a sleeve review swaps positions, and a swap costs turnover
+# twice — an 18% exit plus an 18% replacement is 36% against a profile cap of
+# 25%. Left inherited, the cap truncates exactly the paired trades a review
+# exists to produce, and the funding pass then drops the orphaned buy, so the
+# review returns nothing at all.
 
 COUNTRY_NAMES = {
     "AT": "Austria", "BE": "Belgium", "CA": "Canada", "CH": "Switzerland",
@@ -153,28 +154,6 @@ def review_defaults(store: Store) -> dict:
         "regions": stored_regions(store),
         "styles": stored_styles(store),
     }
-
-
-def clean_risk(raw: dict | None) -> dict:
-    """Keep only known, numeric, positive risk caps.
-
-    This is the boundary between user input and a guardrail, so anything
-    unrecognised or unparseable is dropped rather than carried forward: a
-    typo'd cap must fall back to the profile's, never reach apply_guardrails
-    as a string or a zero that silently forbids every trade.
-    """
-    out: dict = {}
-    for key in OVERRIDABLE_RISK:
-        value = (raw or {}).get(key)
-        if value is None or value == "":
-            continue
-        try:
-            parsed = int(value) if key == "max_positions" else float(value)
-        except (TypeError, ValueError):
-            continue
-        if parsed > 0:
-            out[key] = parsed
-    return out
 
 
 def stored_risk(store: Store) -> dict:
@@ -236,28 +215,6 @@ def stored_styles(store: Store) -> dict:
         return clean_styles(json.loads(store.get_meta(META_STYLES) or "{}"))
     except (ValueError, TypeError):
         return {}
-
-
-def apply_risk_overrides(cfg: AppConfig, overrides: dict) -> tuple[AppConfig, dict]:
-    """cfg with this sleeve's own caps in place of the profile's.
-
-    Returns (cfg, applied) where `applied` names only the caps that actually
-    changed something, so a review can report what it ran under rather than
-    leaving the operator to infer it from the profile.
-    """
-    clean = clean_risk(overrides)
-    if not clean:
-        return cfg, {}
-    cfg = copy.copy(cfg)
-    cfg.risk = copy.copy(cfg.risk)
-    applied = {}
-    for key, value in clean.items():
-        before = getattr(cfg.risk, key)
-        value = int(value) if key == "max_positions" else float(value)
-        if value != before:
-            applied[key] = {"from": before, "to": value}
-        setattr(cfg.risk, key, value)
-    return cfg, applied
 
 
 # ── Candidate selection ───────────────────────────────────────────────────────
@@ -1174,6 +1131,7 @@ def review_sleeve(
         task_override=_task_block(run_id, scope_label, snap, cfg),
         heading=f"Live Sleeve Review — {meta['name']}",
     )
+    user_msg += risk_override_note(risk_applied)
     if style_brief:
         from fundmgr.engine.whatif import _STYLE_BRIEF_HEADER
         user_msg += _STYLE_BRIEF_HEADER + style_brief

@@ -82,6 +82,43 @@
       <p id="amount-hint" class="text-[10px] text-slate-600 mt-1.5"></p>
     </div>
 
+    <!-- ── Risk caps for this run ── -->
+    <div class="md:col-span-2 lg:col-span-4 border-t border-slate-800/60 pt-4">
+      <details id="risk-details">
+        <summary class="flex items-center gap-2 select-none" style="cursor:pointer;list-style:none">
+          <span class="material-symbols-outlined text-slate-500" style="font-size:16px">tune</span>
+          <span class="kpi-label">Risk caps for this run</span>
+          <span id="risk-summary" class="text-[10px] text-slate-600">the profile's own</span>
+        </summary>
+        <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label class="text-[10px] text-slate-500 block mb-1" for="rk-maxpos">Max open positions</label>
+            <input id="rk-maxpos" data-risk="max_positions" type="number" min="1" max="200" step="1"
+                   inputmode="numeric" placeholder="profile default"
+                   class="risk-input w-full bg-slate-900 border border-slate-700/60 rounded-lg px-2 py-1.5 text-sm text-slate-200">
+          </div>
+          <div>
+            <label class="text-[10px] text-slate-500 block mb-1" for="rk-maxpct">Max single-name weight %</label>
+            <input id="rk-maxpct" data-risk="max_position_pct" type="number" min="1" max="100" step="any"
+                   inputmode="numeric" placeholder="profile default"
+                   class="risk-input w-full bg-slate-900 border border-slate-700/60 rounded-lg px-2 py-1.5 text-sm text-slate-200">
+          </div>
+        </div>
+        <p id="concentration-hint" class="text-[10px] text-slate-600 mt-2 leading-snug"></p>
+        <p class="text-[10px] text-slate-600 mt-1.5 leading-snug">
+          The position cap is a fixed <b>10</b> in every profile and does not move with the amount, so
+          the same limit that spreads 50,000 SEK over ten names spreads 2,000,000 SEK over ten names of
+          200,000 each. Nothing mechanical forces that — the minimum trade size allows hundreds of names
+          at that amount, and the fee ceiling means 9 names and 30 names cost 0.045% and 0.100% — so the
+          count is a preference, and this is where you set it for one run.
+          <b>Note:</b> each mandate also restates its caps in prose and carries a conviction-weight table
+          (10–15% high / 5–9% medium / 3–5% starter) that independently implies about ten names. Raising
+          the cap here tells the model the new figure wins, but a much wider book needs that table
+          loosened too — and that is investment policy, in <code>config/mandate*.md</code>.
+        </p>
+      </details>
+    </div>
+
     <!-- ── Regional mix ── -->
     <div class="md:col-span-2 lg:col-span-4 border-t border-slate-800/60 pt-4">
       <details id="region-details">
@@ -328,6 +365,40 @@
     refreshAmountHint();
   }
 
+  // ── Risk caps ───────────────────────────────────────────────────────────
+  const riskInputs = () => Array.from(document.querySelectorAll('.risk-input'));
+
+  function riskOverrides() {
+    const out = {};
+    riskInputs().forEach(inp => {
+      const raw = (inp.value || '').trim();
+      if (raw === '') return;                   // blank = the profile's own
+      const val = Number(raw);
+      if (Number.isFinite(val) && val > 0) out[inp.dataset.risk] = val;
+    });
+    return out;
+  }
+
+  // The arithmetic the operator would otherwise do by hand after the run —
+  // which is exactly when it is too late to have chosen differently.
+  function refreshConcentrationHint() {
+    const risk = riskOverrides();
+    const amount = Number($('f-amount').value);
+    const cap = risk.max_positions || 10;       // every profile ships 10
+    const summary = $('risk-summary');
+    const keys = Object.keys(risk);
+    summary.textContent = keys.length
+      ? keys.map(k => `${k.replace(/_/g, ' ')} ${risk[k]}`).join(' · ') : "the profile's own";
+    summary.className = keys.length ? 'text-[10px] text-blue-300' : 'text-[10px] text-slate-600';
+    $('concentration-hint').textContent = Number.isFinite(amount) && amount > 0
+      ? `${amount.toLocaleString()} SEK across at most ${cap} positions is ` +
+        `${Math.round(amount / cap).toLocaleString()} SEK per name ` +
+        `(${(100 / cap).toFixed(1)}% each if equally weighted).`
+      : '';
+  }
+
+  riskInputs().forEach(inp => inp.addEventListener('input', refreshConcentrationHint));
+
   // ── Regional mix ────────────────────────────────────────────────────────
   const regionInputs = () => Array.from(document.querySelectorAll('.region-input'));
 
@@ -420,10 +491,13 @@
 
   $('f-profile').addEventListener('change', () => { resetAmount(); refreshHints(); });
   $('f-model').addEventListener('change', refreshHints);
-  $('f-amount').addEventListener('input', refreshAmountHint);
+  $('f-amount').addEventListener('input', () => {
+    refreshAmountHint(); refreshConcentrationHint();
+  });
   $('f-amount-reset').addEventListener('click', resetAmount);
   resetAmount();
   refreshHints();
+  refreshConcentrationHint();
 
   // ── Result rendering (DOM-built; theses are model output, never innerHTML) ─
   function sideBadge(side) {
@@ -474,7 +548,15 @@
     const dep = r.deployment || {
       placed_sek: r.profile.capital_sek, full_deploy: null, undersized: false,
     };
-    kpis.appendChild(kpi('Positions', String(r.buy_count), `${r.invested_pct}% invested`));
+    // "9 names" on its own reads as a choice; "9 of a cap of 10, 222,000 each"
+    // reads as the cap it actually was. Older stored results have neither.
+    const capNote = dep.max_positions
+      ? ` · cap ${dep.max_positions}` +
+        (dep.sek_per_name_at_cap
+          ? ` · ${Number(dep.sek_per_name_at_cap).toLocaleString()} SEK/name at cap` : '')
+      : '';
+    kpis.appendChild(kpi('Positions', String(r.buy_count),
+      `${r.invested_pct}% invested${capNote}`));
     kpis.appendChild(kpi('Placed', `${Number(dep.placed_sek).toLocaleString()} SEK`,
       dep.full_deploy === null ? `cash target ${r.cash_target_pct}%`
         : (dep.full_deploy ? 'all at once · no cash floor'
@@ -774,6 +856,7 @@
       style_tolerance_pct: $('sg-tolerance').value.trim() === ''
         ? null : parseFloat($('sg-tolerance').value),
       style_brief: $('sg-brief').value.trim(),
+      risk: riskOverrides(),
     };
     setBusy(true, 'Starting…');
     try {

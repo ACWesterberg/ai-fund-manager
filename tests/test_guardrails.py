@@ -532,3 +532,101 @@ def test_a_buy_must_clear_both_dials():
     result = apply_guardrails(
         _decision([_buy("VOLV-B.ST", 50.0, 50_000)]), snap, features, UNIVERSE, cfg)
     assert "Regional cap breach" in result.verdicts[0].rejection_reason
+
+
+def _priced(*extra: str) -> dict[str, TickerFeatures]:
+    """Fresh prices for the whole test universe — buys need them to get past
+    the stale-data check before the position cap is ever reached."""
+    return {t: _feat(t) for t in UNIVERSE | set(extra)}
+
+
+# ── Position count, across a whole run ────────────────────────────────────────
+#
+# The cap used to read a set computed before the loop and never grown, so it
+# only fired when the book was ALREADY at the limit — it never once limited how
+# many names a run opens. Prose in the prompt was doing the work, and prose is
+# not a guardrail.
+
+def test_a_run_cannot_open_more_names_than_the_cap_from_an_empty_book():
+    cfg = _cfg(max_positions=3, min_cash_pct=0, max_turnover_pct=100)
+    snap = _snap(cash=100_000)
+    decision = _decision([
+        _buy("VOLV-B.ST", 10.0, 10_000), _buy("SAND.ST", 10.0, 10_000),
+        _buy("ERIC-B.ST", 10.0, 10_000), _buy("ABB.ST", 10.0, 10_000),
+        _buy("HM-B.ST", 10.0, 10_000),
+    ])
+    result = apply_guardrails(decision, snap, _priced(), UNIVERSE, cfg)
+    assert len(result.approved_actions) == 3
+    refused = [v for v in result.verdicts if not v.approved]
+    assert len(refused) == 2
+    assert all("Max positions (3)" in v.rejection_reason for v in refused)
+
+
+def test_a_held_book_counts_towards_the_cap_for_new_buys():
+    """8 held against a cap of 10 admits two new names, not five."""
+    cfg = _cfg(max_positions=10, min_cash_pct=0, max_turnover_pct=100)
+    held = [Position(t, 10, 100.0) for t in
+            ("VOLV-B.ST", "SAND.ST", "ERIC-B.ST", "ABB.ST", "HM-B.ST")]
+    snap = _snap(cash=100_000, positions=held)
+    cfg.risk.max_positions = 6
+    decision = _decision([
+        _buy("INVE-B.ST", 5.0, 5_000), _buy("BOL.ST", 5.0, 5_000),
+    ])
+    result = apply_guardrails(
+        decision, snap, _priced("BOL.ST"), UNIVERSE | {"BOL.ST"}, cfg)
+    assert len(result.approved_actions) == 1
+    assert "Max positions (6)" in result.verdicts[1].rejection_reason
+
+
+def test_adding_to_a_name_already_held_never_consumes_a_slot():
+    cfg = _cfg(max_positions=1, min_cash_pct=0, max_turnover_pct=100)
+    snap = _snap(cash=100_000, positions=[Position("VOLV-B.ST", 10, 100.0)])
+    decision = _decision([_buy("VOLV-B.ST", 15.0, 15_000)])
+    result = apply_guardrails(decision, snap, _priced(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_buying_the_same_new_name_twice_consumes_one_slot():
+    cfg = _cfg(max_positions=1, min_cash_pct=0, max_turnover_pct=100)
+    snap = _snap(cash=100_000)
+    decision = _decision([
+        _buy("VOLV-B.ST", 5.0, 5_000), _buy("VOLV-B.ST", 5.0, 5_000),
+    ])
+    result = apply_guardrails(decision, snap, _priced(), UNIVERSE, cfg)
+    assert all(v.approved for v in result.verdicts)
+
+
+def test_a_full_exit_frees_a_slot_for_a_buy_in_the_same_run():
+    """This is what makes "sell A, open B" fit a book already at its cap."""
+    cfg = _cfg(max_positions=1, min_cash_pct=0, max_turnover_pct=100)
+    snap = _snap(cash=100_000, positions=[Position("VOLV-B.ST", 10, 100.0)])
+    decision = _decision([
+        _sell("VOLV-B.ST", 0.0, 5_000), _buy("SAND.ST", 10.0, 10_000),
+    ])
+    result = apply_guardrails(decision, snap, _priced(), UNIVERSE, cfg)
+    assert all(v.approved for v in result.verdicts)
+
+
+def test_a_partial_trim_does_not_free_a_slot():
+    cfg = _cfg(max_positions=1, min_cash_pct=0, max_turnover_pct=100)
+    snap = _snap(cash=100_000, positions=[Position("VOLV-B.ST", 10, 100.0)])
+    decision = _decision([
+        _sell("VOLV-B.ST", 5.0, 5_000), _buy("SAND.ST", 10.0, 10_000),
+    ])
+    result = apply_guardrails(decision, snap, _priced(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+    assert not result.verdicts[1].approved
+    assert "Max positions (1)" in result.verdicts[1].rejection_reason
+
+
+def test_a_rejected_buy_does_not_consume_a_slot():
+    """A name refused for some other reason must not crowd out the next one."""
+    cfg = _cfg(max_positions=1, min_cash_pct=0, min_trade_sek=5_000, max_turnover_pct=100)
+    snap = _snap(cash=100_000)
+    decision = _decision([
+        _buy("VOLV-B.ST", 1.0, 1_000),      # under the min trade size
+        _buy("SAND.ST", 10.0, 10_000),
+    ])
+    result = apply_guardrails(decision, snap, _priced(), UNIVERSE, cfg)
+    assert not result.verdicts[0].approved
+    assert result.verdicts[1].approved

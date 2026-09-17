@@ -954,12 +954,9 @@ def test_the_screener_reserves_slots_for_the_targeted_region(geo_profile, monkey
     seen = {}
     real_screen = whatif.screen
 
-    def _spy(features, held, top_n, pinned_tickers=None, region_quotas=None,
-             excluded_regions=None):
-        seen["quotas"] = region_quotas
-        seen["excluded"] = excluded_regions
-        return real_screen(features, held, top_n, pinned_tickers,
-                           region_quotas, excluded_regions)
+    def _spy(features, held, top_n, **kwargs):
+        seen.update(kwargs)
+        return real_screen(features, held, top_n, **kwargs)
 
     monkeypatch.setattr(whatif, "screen", _spy)
     _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
@@ -967,8 +964,8 @@ def test_the_screener_reserves_slots_for_the_targeted_region(geo_profile, monkey
         "config_geo.yaml", refresh_prices=False, include_macro=False,
         region_targets={"nordics": 30, "north_america": 0},
     )
-    assert seen["quotas"] == {"nordics": 3}
-    assert seen["excluded"] == {"north_america"}
+    assert seen["region_quotas"] == {"nordics": 3}
+    assert seen["excluded_regions"] == {"north_america"}
 
 
 def test_a_mix_summing_past_one_hundred_is_refused_before_any_llm_call(geo_profile, monkeypatch):
@@ -1110,3 +1107,261 @@ def test_a_zero_tolerance_is_honoured_rather_than_defaulted(geo_profile, monkeyp
     )
     assert result["regions"]["tolerance_pct"] == 0
     assert "30–30%" in captured["user"]
+
+
+# ── Style allocation ──────────────────────────────────────────────────────────
+#
+# Style is bundled into the profile — the Buffett configs bring a pre-screened
+# universe, the Global ones bring none — so "40% compounders and 20% higher-risk"
+# was unaskable in a single run. This dial makes it askable inside whichever
+# universe the profile already carries.
+
+_COMPOUNDER = {"roe": 0.28, "profit_margin": 0.22, "debt_to_equity": 60,
+               "revenue_growth": 0.09}
+_LOSSMAKER = {"profit_margin": -0.30, "revenue_growth": 1.2}
+
+
+def _seed_fundamentals(geo_profile, rows: dict[str, dict]) -> None:
+    store = Store(geo_profile["db_path"])
+    for ticker, data in rows.items():
+        store.save_fundamentals(ticker, data)
+
+
+@pytest.fixture
+def styled_profile(geo_profile):
+    """The geo profile with fundamentals on file: two compounders, two
+    loss-makers, one name whose figures never landed."""
+    _seed_fundamentals(geo_profile, {
+        "ALFA.ST": _COMPOUNDER, "BETA.ST": _COMPOUNDER,
+        "GAMMA": _LOSSMAKER, "DELTA": _LOSSMAKER,
+    })
+    return geo_profile
+
+
+def test_the_style_classification_reaches_the_run(styled_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"quality": 40}, style_tolerance_pct=10,
+    )
+    rows = {r["code"]: r for r in result["styles"]["rows"]}
+    assert rows["quality"]["candidates"] == 2
+    assert rows["speculative"]["candidates"] == 2
+
+
+def test_no_style_mix_leaves_the_prompt_untagged(styled_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False)
+    assert "Style:" not in captured["user"]
+    assert "Style allocation target" not in captured["user"]
+    assert result["styles"]["targets"] == {}
+
+
+def test_the_style_mix_reaches_the_prompt_with_the_figures_behind_each_tag(
+        styled_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"quality": 40}, style_tolerance_pct=10,
+    )
+    assert "Style allocation target" in captured["user"]
+    assert "Buffett-style quality" in captured["user"] and "30–50%" in captured["user"]
+    # The tag must be arguable, so the numbers behind it travel with it.
+    assert "Style: Buffett-style quality (ROE 28.0%" in captured["user"]
+    assert "Style: Higher-risk / speculative (loss-making" in captured["user"]
+
+
+def test_the_style_ceiling_is_enforced_on_the_result(styled_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("GAMMA", 35, 35_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"speculative": 20}, style_tolerance_pct=5,
+    )
+    row = result["actions"][0]
+    assert row["status"] == "REJECTED"
+    assert "Higher-risk / speculative" in row["reason"]
+
+
+def test_a_style_left_short_is_reported_not_forced(styled_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("GAMMA", 25, 25_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"quality": 40}, style_tolerance_pct=10,
+    )
+    assert result["actions"][0]["approved"] is True
+    rows = {r["code"]: r for r in result["styles"]["rows"]}
+    assert rows["quality"]["status"] == "short"
+    assert any("quality" in line for line in result["styles"]["shortfalls"])
+
+
+def test_the_result_owns_up_to_what_it_could_not_classify(styled_profile, monkeypatch):
+    """EPS.DE has no fundamentals on file — the cap under-counts by that much."""
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"speculative": 10},
+    )
+    assert result["styles"]["unclassified_candidates"] == 1
+    assert "tagged Unclassified" in captured["user"]
+
+
+def test_an_excluded_style_never_reaches_the_prompt(styled_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"speculative": 0},
+    )
+    assert "[GAMMA]" not in captured["user"] and "[DELTA]" not in captured["user"]
+    assert "[ALFA.ST]" in captured["user"]
+    assert result["styles"]["excluded"] == ["speculative"]
+
+
+def test_both_mixes_can_be_set_on_one_run(styled_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        region_targets={"nordics": 30}, style_targets={"quality": 40},
+    )
+    assert "Regional allocation target" in captured["user"]
+    assert "Style allocation target" in captured["user"]
+    assert "Region: Nordics" in captured["user"] and "Style:" in captured["user"]
+    assert result["regions"]["targets"] == {"nordics": 30.0}
+    assert result["styles"]["targets"] == {"quality": 40.0}
+
+
+def test_an_impossible_style_mix_is_refused_before_any_llm_call(styled_profile, monkeypatch):
+    def _never(*a, **k):
+        raise AssertionError("the model must not be called for an impossible mix")
+
+    monkeypatch.setattr(whatif, "call_llm_consensus", _never)
+    with pytest.raises(ValueError, match="Style targets add up"):
+        whatif.generate_whatif(
+            "config_geo.yaml", refresh_prices=False, include_macro=False,
+            style_targets={"quality": 60, "growth": 60},
+        )
+
+
+def test_a_style_mix_does_not_leak_into_the_profiles_own_config(styled_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_targets={"quality": 40},
+    )
+    assert whatif.load_profile_config("config_geo.yaml").risk.style_targets == {}
+
+
+# ── The free-text brief ───────────────────────────────────────────────────────
+
+def test_no_brief_adds_nothing_to_the_prompt(styled_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    whatif.generate_whatif("config_geo.yaml", refresh_prices=False, include_macro=False)
+    assert "Additional Brief" not in captured["user"]
+
+
+def test_the_brief_is_appended_and_says_it_relaxes_nothing(styled_profile, monkeypatch):
+    captured = _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_brief="Lean towards founder-led businesses.",
+    )
+    assert "Lean towards founder-led businesses." in captured["user"]
+    assert "it does not relax either" in captured["user"]
+    assert result["styles"]["brief"] == "Lean towards founder-led businesses."
+
+
+def test_an_oversized_brief_is_truncated_rather_than_refused(styled_profile, monkeypatch):
+    _capture_prompt(monkeypatch, [_geo_buy("ALFA.ST", 10, 10_000)])
+    result = whatif.generate_whatif(
+        "config_geo.yaml", refresh_prices=False, include_macro=False,
+        style_brief="x" * (whatif.MAX_STYLE_BRIEF + 500),
+    )
+    assert len(result["styles"]["brief"]) == whatif.MAX_STYLE_BRIEF
+
+
+def test_promote_carries_the_style_mix_and_brief_onto_the_sleeve(
+        profile, captured_sleeve, monkeypatch):
+    from fundmgr import paper
+    from fundmgr.engine import sleeve_review
+
+    run_id = _stored_result(profile, [
+        {"ticker": "ALFA.ST", "name": "Alfa AB", "side": "buy", "approved": True,
+         "target_weight_pct": 15, "thesis": "good", "kill_criterion": "k"},
+    ])
+    payload = json.loads((whatif.WHATIF_DIR / f"{run_id}.json").read_text())
+    payload["styles"] = {"targets": {"quality": 50.0}, "tolerance_pct": 5.0,
+                         "brief": "founder-led only"}
+    (whatif.WHATIF_DIR / f"{run_id}.json").write_text(json.dumps(payload))
+
+    store = Store(profile["data_dir"] / "style-sleeve.db")
+    store.initialise(100000)
+    monkeypatch.setattr(paper, "open_portfolio", lambda slug: ({"name": slug}, store))
+
+    out = whatif.promote_to_sleeve(run_id)
+
+    assert out["style_targets"] == {"quality": 50.0}
+    assert sleeve_review.stored_styles(store) == {
+        "targets": {"quality": 50.0}, "tolerance_pct": 5.0, "brief": "founder-led only",
+    }
+
+
+# ── Style mix over the web ────────────────────────────────────────────────────
+
+def test_whatif_page_offers_every_style(client):
+    html = client.get("/whatif/").text
+    for code in ("quality", "growth", "speculative", "unclassified"):
+        assert f'data-style="{code}"' in html
+    assert 'id="sg-brief"' in html
+
+
+def test_generate_rejects_an_unknown_style(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "style_targets": {"vibes": 30},
+    })
+    assert res.status_code == 400
+    assert "vibes" in res.json()["detail"]
+
+
+def test_generate_rejects_a_style_mix_over_one_hundred_percent(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "style_targets": {"quality": 60, "growth": 60},
+    })
+    assert res.status_code == 400
+    assert "100%" in res.json()["detail"]
+
+
+def test_generate_rejects_an_oversized_brief(client):
+    res = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "style_brief": "x" * (whatif.MAX_STYLE_BRIEF + 1),
+    })
+    assert res.status_code == 422
+
+
+def test_style_options_reach_the_engine(client, monkeypatch):
+    from fundmgr.web import whatif as web_whatif
+
+    seen = {}
+
+    def _capture(**kwargs):
+        seen.update(kwargs)
+        return {"id": "whatif-stub", "actions": [], "profile": {"name": "x"}}
+
+    monkeypatch.setattr(web_whatif, "generate_whatif", _capture)
+    monkeypatch.setattr(web_whatif, "_job", None)
+
+    job_id = client.post("/whatif/api/generate", json={
+        "profile": "config.yaml", "n_runs": 1,
+        "style_targets": {"quality": 40, "speculative": 20},
+        "style_tolerance_pct": 5,
+        "style_brief": "founder-led only",
+    }).json()["job_id"]
+
+    for _ in range(50):
+        job = client.get(f"/whatif/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        __import__("time").sleep(0.1)
+
+    assert seen["style_targets"] == {"quality": 40, "speculative": 20}
+    assert seen["style_tolerance_pct"] == 5
+    assert seen["style_brief"] == "founder-led only"

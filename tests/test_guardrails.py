@@ -7,7 +7,7 @@ from datetime import datetime
 
 import pytest
 
-from fundmgr import regions
+from fundmgr import regions, styles
 from fundmgr.config import AppConfig, FeeConfig, RiskConfig
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.engine.schema import Action, DecisionRun
@@ -400,3 +400,135 @@ def test_a_clipped_trade_still_breaching_its_region_is_rejected():
     v = result.verdicts[0]
     assert not v.approved
     assert "Nordics would reach 12.0%" in v.rejection_reason
+
+
+# ── Style allocation ceiling ──────────────────────────────────────────────────
+#
+# Same machinery as the regional cap over a judgement instead of a fact, so the
+# rule these tests defend is that a name is only ever capped on a positive
+# finding. A missing fundamental is not a finding.
+
+def _style_cfg(targets: dict, tolerance: float = 10.0, **overrides) -> AppConfig:
+    cfg = _cfg(**overrides)
+    cfg.risk.style_targets = targets
+    cfg.risk.style_tolerance_pct = tolerance
+    return cfg
+
+
+def _compounder(ticker: str) -> TickerFeatures:
+    feat = _feat(ticker)
+    feat.roe_pct, feat.profit_margin_pct = 28.0, 22.0
+    feat.debt_to_equity, feat.revenue_growth_pct = 60.0, 9.0
+    return feat
+
+
+def _lossmaker(ticker: str) -> TickerFeatures:
+    feat = _feat(ticker)
+    feat.profit_margin_pct = -30.0
+    return feat
+
+
+def _style_features() -> dict[str, TickerFeatures]:
+    return {
+        "VOLV-B.ST": _compounder("VOLV-B.ST"),
+        "SAND.ST": _compounder("SAND.ST"),
+        "ERIC-B.ST": _lossmaker("ERIC-B.ST"),
+        "ABB.ST": _lossmaker("ABB.ST"),
+        "HM-B.ST": _feat("HM-B.ST"),            # no figures on file at all
+    }
+
+
+def test_buy_within_the_style_band_is_approved():
+    cfg = _style_cfg({"speculative": 20.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("ERIC-B.ST", 15.0, 15_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_buy_past_the_style_ceiling_is_rejected():
+    cfg = _style_cfg({"speculative": 20.0}, min_cash_pct=0, max_position_pct=50)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("ERIC-B.ST", 40.0, 40_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    v = result.verdicts[0]
+    assert not v.approved
+    assert "Higher-risk / speculative" in v.rejection_reason
+    assert "cap 30%" in v.rejection_reason
+
+
+def test_the_style_ceiling_counts_what_the_book_already_holds():
+    cfg = _style_cfg({"speculative": 12.0}, tolerance=0.0, min_cash_pct=0)
+    snap = _snap(cash=90_000, positions=[Position("ERIC-B.ST", 100, 100.0)])
+    decision = _decision([_buy("ABB.ST", 10.0, 10_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert not result.verdicts[0].approved
+    assert "would reach 20.0%" in result.verdicts[0].rejection_reason
+
+
+def test_a_style_the_mix_never_named_is_unconstrained():
+    cfg = _style_cfg({"speculative": 20.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("VOLV-B.ST", 16.0, 16_000)])   # quality — not named
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_a_name_with_no_figures_is_never_blocked_by_a_style_cap():
+    """Rejecting a buy because the fundamentals cache had not filled would be
+    failing closed on a gap rather than on a finding."""
+    cfg = _style_cfg({"speculative": 0.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("HM-B.ST", 16.0, 16_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_an_explicit_zero_on_unclassified_does_block_it():
+    """"Don't buy what you can't see" is a real instruction, and the only way an
+    unclassified name is ever refused."""
+    cfg = _style_cfg({styles.UNCLASSIFIED: 0.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("HM-B.ST", 16.0, 16_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert not result.verdicts[0].approved
+    assert "set to 0%" in result.verdicts[0].rejection_reason
+
+
+def test_an_excluded_style_refuses_the_buy_outright():
+    cfg = _style_cfg({"speculative": 0.0}, min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("ERIC-B.ST", 5.0, 5_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert not result.verdicts[0].approved
+
+
+def test_no_style_mix_means_no_style_check():
+    cfg = _cfg(min_cash_pct=0)
+    snap = _snap(cash=100_000)
+    decision = _decision([_buy("ERIC-B.ST", 15.0, 15_000)])
+    result = apply_guardrails(decision, snap, _style_features(), UNIVERSE, cfg)
+    assert result.verdicts[0].approved
+
+
+def test_a_buy_must_clear_both_dials():
+    """Region and style are checked independently; either can refuse."""
+    cfg = _cfg(min_cash_pct=0, max_position_pct=50)
+    cfg.risk.region_targets = {"nordics": 30.0}
+    cfg.risk.region_tolerance_pct = 10.0
+    cfg.risk.style_targets = {"speculative": 10.0}
+    cfg.risk.style_tolerance_pct = 0.0
+    features = _style_features()
+    for feat in features.values():
+        feat.country = "SE"
+    snap = _snap(cash=100_000)
+
+    # Inside the regional band, past the style one.
+    result = apply_guardrails(
+        _decision([_buy("ERIC-B.ST", 40.0, 40_000)]), snap, features, UNIVERSE, cfg)
+    assert "Style cap breach" in result.verdicts[0].rejection_reason
+
+    # Inside the style band (quality is unnamed), past the regional one.
+    result = apply_guardrails(
+        _decision([_buy("VOLV-B.ST", 50.0, 50_000)]), snap, features, UNIVERSE, cfg)
+    assert "Regional cap breach" in result.verdicts[0].rejection_reason

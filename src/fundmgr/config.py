@@ -43,6 +43,12 @@ class RiskConfig:
     # enforced here, the floor is not, because no guardrail can force a buy.
     region_targets: dict[str, float] = field(default_factory=dict)
     region_tolerance_pct: float = 10.0       # band around each regional target
+    # Risk/quality mix, {style code: % of NAV} — see fundmgr.styles. Same shape
+    # as the regional dial, but over a judgement rather than a fact: a name with
+    # no fundamentals on file is `unclassified`, counted against no target and
+    # blocked by none, so these caps under-count rather than bind tightly.
+    style_targets: dict[str, float] = field(default_factory=dict)
+    style_tolerance_pct: float = 10.0        # band around each style target
 
 
 @dataclass

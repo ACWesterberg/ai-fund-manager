@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from fundmgr import paper, regions
+from fundmgr import paper, regions, styles
 from fundmgr.engine import sleeve_review, whatif
 from fundmgr.engine.schema import Action, DecisionRun
 from fundmgr.state.models import Position, Transaction
@@ -1720,3 +1720,178 @@ def test_an_unset_tolerance_falls_back_to_the_default_band(env, sleeve, monkeypa
         region_mix={"targets": {"nordics": 60}, "tolerance_pct": None},
     )
     assert result["regions"]["tolerance_pct"] == regions.DEFAULT_TOLERANCE_PCT
+
+
+# ── Style mix ─────────────────────────────────────────────────────────────────
+
+_COMPOUNDER = {"roe": 0.28, "profit_margin": 0.22, "debt_to_equity": 60,
+               "revenue_growth": 0.09}
+_LOSSMAKER = {"profit_margin": -0.30, "revenue_growth": 1.2}
+
+
+@pytest.fixture
+def styled(env, sleeve):
+    """The sleeve's own store seeded with fundamentals, since a review builds
+    features against the sleeve DB rather than the source profile's."""
+    _meta, store = paper.open_portfolio(sleeve)
+    for ticker in ("ALFA.ST", "GAMMA.ST"):
+        store.save_fundamentals(ticker, _COMPOUNDER)
+    for ticker in ("BETA.ST", "NORSK.OL"):
+        store.save_fundamentals(ticker, _LOSSMAKER)
+    return sleeve
+
+
+def test_a_sleeve_has_no_style_mix_until_one_is_set(env, sleeve):
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.review_defaults(store)["styles"] == {}
+
+
+def test_the_style_mix_reaches_the_prompt_and_is_remembered(styled, monkeypatch):
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False,
+        style_mix={"targets": {"quality": 50}, "tolerance_pct": 5},
+    )
+
+    assert "Style allocation target" in capture["user"]
+    assert "45–55%" in capture["user"]
+    assert "Style: Buffett-style quality (ROE 28.0%" in capture["user"]
+    assert result["styles"]["targets"] == {"quality": 50.0}
+
+    _meta, store = paper.open_portfolio(styled)
+    stored = sleeve_review.review_defaults(store)["styles"]
+    assert stored["targets"] == {"quality": 50.0}
+    assert stored["tolerance_pct"] == 5.0
+
+
+def test_a_remembered_style_mix_applies_to_the_next_review(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    result = sleeve_review.review_sleeve(styled, include_macro=False)   # nothing passed
+    assert result["styles"]["targets"] == {"quality": 50.0}
+
+
+def test_submitting_an_empty_style_mix_clears_the_stored_one(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {}})
+
+    assert result["styles"]["targets"] == {}
+    assert "Style allocation target" not in capture["user"]
+
+
+def test_the_style_ceiling_is_enforced_against_the_sleeves_own_book(styled, monkeypatch):
+    """ALFA.ST is a compounder and already 10% of NAV, so a second one breaches
+    a 12% quality cap the first cleared."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="GAMMA.ST", side="buy", target_weight_pct=10, sek_estimate=10_000,
+               confidence=0.9, thesis="add-on"),
+    ])
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False,
+        style_mix={"targets": {"quality": 12}, "tolerance_pct": 0},
+    )
+    row = next(r for r in result["actions"] if r["ticker"] == "GAMMA.ST")
+    assert row["status"] == "REJECTED"
+    assert "Buffett-style quality would reach 20.0%" in row["reason"]
+
+
+def test_a_review_reports_what_it_could_not_classify(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+    # DEUT.DE and WEIRD have no fundamentals seeded.
+    assert result["styles"]["unclassified_candidates"] >= 1
+
+
+def test_an_impossible_style_mix_is_refused_before_the_model_is_called(styled, monkeypatch):
+    def _never(*a, **k):
+        raise AssertionError("the model must not be called for an impossible mix")
+
+    monkeypatch.setattr(sleeve_review, "call_llm_consensus", _never)
+    with pytest.raises(ValueError, match="Style targets add up"):
+        sleeve_review.review_sleeve(
+            styled, include_macro=False,
+            style_mix={"targets": {"quality": 60, "growth": 60}})
+
+
+def test_the_style_mix_does_not_leak_into_the_source_profile(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+    assert whatif.load_profile_config("config_test.yaml").risk.style_targets == {}
+
+
+# ── The free-text brief ───────────────────────────────────────────────────────
+
+def test_the_brief_reaches_the_prompt_and_is_remembered(styled, monkeypatch):
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False,
+        style_mix={"targets": {}, "brief": "Nothing that listed in the last year."},
+    )
+    assert "Nothing that listed in the last year." in capture["user"]
+    assert "it does not relax either" in capture["user"]
+    assert result["styles"]["brief"] == "Nothing that listed in the last year."
+
+    _meta, store = paper.open_portfolio(styled)
+    assert sleeve_review.review_defaults(store)["styles"]["brief"] == (
+        "Nothing that listed in the last year.")
+
+
+def test_a_brief_survives_an_empty_target_set(env, sleeve):
+    """It is a real instruction on its own — dropping it because no bucket was
+    filled in would discard the more specific of the two."""
+    assert sleeve_review.clean_styles({"targets": {}, "brief": "founder-led only"}) == {
+        "targets": {}, "tolerance_pct": styles.DEFAULT_TOLERANCE_PCT,
+        "brief": "founder-led only",
+    }
+
+
+def test_neither_a_mix_nor_a_brief_stores_nothing(env, sleeve):
+    assert sleeve_review.clean_styles({"targets": {}, "brief": "   "}) == {}
+
+
+# ── Style mix over the web ────────────────────────────────────────────────────
+
+def test_review_form_offers_every_style(client, sleeve):
+    html = client.get(f"/live/{sleeve}").text
+    assert "Risk &amp; quality mix for this sleeve" in html
+    for code in ("quality", "growth", "speculative", "unclassified"):
+        assert f'data-style="{code}"' in html
+
+
+def test_review_rejects_an_unknown_style(client, sleeve):
+    r = client.post(f"/live/{sleeve}/review",
+                    json={"config": "config_test.yaml", "style_targets": {"vibes": 30}})
+    assert r.status_code == 400
+    assert "vibes" in r.json()["detail"]
+
+
+def test_web_review_accepts_a_style_mix_and_a_brief(client, styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    start = client.post(f"/live/{styled}/review",
+                        json={"config": "config_test.yaml", "include_macro": False,
+                              "style_targets": {"quality": 50},
+                              "style_tolerance_pct": 5,
+                              "style_brief": "founder-led only"})
+    assert start.status_code == 200
+    job_id = start.json()["job_id"]
+
+    for _ in range(200):
+        job = client.get(f"/live/{styled}/review/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+    assert job["status"] == "done", job.get("error")
+    assert job["result"]["styles"]["targets"] == {"quality": 50.0}
+    assert job["result"]["styles"]["brief"] == "founder-led only"

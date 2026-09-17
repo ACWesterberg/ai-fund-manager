@@ -31,7 +31,7 @@ from pathlib import Path
 
 import yaml
 
-from fundmgr import regions
+from fundmgr import regions, styles
 from fundmgr.config import CONFIG_DIR, DATA_DIR, AppConfig, get_enabled_tickers, load_config
 from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import fetch_and_cache_fundamentals
@@ -93,6 +93,19 @@ _MONITORING_PLAN_DIRECTIVE = (
     "Set target_price in the stock's own trading currency, at the level your "
     "thesis actually implies, since the expected return it gives is what any "
     "later add is measured against."
+)
+
+# A free-text instruction for one run, for the tilt no bucket captures
+# ("lean towards founder-led businesses", "nothing that IPO'd in the last year").
+# Bounded so a pasted essay cannot crowd out the universe it is meant to steer.
+MAX_STYLE_BRIEF = 1000
+
+_STYLE_BRIEF_HEADER = (
+    "\n\n## Additional Brief\n"
+    "The operator added this instruction for this run. It shapes what you pick "
+    "*within* the mandate and the limits above — it does not relax either, and "
+    "the guardrails are unchanged by it. Where it conflicts with the mandate, "
+    "the mandate wins and you say so in your notes.\n\n"
 )
 
 # Carried from each action into the stored result when the plan was requested.
@@ -256,6 +269,9 @@ def generate_whatif(
     monitoring_plan: bool = False,
     region_targets: dict[str, float] | None = None,
     region_tolerance_pct: float | None = None,
+    style_targets: dict[str, float] | None = None,
+    style_tolerance_pct: float | None = None,
+    style_brief: str = "",
 ) -> dict:
     """
     Generate a hypothetical from-scratch portfolio for one fund profile.
@@ -284,6 +300,18 @@ def generate_whatif(
     prompt states the brief, and the guardrails reject a buy past a region's
     ceiling. Only the ceiling is enforced; a region the run leaves short is
     reported in the result rather than filled, since nothing can force a buy.
+
+    style_targets does the same over risk/quality character (fundmgr.styles), so
+    a run can be asked for "40% Buffett-style compounders and 20% higher-risk
+    names" within one mandate. It selects inside the profile's own universe: a
+    Global run asking for quality gets the best-scoring quality names in the
+    global universe, never names imported from the Buffett screen. A style is a
+    reading of fundamentals rather than a fact, so names without them are
+    `unclassified` — counted against no target and blocked by none, which the
+    result and the prompt both say out loud.
+
+    style_brief is free text appended to the prompt for the tilt no bucket
+    captures. It steers selection within the mandate; it relaxes nothing.
 
     Blocking — call from a background thread in the web layer.
     """
@@ -318,6 +346,12 @@ def generate_whatif(
     quotas = regions.candidate_quotas(targets, cfg.screener.top_n)
     excluded_regions = regions.excluded(targets)
 
+    style_mix = styles.clean_targets(style_targets)
+    style_tolerance = styles.clean_tolerance(style_tolerance_pct, cfg.risk.style_tolerance_pct)
+    style_slots = styles.candidate_quotas(style_mix, cfg.screener.top_n)
+    excluded_styles = styles.excluded(style_mix)
+    style_brief = (style_brief or "").strip()[:MAX_STYLE_BRIEF]
+
     hard_floor, comfortable_floor = deployment_floors(cfg)
     if cfg.capital_sek < hard_floor:
         raise ValueError(
@@ -340,6 +374,7 @@ def generate_whatif(
     screened_features, _ = screen(
         features, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned,
         region_quotas=quotas, excluded_regions=excluded_regions,
+        style_quotas=style_slots, excluded_styles=excluded_styles,
     )
 
     refresh_report: dict = {"refreshed": False}
@@ -352,6 +387,7 @@ def generate_whatif(
             screened_features, _ = screen(
                 fresh, set(), top_n=cfg.screener.top_n, pinned_tickers=pinned,
                 region_quotas=quotas, excluded_regions=excluded_regions,
+                style_quotas=style_slots, excluded_styles=excluded_styles,
             )
 
     macro_block = ""
@@ -373,6 +409,8 @@ def generate_whatif(
     effective_cfg.risk = copy.copy(cfg.risk)
     effective_cfg.risk.region_targets = targets
     effective_cfg.risk.region_tolerance_pct = tolerance
+    effective_cfg.risk.style_targets = style_mix
+    effective_cfg.risk.style_tolerance_pct = style_tolerance
     if deploy_full:
         # Put everything to work now: no staged-entry cap, no cash held back.
         # max_cash_pct goes to 0 too, otherwise the guardrail would happily
@@ -393,6 +431,8 @@ def generate_whatif(
         user_msg += _FULL_DEPLOY_DIRECTIVE
     if monitoring_plan:
         user_msg += _MONITORING_PLAN_DIRECTIVE
+    if style_brief:
+        user_msg += _STYLE_BRIEF_HEADER + style_brief
 
     decision, _raw, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, effective_cfg)
 
@@ -446,6 +486,12 @@ def generate_whatif(
         targets, tolerance, achieved,
         regions.candidate_counts(regions.regions_of(screened_features)),
     )
+    style_by_ticker = styles.styles_of(features)
+    style_rows = styles.mix_rows(
+        style_mix, style_tolerance,
+        styles.projected_exposure(snap, guardrails.approved_actions, style_by_ticker),
+        styles.candidate_counts(styles.styles_of(screened_features)),
+    )
 
     result = {
         "id": run_id,
@@ -487,6 +533,20 @@ def generate_whatif(
             "shortfalls": regions.shortfalls(region_rows),
             "quotas": quotas,
             "excluded": sorted(excluded_regions),
+        },
+        "styles": {
+            "targets": style_mix,
+            "tolerance_pct": style_tolerance,
+            "rows": style_rows,
+            "shortfalls": styles.shortfalls(style_rows),
+            "quotas": style_slots,
+            "excluded": sorted(excluded_styles),
+            # Named on the result, not just in the prompt: a style cap measures
+            # only what it could classify, so a reader comparing the mix to the
+            # book needs to know how much of the list had no verdict at all.
+            "unclassified_candidates": styles.candidate_counts(
+                styles.styles_of(screened_features)).get(styles.UNCLASSIFIED, 0),
+            "brief": style_brief,
         },
         "market_summary": decision.market_summary,
         "notes": decision.notes,
@@ -589,25 +649,39 @@ def promote_to_sleeve(
         execute_buys=execute,
     )
 
-    # The mix travels with the book. A sleeve promoted from a 30%-Nordics run
-    # whose next review defaults back to "anywhere" would quietly undo the thing
-    # the run was generated for. Fails open: the sleeve exists by the time this
-    # runs, so losing it over a remembered preference would be the worse outcome
-    # — the response says what was actually carried.
+    # Both mixes travel with the book. A sleeve promoted from a 30%-Nordics,
+    # 40%-quality run whose next review defaults back to "anywhere, anything"
+    # would quietly undo the thing the run was generated for. Fails open: the
+    # sleeve exists by the time this runs, so losing it over a remembered
+    # preference would be the worse outcome — the response says what was
+    # actually carried.
     region_meta = result.get("regions") or {}
+    style_meta = result.get("styles") or {}
     carried: dict[str, float] = {}
+    carried_styles: dict[str, float] = {}
     try:
+        from fundmgr.engine import sleeve_review  # imports whatif — keep it local
         carried = regions.clean_targets(region_meta.get("targets"))
-        if carried:
-            from fundmgr.engine import sleeve_review  # imports whatif — keep it local
+        carried_styles = styles.clean_targets(style_meta.get("targets"))
+        brief = (style_meta.get("brief") or "").strip()[:MAX_STYLE_BRIEF]
+        if carried or carried_styles or brief:
             _meta, store = paper.open_portfolio(slug)
-            store.set_meta(sleeve_review.META_REGIONS, json.dumps({
-                "targets": carried,
-                "tolerance_pct": regions.clean_tolerance(region_meta.get("tolerance_pct")),
-            }))
+            if carried:
+                store.set_meta(sleeve_review.META_REGIONS, json.dumps({
+                    "targets": carried,
+                    "tolerance_pct": regions.clean_tolerance(
+                        region_meta.get("tolerance_pct")),
+                }))
+            if carried_styles or brief:
+                store.set_meta(sleeve_review.META_STYLES, json.dumps({
+                    "targets": carried_styles,
+                    "tolerance_pct": styles.clean_tolerance(
+                        style_meta.get("tolerance_pct")),
+                    "brief": brief,
+                }))
     except Exception as exc:
-        logger.warning("What-if: could not carry the regional mix to %s: %s", slug, exc)
-        carried = {}
+        logger.warning("What-if: could not carry the allocation mix to %s: %s", slug, exc)
+        carried, carried_styles = {}, {}
 
     return {
         "slug": slug,
@@ -621,6 +695,7 @@ def promote_to_sleeve(
         # sleeve missing them is one the daily watch cannot act on.
         "unwatched_tickers": unwatched,
         "region_targets": carried,
+        "style_targets": carried_styles,
     }
 
 

@@ -4,11 +4,20 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fundmgr import regions
+from fundmgr import regions, styles
 from fundmgr.config import AppConfig
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.engine.schema import Action, DecisionRun
 from fundmgr.state.models import PortfolioSnapshot
+
+
+# The allocation dials a buy is measured against. Ceilings only, in both cases:
+# a guardrail can refuse a trade but cannot invent one, so the floor half of a
+# mix is a brief to the model and a number reported back (see fundmgr.allocation).
+_MIX_DIALS = (
+    (regions, "region_targets", "region_tolerance_pct"),
+    (styles, "style_targets", "style_tolerance_pct"),
+)
 
 
 @dataclass
@@ -64,16 +73,12 @@ def apply_guardrails(
 
     nav = snap.nav_sek
     current_positions = {p.ticker for p in snap.positions if p.shares > 0}
-    # Regional ceilings, empty unless this run was given a mix. Computed once:
-    # every buy is measured against the same set.
-    region_ceilings = regions.ceilings(
-        cfg.risk.region_targets, cfg.risk.region_tolerance_pct
-    )
+    mix_ceilings = _mix_ceilings(cfg)
 
     for action in decision.actions:
         verdict = _check_action(
             action, snap, features, universe_tickers, current_positions, cfg, nav,
-            region_ceilings,
+            mix_ceilings,
         )
         verdicts.append(verdict)
         if verdict.approved:
@@ -99,6 +104,21 @@ def apply_guardrails(
     return result
 
 
+def _mix_ceilings(cfg: AppConfig) -> list[tuple]:
+    """(dial, targets, ceilings) for every mix this run was given, or [].
+
+    Computed once per run: every buy is measured against the same set, so a
+    classification cannot shift underneath a decision mid-pass.
+    """
+    out = []
+    for dial, targets_attr, tolerance_attr in _MIX_DIALS:
+        targets = getattr(cfg.risk, targets_attr, None) or {}
+        if targets:
+            tolerance = getattr(cfg.risk, tolerance_attr, dial.DEFAULT_TOLERANCE_PCT)
+            out.append((dial, targets, dial.ceilings(targets, tolerance)))
+    return out
+
+
 def _check_action(
     action: Action,
     snap: PortfolioSnapshot,
@@ -107,7 +127,7 @@ def _check_action(
     current_positions: set[str],
     cfg: AppConfig,
     nav: float,
-    region_ceilings: dict[str, float] | None = None,
+    mix_ceilings: list[tuple] | None = None,
 ) -> GuardrailVerdict:
     v = GuardrailVerdict(action=action, approved=True)
 
@@ -184,37 +204,38 @@ def _check_action(
                 )
                 return v
 
-    # 6. Regional allocation ceiling
+    # 6. Allocation mixes — regional and style ceilings
     #
     # Same shape as the sector cap and for the same reason — a mix is only a mix
     # if something enforces it — but only the ceiling is enforceable. Nothing
-    # here can make the book buy Nordics; it can only stop it buying past the
-    # band. A region the mix never named has no entry and is not checked.
-    if action.side == "buy" and region_ceilings:
+    # here can make the book buy Nordics or buy quality; it can only stop it
+    # buying past the band. A bucket the mix never named has no entry and is not
+    # checked, which is also what keeps an unclassifiable name unblocked.
+    if action.side == "buy" and mix_ceilings:
         feat = features.get(action.ticker)
-        code = regions.region_of(feat.country if feat else None)
-        ceiling = region_ceilings.get(code)
-        if ceiling is not None:
-            region_value_now = sum(
+        for dial, targets, tops in mix_ceilings:
+            code = dial.bucket_of(feat)
+            ceiling = tops.get(code)
+            if ceiling is None:
+                continue
+            bucket_value_now = sum(
                 p.market_value_sek
                 for p in snap.positions
-                if p.shares > 0
-                and regions.region_of(
-                    getattr(features.get(p.ticker), "country", None)
-                ) == code
+                if p.shares > 0 and dial.bucket_of(features.get(p.ticker)) == code
             )
-            projected_region_pct = (
-                (region_value_now + action.sek_estimate) / nav * 100 if nav > 0 else 0
+            projected_pct = (
+                (bucket_value_now + action.sek_estimate) / nav * 100 if nav > 0 else 0
             )
-            if projected_region_pct > ceiling + 1e-9:
-                target = cfg.risk.region_targets.get(code, 0.0)
-                label = regions.label_of(code)
+            if projected_pct > ceiling + 1e-9:
+                label = dial.label_of(code)
                 v.approved = False
                 v.rejection_reason = (
-                    f"Region excluded by the allocation mix: {label} is set to 0%"
+                    f"{dial.SCHEME.name} bucket excluded by the allocation mix: "
+                    f"{label} is set to 0%"
                     if ceiling <= 0 else
-                    f"Region cap breach: {label} would reach {projected_region_pct:.1f}% "
-                    f"(target {target:.0f}%, cap {ceiling:.0f}%)"
+                    f"{dial.SCHEME.name} cap breach: {label} would reach "
+                    f"{projected_pct:.1f}% (target {targets.get(code, 0.0):.0f}%, "
+                    f"cap {ceiling:.0f}%)"
                 )
                 return v
 

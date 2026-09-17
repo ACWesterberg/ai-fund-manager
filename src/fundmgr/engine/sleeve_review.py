@@ -58,7 +58,7 @@ import uuid
 from datetime import datetime, timedelta
 from functools import lru_cache
 
-from fundmgr import regions
+from fundmgr import regions, styles
 from fundmgr.config import AppConfig, UniverseTicker, get_enabled_tickers
 from fundmgr.data.fundamentals import apply_to_features
 from fundmgr.data.news import (
@@ -89,6 +89,7 @@ META_CONFIG = "paper_review_config"
 META_COUNTRY = "paper_review_country"
 META_RISK = "paper_review_risk"
 META_REGIONS = "paper_review_regions"
+META_STYLES = "paper_review_styles"
 
 # Risk caps a sleeve may carry its own value for. Everything else — sector caps,
 # minimum trade size, staleness — stays the source profile's, because those are
@@ -150,6 +151,7 @@ def review_defaults(store: Store) -> dict:
         "country": store.get_meta(META_COUNTRY) or "",
         "risk": stored_risk(store),
         "regions": stored_regions(store),
+        "styles": stored_styles(store),
     }
 
 
@@ -204,6 +206,34 @@ def stored_regions(store: Store) -> dict:
     """This sleeve's own geographic mix, as far as it sets one."""
     try:
         return clean_regions(json.loads(store.get_meta(META_REGIONS) or "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+def clean_styles(raw: dict | None) -> dict:
+    """A stored or submitted risk/quality mix, plus its free-text brief.
+
+    The brief survives an empty target set: "lean towards founder-led
+    businesses" is a real instruction on its own, and dropping it because no
+    bucket was filled in would silently discard the more specific of the two.
+    """
+    from fundmgr.engine.whatif import MAX_STYLE_BRIEF
+
+    targets = styles.clean_targets((raw or {}).get("targets"))
+    brief = str((raw or {}).get("brief") or "").strip()[:MAX_STYLE_BRIEF]
+    if not targets and not brief:
+        return {}
+    return {
+        "targets": targets,
+        "tolerance_pct": styles.clean_tolerance((raw or {}).get("tolerance_pct")),
+        "brief": brief,
+    }
+
+
+def stored_styles(store: Store) -> dict:
+    """This sleeve's own risk/quality mix, as far as it sets one."""
+    try:
+        return clean_styles(json.loads(store.get_meta(META_STYLES) or "{}"))
     except (ValueError, TypeError):
         return {}
 
@@ -1005,6 +1035,7 @@ def review_sleeve(
     refresh_prices: bool = True,
     risk: dict | None = None,
     region_mix: dict | None = None,
+    style_mix: dict | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Re-decide one sleeve against its current book and a scoped universe.
@@ -1023,6 +1054,12 @@ def review_sleeve(
     keeps being reviewed against that mix rather than drifting back to whatever
     the screener's ranking favours. Ceilings bind; a region left short is
     reported in the result.
+
+    `style_mix` is the same over risk/quality character — {"targets": {style
+    code: % of NAV}, "tolerance_pct": n, "brief": "free text"} — and is
+    remembered the same way. A style is read off fundamentals rather than the
+    universe row, so a name without them is `unclassified`: counted against no
+    target, blocked by none, and reported as such.
     """
     from fundmgr import paper
 
@@ -1037,6 +1074,10 @@ def review_sleeve(
     region_mix = defaults["regions"] if region_mix is None else clean_regions(region_mix)
     region_targets = region_mix.get("targets") or {}
     region_tolerance = region_mix.get("tolerance_pct", regions.DEFAULT_TOLERANCE_PCT)
+    style_mix = defaults["styles"] if style_mix is None else clean_styles(style_mix)
+    style_targets = style_mix.get("targets") or {}
+    style_tolerance = style_mix.get("tolerance_pct", styles.DEFAULT_TOLERANCE_PCT)
+    style_brief = style_mix.get("brief") or ""
 
     cfg = load_profile_config(config_name)
     cfg, risk_applied = apply_risk_overrides(cfg, risk)
@@ -1044,6 +1085,8 @@ def review_sleeve(
     cfg.risk = copy.copy(cfg.risk)
     cfg.risk.region_targets = region_targets
     cfg.risk.region_tolerance_pct = region_tolerance
+    cfg.risk.style_targets = style_targets
+    cfg.risk.style_tolerance_pct = style_tolerance
     cfg.llm = copy.copy(cfg.llm)
     if provider and model_id:
         cfg.llm.provider = provider
@@ -1106,6 +1149,8 @@ def review_sleeve(
         pinned_tickers=set(cfg.screener.pinned_tickers) & set(features),
         region_quotas=regions.candidate_quotas(region_targets, cfg.screener.top_n),
         excluded_regions=regions.excluded(region_targets),
+        style_quotas=styles.candidate_quotas(style_targets, cfg.screener.top_n),
+        excluded_styles=styles.excluded(style_targets),
     )
 
     macro_block = ""
@@ -1129,6 +1174,9 @@ def review_sleeve(
         task_override=_task_block(run_id, scope_label, snap, cfg),
         heading=f"Live Sleeve Review — {meta['name']}",
     )
+    if style_brief:
+        from fundmgr.engine.whatif import _STYLE_BRIEF_HEADER
+        user_msg += _STYLE_BRIEF_HEADER + style_brief
 
     decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, cfg)
 
@@ -1221,6 +1269,12 @@ def review_sleeve(
         regions.projected_exposure(snap, guardrails.approved_actions, region_by_ticker),
         regions.candidate_counts(regions.regions_of(screened)),
     )
+    style_by_ticker = styles.styles_of(features)
+    style_rows = styles.mix_rows(
+        style_targets, style_tolerance,
+        styles.projected_exposure(snap, guardrails.approved_actions, style_by_ticker),
+        styles.candidate_counts(styles.styles_of(screened)),
+    )
 
     result = {
         "id": run_id,
@@ -1265,6 +1319,15 @@ def review_sleeve(
             "tolerance_pct": region_tolerance,
             "rows": region_rows,
             "shortfalls": regions.shortfalls(region_rows),
+        },
+        "styles": {
+            "targets": style_targets,
+            "tolerance_pct": style_tolerance,
+            "rows": style_rows,
+            "shortfalls": styles.shortfalls(style_rows),
+            "unclassified_candidates": styles.candidate_counts(
+                styles.styles_of(screened)).get(styles.UNCLASSIFIED, 0),
+            "brief": style_brief,
         },
         "turnover": turnover,
         "buy_count": len(buys),
@@ -1341,6 +1404,7 @@ def review_sleeve(
         store.set_meta(META_COUNTRY, (country or "").upper())
         store.set_meta(META_RISK, json.dumps(risk))
         store.set_meta(META_REGIONS, json.dumps(region_mix))
+        store.set_meta(META_STYLES, json.dumps(style_mix))
 
     return result
 

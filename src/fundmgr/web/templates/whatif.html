@@ -125,6 +125,63 @@
       </details>
     </div>
 
+    <!-- ── Style mix ── -->
+    <div class="md:col-span-2 lg:col-span-4 border-t border-slate-800/60 pt-4">
+      <details id="style-details">
+        <summary class="flex items-center gap-2 select-none" style="cursor:pointer;list-style:none">
+          <span class="material-symbols-outlined text-slate-500" style="font-size:16px">balance</span>
+          <span class="kpi-label">Risk &amp; quality mix</span>
+          <span id="style-summary" class="text-[10px] text-slate-600">no constraint — the mandate and the ranking decide the character</span>
+        </summary>
+
+        <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+          {% for st in style_options %}
+          <div>
+            <label class="text-[10px] text-slate-500 block mb-1" for="sg-{{ st.code }}">{{ st.label }}</label>
+            <input id="sg-{{ st.code }}" data-style="{{ st.code }}" type="number" min="0" max="100" step="any"
+                   inputmode="numeric" placeholder="any"
+                   class="style-input w-full bg-slate-900 border border-slate-700/60 rounded-lg px-2 py-1.5 text-sm text-slate-200">
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-end gap-4">
+          <div style="max-width:9rem">
+            <label class="text-[10px] text-slate-500 block mb-1" for="sg-tolerance">Tolerance (± pp)</label>
+            <input id="sg-tolerance" type="number" min="0" max="100" step="any" value="{{ style_tolerance_pct }}"
+                   class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-2 py-1.5 text-sm text-slate-200">
+          </div>
+          <button id="sg-clear" type="button"
+                  class="px-2.5 py-1.5 rounded-lg border border-slate-700/60 text-[11px] text-slate-400 hover:text-slate-200">
+            Clear the mix
+          </button>
+          <p id="style-hint" class="text-[10px] text-slate-600 flex-1 min-w-[16rem] leading-snug"></p>
+        </div>
+
+        <div class="mt-3">
+          <label class="text-[10px] text-slate-500 block mb-1" for="sg-brief">
+            Extra brief (optional) — the tilt no bucket captures
+          </label>
+          <textarea id="sg-brief" rows="2" maxlength="{{ max_style_brief }}"
+                    placeholder="e.g. lean towards founder-led businesses; nothing that listed in the last year"
+                    class="w-full bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200"></textarea>
+          <p class="text-[10px] text-slate-600 mt-1 leading-snug">
+            Appended to the prompt. It steers what gets picked <b>within</b> the mandate and the risk
+            limits — it cannot relax either, and the guardrails are unchanged by it.
+          </p>
+        </div>
+
+        <p class="text-[10px] text-slate-600 mt-2 leading-snug">
+          Percentages are of NAV, and names are picked from <b>this profile's own universe</b> — a Global
+          run asking for quality gets the best quality names in the global universe, not names imported
+          from the Buffett screen. A style is read off reported fundamentals and realised volatility, so a
+          name whose figures haven't landed is <b>Unclassified</b>: it counts towards no target and is
+          blocked by none, which means these caps under-count rather than bind tightly. Read a style
+          target as a tilt; the region dial, built on a fact in the universe row, is the tighter of the two.
+        </p>
+      </details>
+    </div>
+
     <!-- ── Deployment mode ── -->
     <div class="md:col-span-2 lg:col-span-3 border-t border-slate-800/60 pt-4">
       <label class="kpi-label block mb-2">Deployment</label>
@@ -317,6 +374,50 @@
   });
   refreshRegionHint();
 
+  // ── Style mix ───────────────────────────────────────────────────────────
+  const styleInputs = () => Array.from(document.querySelectorAll('.style-input'));
+
+  function styleTargets() {
+    const out = {};
+    styleInputs().forEach(inp => {
+      const raw = (inp.value || '').trim();
+      if (raw === '') return;                   // blank = unconstrained
+      const val = Number(raw);
+      if (Number.isFinite(val) && val >= 0 && val <= 100) out[inp.dataset.style] = val;
+    });
+    return out;
+  }
+
+  function refreshStyleHint() {
+    const targets = styleTargets();
+    const codes = Object.keys(targets);
+    const total = codes.reduce((s, c) => s + targets[c], 0);
+    const summary = $('style-summary');
+    const hint = $('style-hint');
+    if (!codes.length) {
+      summary.textContent = 'no constraint — the mandate and the ranking decide the character';
+      summary.className = 'text-[10px] text-slate-600';
+      hint.textContent = '';
+      return;
+    }
+    summary.textContent = codes.map(c => `${c.replace(/_/g, ' ')} ${targets[c]}%`).join(' · ');
+    summary.className = 'text-[10px] text-blue-300';
+    if (total > 100) {
+      hint.textContent = `⚠ the targets add up to ${total}% of NAV — they cannot exceed 100%.`;
+      hint.className = 'text-[10px] text-amber-400 flex-1 min-w-[16rem] leading-snug';
+    } else {
+      hint.textContent = `${total}% of NAV allocated by this mix · ${100 - total}% unconstrained.`;
+      hint.className = 'text-[10px] text-slate-600 flex-1 min-w-[16rem] leading-snug';
+    }
+  }
+
+  styleInputs().forEach(inp => inp.addEventListener('input', refreshStyleHint));
+  $('sg-clear').addEventListener('click', () => {
+    styleInputs().forEach(inp => { inp.value = ''; });
+    refreshStyleHint();
+  });
+  refreshStyleHint();
+
   $('f-profile').addEventListener('change', () => { resetAmount(); refreshHints(); });
   $('f-model').addEventListener('change', refreshHints);
   $('f-amount').addEventListener('input', refreshAmountHint);
@@ -399,11 +500,21 @@
       body.appendChild(warn);
     }
 
-    // Regional mix — where the book actually landed against what was asked for.
-    // Rendered even when no mix was set: a run still has a geography, and seeing
-    // it is how you decide whether to constrain the next one.
-    const regionCard = regionPanel(r);
+    // Where the book actually landed against what was asked for. Rendered even
+    // when no mix was set: a run still has a geography and a character, and
+    // seeing them is how you decide whether to constrain the next one.
+    const regionCard = mixPanel(r.regions, [
+      'Regional mix — target vs result',
+      'Regional mix — where this book landed',
+      'Every targeted region landed inside its band.',
+    ]);
     if (regionCard) body.appendChild(regionCard);
+    const styleCard = mixPanel(r.styles, [
+      'Risk & quality mix — target vs result',
+      'Risk & quality mix — what this book is made of',
+      'Every targeted style landed inside its band.',
+    ]);
+    if (styleCard) body.appendChild(styleCard);
 
     // Market summary
     if (r.market_summary) {
@@ -473,7 +584,7 @@
     return card;
   }
 
-  // ── Regional mix panel ──────────────────────────────────────────────────
+  // ── Allocation-mix panel (regional and style read the same shape) ───────
   const REGION_STATUS = {
     on_target:     ['on target',     'text-emerald-400'],
     short:         ['short',         'text-amber-400'],
@@ -482,20 +593,19 @@
     unconstrained: ['unconstrained', 'text-slate-500'],
   };
 
-  function regionPanel(r) {
-    const reg = r.regions;                       // absent on results stored before this existed
-    const rows = (reg && reg.rows) || [];
+  function mixPanel(mix, titles) {
+    const rows = (mix && mix.rows) || [];        // absent on results stored before this existed
     if (!rows.length) return null;
-    const constrained = Object.keys((reg && reg.targets) || {}).length > 0;
+    const constrained = Object.keys((mix && mix.targets) || {}).length > 0;
 
     const wrap = el('div', 'mb-4');
     wrap.appendChild(el('p', 'text-[10px] font-semibold uppercase tracking-wider text-slate-600 mb-1.5',
-      constrained ? 'Regional mix — target vs result' : 'Regional mix — where this book landed'));
+      constrained ? titles[0] : titles[1]));
 
     const table = el('table', 'data-table');
     const thead = el('thead');
     const hr = el('tr');
-    [['Region', ''], ['Target', 'num'], ['Allowed', 'num'], ['Result', 'num'],
+    [['Bucket', ''], ['Target', 'num'], ['Allowed', 'num'], ['Result', 'num'],
      ['Candidates', 'num'], ['', '']].forEach(([h, c]) => hr.appendChild(el('th', c, h)));
     thead.appendChild(hr);
     table.appendChild(thead);
@@ -518,14 +628,26 @@
     scroll.appendChild(table);
     wrap.appendChild(scroll);
 
-    ((reg && reg.shortfalls) || []).forEach(line => {
+    ((mix && mix.shortfalls) || []).forEach(line => {
       // Named rather than left to be read off the table: a ceiling is
-      // mechanical, a floor is not, so a short region is the run's own caveat.
+      // mechanical, a floor is not, so a short bucket is the run's own caveat.
       wrap.appendChild(el('p', 'text-[10px] text-amber-400/90 mt-1.5', '⚠ ' + line));
     });
-    if (constrained && !((reg && reg.shortfalls) || []).length) {
-      wrap.appendChild(el('p', 'text-[10px] text-slate-600 mt-1.5',
-        'Every targeted region landed inside its band.'));
+    if (constrained && !((mix && mix.shortfalls) || []).length) {
+      wrap.appendChild(el('p', 'text-[10px] text-slate-600 mt-1.5', titles[2]));
+    }
+    // A style cap measures only what it could classify, so say how much of the
+    // list carried no verdict rather than implying the cap was airtight.
+    if (constrained && mix.unclassified_candidates) {
+      wrap.appendChild(el('p', 'text-[10px] text-slate-500 mt-1.5',
+        `${mix.unclassified_candidates} candidate(s) had no style verdict — their figures ` +
+        `were missing, so they count towards no target and are blocked by none. ` +
+        `These caps under-count by that much.`));
+    }
+    if (mix && mix.brief) {
+      const note = el('p', 'text-[10px] text-slate-500 mt-1.5 italic');
+      note.textContent = 'Extra brief: ' + mix.brief;   // operator text — never innerHTML
+      wrap.appendChild(note);
     }
     return wrap;
   }
@@ -648,6 +770,10 @@
       // exactly", which is a different instruction and must survive.
       region_tolerance_pct: $('rg-tolerance').value.trim() === ''
         ? null : parseFloat($('rg-tolerance').value),
+      style_targets: styleTargets(),
+      style_tolerance_pct: $('sg-tolerance').value.trim() === ''
+        ? null : parseFloat($('sg-tolerance').value),
+      style_brief: $('sg-brief').value.trim(),
     };
     setBusy(true, 'Starting…');
     try {

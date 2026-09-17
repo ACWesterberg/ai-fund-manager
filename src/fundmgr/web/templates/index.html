@@ -836,6 +836,48 @@
       </p>
     </details>
 
+    <details class="mt-3">
+      <summary class="text-[11px] text-slate-500 cursor-pointer hover:text-slate-400">
+        Risk &amp; quality mix for this sleeve — <span id="rv-style-summary">{% if review.style_targets %}{{ review.style_targets|length }} style(s) targeted{% else %}none set{% endif %}</span>
+      </summary>
+      <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+        {% for st in review.styles %}
+        <div>
+          <label class="kpi-label" for="rv-sg-{{ st.code }}">{{ st.label }}</label>
+          <input id="rv-sg-{{ st.code }}" data-style="{{ st.code }}" type="number" min="0" max="100" step="any"
+                 value="{{ review.style_targets.get(st.code, '') }}" placeholder="any"
+                 class="rv-style {{ rcls }}" />
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3 flex flex-wrap items-end gap-3">
+        <div style="max-width:9rem">
+          <label class="kpi-label" for="rv-sg-tol">Tolerance (± pp)</label>
+          <input id="rv-sg-tol" type="number" min="0" max="100" step="any"
+                 value="{{ review.style_tolerance_pct }}" class="{{ rcls }}" />
+        </div>
+        <button id="rv-sg-clear" type="button"
+                class="px-3 py-2 rounded-lg border border-slate-700/60 text-[11px] text-slate-400 hover:text-slate-200">
+          Clear the mix
+        </button>
+        <p id="rv-style-hint" class="text-[11px] text-slate-600 flex-1 min-w-[16rem] leading-relaxed"></p>
+      </div>
+      <div class="mt-3">
+        <label class="kpi-label" for="rv-sg-brief">Extra brief (optional)</label>
+        <textarea id="rv-sg-brief" rows="2" maxlength="1000"
+                  placeholder="e.g. lean towards founder-led businesses; nothing that listed in the last year"
+                  class="{{ rcls }}">{{ review.style_brief }}</textarea>
+      </div>
+      <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+        Names are picked from the source profile's own universe — asking a Global review for quality
+        gets the best quality names in that universe, never names imported from the Buffett screen.
+        A style is read off reported fundamentals and realised volatility, so a name whose figures
+        haven't landed is <b>Unclassified</b>: counted towards no target and blocked by none, which
+        means these caps under-count rather than bind tightly. The brief steers selection inside the
+        mandate and the limits; it relaxes neither.
+      </p>
+    </details>
+
     <div class="mt-4 flex flex-wrap items-center gap-3">
       <button id="rv-run" type="button"
               class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white disabled:opacity-40">
@@ -923,6 +965,43 @@
   });
   refreshRegionHint();
 
+  function styleTargets() {
+    const out = {};
+    document.querySelectorAll('.rv-style').forEach(inp => {
+      const raw = (inp.value || '').trim();
+      if (raw === '') return;
+      const val = Number(raw);
+      if (Number.isFinite(val) && val >= 0 && val <= 100) out[inp.dataset.style] = val;
+    });
+    return out;
+  }
+
+  function refreshStyleHint() {
+    const targets = styleTargets();
+    const codes = Object.keys(targets);
+    const total = codes.reduce((s, c) => s + targets[c], 0);
+    const summary = document.getElementById('rv-style-summary');
+    const hint = document.getElementById('rv-style-hint');
+    summary.textContent = codes.length
+      ? codes.map(c => `${c.replace(/_/g, ' ')} ${targets[c]}%`).join(' · ')
+      : 'none set';
+    if (!codes.length) { hint.textContent = ''; return; }
+    hint.textContent = total > 100
+      ? `⚠ the targets add up to ${total}% of NAV — they cannot exceed 100%.`
+      : `${total}% of NAV allocated by this mix · ${100 - total}% unconstrained.`;
+    hint.className = total > 100
+      ? 'text-[11px] text-amber-400 flex-1 min-w-[16rem] leading-relaxed'
+      : 'text-[11px] text-slate-600 flex-1 min-w-[16rem] leading-relaxed';
+  }
+
+  document.querySelectorAll('.rv-style').forEach(
+    inp => inp.addEventListener('input', refreshStyleHint));
+  document.getElementById('rv-sg-clear').addEventListener('click', () => {
+    document.querySelectorAll('.rv-style').forEach(inp => { inp.value = ''; });
+    refreshStyleHint();
+  });
+  refreshStyleHint();
+
   // A new name arrives with the monitoring that will watch it. Showing it here
   // is the only chance to disagree before it is written into the plan.
   function planLine(p) {
@@ -940,10 +1019,9 @@
 
   // Where the book this review would leave lands against its mix. Only worth
   // showing when one was set — otherwise it is a table of one column of noise.
-  function regionLines(res) {
-    const reg = res.regions;
-    const rows = (reg && reg.rows) || [];
-    if (!reg || !Object.keys(reg.targets || {}).length || !rows.length) return '';
+  function mixLines(mix, title) {
+    const rows = (mix && mix.rows) || [];
+    if (!mix || !Object.keys(mix.targets || {}).length || !rows.length) return '';
     const cells = rows.filter(r => r.target_pct != null).map(r => {
       const cls = r.status === 'on_target' ? 'text-emerald-400'
                 : r.status === 'short' ? 'text-amber-400'
@@ -951,10 +1029,14 @@
       return `<span class="${cls}">${esc(r.label)} ${r.achieved_pct.toFixed(1)}%` +
              ` / ${r.target_pct.toFixed(0)}%</span>`;
     }).join('<span class="text-slate-700"> · </span>');
-    const notes = (reg.shortfalls || []).map(
+    const notes = (mix.shortfalls || []).map(
       line => `<p class="text-[11px] text-amber-400/90">⚠ ${esc(line)}</p>`).join('');
-    return `<div class="mb-3"><p class="text-[11px] text-slate-500 mb-0.5">Regional mix (result / target)</p>
-            <p class="text-xs">${cells}</p>${notes}</div>`;
+    // A style cap measures only what it could classify — say by how much.
+    const gap = mix.unclassified_candidates
+      ? `<p class="text-[11px] text-slate-500">${mix.unclassified_candidates} candidate(s) had no
+         style verdict, so these caps under-count by that much.</p>` : '';
+    return `<div class="mb-3"><p class="text-[11px] text-slate-500 mb-0.5">${esc(title)}</p>
+            <p class="text-xs">${cells}</p>${notes}${gap}</div>`;
   }
 
   function render(res) {
@@ -1008,7 +1090,8 @@
         ${res.turnover.proposed_sek.toLocaleString()} SEK against a cap of
         ${res.turnover.cap_sek.toLocaleString()} SEK (${res.turnover.cap_pct}% of NAV).
         Raise “Max turnover %” above and run again.</p>` : ''}
-      ${regionLines(res)}
+      ${mixLines(res.regions, 'Regional mix (result / target)')}
+      ${mixLines(res.styles, 'Risk & quality mix (result / target)')}
       ${res.notes ? `<p class="text-xs text-slate-600 italic mb-3">${esc(res.notes)}</p>` : ''}
       <button type="button" onclick="location.reload()"
               class="px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs text-slate-300 hover:border-sky-500/60">
@@ -1082,6 +1165,10 @@
           // target" and is not the same instruction.
           region_tolerance_pct: document.getElementById('rv-rg-tol').value.trim() === ''
             ? null : parseFloat(document.getElementById('rv-rg-tol').value),
+          style_targets: styleTargets(),
+          style_tolerance_pct: document.getElementById('rv-sg-tol').value.trim() === ''
+            ? null : parseFloat(document.getElementById('rv-sg-tol').value),
+          style_brief: document.getElementById('rv-sg-brief').value.trim(),
         }),
       });
       const body = await r.json();

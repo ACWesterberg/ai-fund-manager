@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from fundmgr import paper, regions, watchplan
+from fundmgr import paper, regions, styles, watchplan
 from fundmgr.engine import sleeve_review
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
@@ -76,6 +76,10 @@ class ReviewRequest(BaseModel):
     # stored mix, so submitting it cleared is how a mix is removed.
     region_targets: dict[str, float] = Field(default_factory=dict)
     region_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
+    # Risk/quality mix and its free-text brief, sent through the same way.
+    style_targets: dict[str, float] = Field(default_factory=dict)
+    style_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
+    style_brief: str = Field(default="", max_length=1000)
 
 
 def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
@@ -94,6 +98,11 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
             region_mix={
                 "targets": req.region_targets,
                 "tolerance_pct": req.region_tolerance_pct,
+            },
+            style_mix={
+                "targets": req.style_targets,
+                "tolerance_pct": req.style_tolerance_pct,
+                "brief": req.style_brief,
             },
         )
         with _review_lock:
@@ -953,14 +962,16 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             valid = {(m["provider"], m["model_id"]) for m in sleeve_review.MODEL_OPTIONS}
             if (req.provider, req.model_id) not in valid:
                 raise HTTPException(status_code=400, detail="Unknown provider/model combination")
-        unknown = sorted(set(req.region_targets) - set(regions.REGION_BY_CODE))
-        if unknown:
-            raise HTTPException(status_code=400,
-                                detail=f"Unknown region(s): {', '.join(unknown)}")
-        try:
-            regions.clean_targets(req.region_targets)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from None
+        for label, submitted, dial in (("region", req.region_targets, regions),
+                                       ("style", req.style_targets, styles)):
+            unknown = sorted(set(submitted) - set(dial.SCHEME.codes))
+            if unknown:
+                raise HTTPException(status_code=400,
+                                    detail=f"Unknown {label}(s): {', '.join(unknown)}")
+            try:
+                dial.clean_targets(submitted)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from None
 
         with _review_lock:
             if _review_job and _review_job["status"] == "running":
@@ -1133,6 +1144,11 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "region_targets": (defaults["regions"].get("targets") or {}),
                 "region_tolerance_pct": defaults["regions"].get(
                     "tolerance_pct", regions.DEFAULT_TOLERANCE_PCT),
+                "styles": styles.options(),
+                "style_targets": (defaults["styles"].get("targets") or {}),
+                "style_tolerance_pct": defaults["styles"].get(
+                    "tolerance_pct", styles.DEFAULT_TOLERANCE_PCT),
+                "style_brief": defaults["styles"].get("brief", ""),
                 # The profile's own caps, so the form can show what an empty
                 # override field will actually run under.
                 "profile_risk": _profile_risk(defaults["config"]),

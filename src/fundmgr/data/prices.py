@@ -72,12 +72,14 @@ class TickerFeatures:
     def is_stale(self) -> bool:
         return self.data_age_trading_days > 5
 
-    def to_prompt_block(self, show_region: bool = False) -> str:
+    def to_prompt_block(self, show_region: bool = False, show_style: bool = False) -> str:
         """Compact text block for the LLM prompt.
 
-        `show_region` tags the name with its region. Only worth the tokens when
-        a regional mix is being managed — otherwise the line says nothing the
-        decision uses.
+        `show_region` and `show_style` tag the name with its allocation buckets.
+        Only worth the tokens when that mix is being managed — otherwise the
+        line says nothing the decision uses. The style tag carries the figures
+        behind it, because a computed judgement the model cannot check is one it
+        can only obey or ignore.
         """
         lines = [f"[{self.ticker}] {self.name}"]
 
@@ -175,6 +177,12 @@ class TickerFeatures:
         if show_region:
             from fundmgr import regions
             class_parts.append(f"Region: {regions.label_of(regions.region_of(self.country))}")
+        if show_style:
+            from fundmgr import styles
+            code, why = styles.classify(self)
+            class_parts.append(
+                f"Style: {styles.label_of(code)}" + (f" ({why})" if why else "")
+            )
         if class_parts:
             lines.append("  " + "  ·  ".join(class_parts))
 

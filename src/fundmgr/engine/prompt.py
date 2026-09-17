@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from fundmgr import regions
+from fundmgr import regions, styles
 from fundmgr.config import AppConfig, UniverseTicker
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.data.prices import TickerFeatures
@@ -113,6 +113,25 @@ def _region_targets_block(
     )
 
 
+def _style_targets_block(
+    cfg: AppConfig,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+    closing: bool = True,
+) -> str:
+    """The risk/quality mix this run is being built to, or "" when none is set."""
+    if not cfg.risk.style_targets:
+        return ""
+    style_by_ticker = styles.styles_of(features)
+    return styles.prompt_block(
+        cfg.risk.style_targets,
+        cfg.risk.style_tolerance_pct,
+        styles.exposure(snap, style_by_ticker),
+        styles.candidate_counts(style_by_ticker),
+        closing=closing,
+    )
+
+
 def _risk_limits_block(
     cfg: AppConfig,
     snap: PortfolioSnapshot,
@@ -120,6 +139,9 @@ def _risk_limits_block(
 ) -> str:
     sector_block = _sector_weights_block(snap, features, cfg.risk.max_sector_pct)
     region_block = _region_targets_block(cfg, snap, features)
+    # Both dials close with the same which-bound-binds paragraph; the second one
+    # rendered drops it rather than repeating the rule back to back.
+    style_block = _style_targets_block(cfg, snap, features, closing=not region_block)
     lines = [
         "## Risk Limits (hard constraints)",
         f"  Max single-name weight: {cfg.risk.max_position_pct}%",
@@ -138,6 +160,8 @@ def _risk_limits_block(
         lines.append(sector_block)
     if region_block:
         lines.append(region_block)
+    if style_block:
+        lines.append(style_block)
     lines.append("Guardrails enforce these mechanically — size your recommendations within them.")
     return "\n".join(lines)
 
@@ -259,6 +283,7 @@ def _features_block(
     features: dict[str, TickerFeatures],
     current_tickers: set[str],
     show_region: bool = False,
+    show_style: bool = False,
 ) -> str:
     held = {t: f for t, f in features.items() if t in current_tickers}
     rest = {t: f for t, f in features.items() if t not in current_tickers}
@@ -277,11 +302,11 @@ def _features_block(
     )
 
     for f in held.values():
-        lines.append("★ " + f.to_prompt_block(show_region=show_region))
+        lines.append("★ " + f.to_prompt_block(show_region=show_region, show_style=show_style))
         lines.append("")
 
     for f in top_candidates:
-        lines.append("  " + f.to_prompt_block(show_region=show_region))
+        lines.append("  " + f.to_prompt_block(show_region=show_region, show_style=show_style))
         lines.append("")
 
     return "\n".join(lines)
@@ -352,11 +377,13 @@ def build_prompt(
     portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops())
     risk_limits     = _risk_limits_block(cfg, snap, features)
     learnings_block = _learnings_block(learnings)
-    # Region tags cost tokens on every candidate, so they are only rendered when
-    # a mix is actually being managed — otherwise the weekly run's prompt is
+    # Bucket tags cost tokens on every candidate, so each is only rendered when
+    # that mix is actually being managed — otherwise the weekly run's prompt is
     # unchanged, and so is the regime its outcomes are scored under.
     universe        = _features_block(
-        features, current_tickers, show_region=bool(cfg.risk.region_targets)
+        features, current_tickers,
+        show_region=bool(cfg.risk.region_targets),
+        show_style=bool(cfg.risk.style_targets),
     )
 
     fields = {

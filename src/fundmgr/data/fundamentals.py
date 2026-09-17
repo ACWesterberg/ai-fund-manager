@@ -55,6 +55,12 @@ def apply_to_features(features: dict, store: Store) -> None:
         feat.pb_ratio       = _safe(data.get("pb_ratio"))
         feat.ev_to_ebitda   = _safe(data.get("ev_to_ebitda"))
         feat.price_to_sales = _safe(data.get("price_to_sales"))
+        # financedata has cached debtToEquity all along and this line was
+        # missing, so the field stayed None everywhere: the screener's leverage
+        # penalty never fired, the prompt's Quality line never showed D/E, and a
+        # style screen asking for a conservative balance sheet had nothing to
+        # read. Populating it makes all three live.
+        feat.debt_to_equity = _safe(data.get("debt_to_equity"))
         feat.beta           = _safe(data.get("beta"))
         feat.analyst_count  = data.get("analyst_count")
 

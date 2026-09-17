@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fundmgr import regions
+from fundmgr import regions, styles
 from fundmgr.data.prices import TickerFeatures
 
 
@@ -148,38 +148,51 @@ def screen(
     pinned_tickers: set[str] | None = None,
     region_quotas: dict[str, int] | None = None,
     excluded_regions: set[str] | None = None,
+    style_quotas: dict[str, int] | None = None,
+    excluded_styles: set[str] | None = None,
 ) -> tuple[dict[str, TickerFeatures], int]:
     """Return top_n candidates by score, always including held + pinned positions.
 
-    `region_quotas` reserves slots per region (see fundmgr.regions) before the
-    ranking is allowed to spend the rest. Without it a regional target is
-    unbuildable rather than merely hard: the score is blind to geography, so a
-    week where momentum sits in US large caps hands the model a list with four
-    Nordic names in it and no way to reach 30% Nordics from there. Reserved
-    slots are a floor on choice, not a cap — the free remainder still goes to
-    whatever scored best, region regardless.
+    The quota arguments reserve slots per bucket — geography for
+    `region_quotas` (see fundmgr.regions), risk/quality character for
+    `style_quotas` (fundmgr.styles) — before the ranking is allowed to spend the
+    rest. Without them an allocation target is unbuildable rather than merely
+    hard: the score is blind to both, so a week where momentum sits in US large
+    caps hands the model a list with four Nordic names in it and no way to reach
+    30% Nordics from there. Reserved slots are a floor on choice, not a cap —
+    the free remainder still goes to whatever scored best.
 
-    `excluded_regions` drops a region the mix asks for none of, so the prompt
-    isn't paying to show names whose buys the guardrails would reject anyway.
-    Held and pinned names are never dropped by it: you must be able to sell
-    what you own, wherever it is listed.
+    Both dials reserve against the same top_n, and a name already picked counts
+    towards every bucket it belongs to, so a Nordic compounder settles a Nordic
+    slot and a quality slot at once rather than consuming two. Regions are
+    reserved first: geography is a fact on the universe row, while a style is a
+    reading of fundamentals that may not have landed yet, and the surer dial
+    should not be the one squeezed when both are set.
+
+    The exclusion arguments drop a bucket the mix asks for none of, so the
+    prompt isn't paying to show names whose buys the guardrails would reject
+    anyway. Held and pinned names are never dropped by either: you must be able
+    to sell what you own, whatever it is or wherever it is listed.
 
     Returns (filtered_features, total_screened_out).
     """
     pinned = pinned_tickers or set()
     always = held_tickers | pinned
     region_of_ticker = regions.regions_of(features)
+    style_of_ticker = styles.styles_of(features)
 
     scored = sorted(
         ((sym, _score(feat), feat) for sym, feat in features.items()),
         key=lambda x: x[1],
         reverse=True,
     )
-    if excluded_regions:
-        scored = [
-            row for row in scored
-            if row[0] in always or region_of_ticker.get(row[0]) not in excluded_regions
-        ]
+    for bucket_of, dropped in ((region_of_ticker, excluded_regions),
+                               (style_of_ticker, excluded_styles)):
+        if dropped:
+            scored = [
+                row for row in scored
+                if row[0] in always or bucket_of.get(row[0]) not in dropped
+            ]
 
     selected: dict[str, TickerFeatures] = {}
 
@@ -187,15 +200,10 @@ def screen(
         if sym in always:
             selected[sym] = feat
 
-    for code, quota in _quota_order(region_quotas):
-        need = quota - sum(1 for sym in selected if region_of_ticker.get(sym) == code)
-        for sym, _, feat in scored:
-            if need <= 0 or len(selected) >= top_n:
-                break
-            if sym in selected or region_of_ticker.get(sym) != code:
-                continue
-            selected[sym] = feat
-            need -= 1
+    _reserve(scored, selected, top_n, region_of_ticker,
+             _quota_order(region_quotas, regions.SCHEME))
+    _reserve(scored, selected, top_n, style_of_ticker,
+             _quota_order(style_quotas, styles.SCHEME))
 
     remaining = max(0, top_n - len(selected))
     count = 0
@@ -210,7 +218,31 @@ def screen(
     return selected, screened_out
 
 
-def _quota_order(region_quotas: dict[str, int] | None) -> list[tuple[str, int]]:
-    """Quotas in a fixed region order, so a screen is reproducible."""
-    quotas = region_quotas or {}
-    return [(r.code, quotas[r.code]) for r in regions.REGIONS if quotas.get(r.code)]
+def _quota_order(quotas: dict[str, int] | None, scheme) -> list[tuple[str, int]]:
+    """Quotas in a fixed bucket order, so a screen is reproducible."""
+    quotas = quotas or {}
+    return [(b.code, quotas[b.code]) for b in scheme.buckets if quotas.get(b.code)]
+
+
+def _reserve(
+    scored: list,
+    selected: dict[str, TickerFeatures],
+    top_n: int,
+    bucket_of: dict[str, str],
+    quotas: list[tuple[str, int]],
+) -> None:
+    """Fill each bucket's reserved slots from the top of the ranking, in place.
+
+    Names already selected — held, pinned, or reserved by the other dial — count
+    towards the quota, so the reservation reads as "the list carries at least N
+    of these" rather than "spend N more slots on these".
+    """
+    for code, quota in quotas:
+        need = quota - sum(1 for sym in selected if bucket_of.get(sym) == code)
+        for sym, _, feat in scored:
+            if need <= 0 or len(selected) >= top_n:
+                break
+            if sym in selected or bucket_of.get(sym) != code:
+                continue
+            selected[sym] = feat
+            need -= 1

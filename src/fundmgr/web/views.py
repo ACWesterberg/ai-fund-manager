@@ -4,12 +4,16 @@ Both the real-money fund (web/app.py) and each simulation (web/sim.py) render
 these, always scoped to that one fund's own store + config + guidance artifact —
 the GPT and Claude sims share a mandate file but learn separately.
 """
+
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from fundmgr.config import AppConfig
-from fundmgr.engine.optimizer import guidance_versions
+from fundmgr.engine.optimizer import build_trainset, guidance_versions
 from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT, select_prompt_learnings
 from fundmgr.engine.review_common import follow_up, instruction, votes_str
+from fundmgr.state.models import DecisionOutcome
 from fundmgr.state.store import Store
 
 
@@ -22,12 +26,29 @@ def learnings_context(cfg: AppConfig, store: Store) -> dict:
 
     by_category: dict[str, list[dict]] = {}
     for lrn in learnings:
-        by_category.setdefault(lrn.category, []).append({
-            "body": lrn.body,
-            "created": lrn.created_at.strftime("%Y-%m-%d"),
-            "run_count": len(lrn.run_ids),
-            "injected": id(lrn) in injected_ids,
-        })
+        by_category.setdefault(lrn.category, []).append(
+            {
+                "body": lrn.body,
+                "created": lrn.created_at.strftime("%Y-%m-%d"),
+                "run_count": len(lrn.run_ids),
+                "injected": id(lrn) in injected_ids,
+            }
+        )
+    outcomes = store.get_all_outcomes()
+    evaluated = [o for o in outcomes if o.outperformed is not None]
+    evaluated_runs = {o.run_id for o in evaluated}
+    decision_dates = {o.decision_date for o in evaluated if o.decision_date}
+    with_thesis = [o for o in evaluated if (o.thesis or "").strip()]
+    verdicts = {
+        verdict: sum(o.thesis_verdict == verdict for o in evaluated)
+        for verdict in ("held", "broke", "unresolved")
+    }
+    pinned = sum(_is_pinned_evaluation(o) for o in evaluated)
+    optimizer_runs = len(build_trainset(store))
+
+    def pct(numerator: int, denominator: int) -> int:
+        return round(100 * numerator / denominator) if denominator else 0
+
     return {
         "fund_label": cfg.display_name,
         "total": len(learnings),
@@ -35,8 +56,40 @@ def learnings_context(cfg: AppConfig, store: Store) -> dict:
         "prompt_limit": PROMPT_LEARNING_LIMIT,
         "by_category": by_category,
         "categories": sorted(by_category.keys()),
+        "health": {
+            "outcomes": len(outcomes),
+            "evaluated": len(evaluated),
+            "pending": len(outcomes) - len(evaluated),
+            "evaluated_runs": len(evaluated_runs),
+            "decision_dates": len(decision_dates),
+            "pinned": pinned,
+            "pinned_pct": pct(pinned, len(evaluated)),
+            "with_thesis": len(with_thesis),
+            "thesis_pct": pct(len(with_thesis), len(evaluated)),
+            "audited": sum(verdicts.values()),
+            "audit_pct": pct(sum(verdicts.values()), len(with_thesis)),
+            "verdicts": verdicts,
+            "optimizer_runs": optimizer_runs,
+            "optimizer_min_runs": cfg.optimizer.min_examples,
+            "optimizer_outcomes": len(evaluated),
+            "optimizer_min_outcomes": cfg.optimizer.min_outcomes,
+        },
         "active_page": "learnings",
     }
+
+
+def _is_pinned_evaluation(outcome: DecisionOutcome) -> bool:
+    """Whether an outcome was measured inside the evaluator's target-date window."""
+    if not outcome.decision_date or not outcome.evaluation_date or not outcome.horizon_days:
+        return False
+    try:
+        target = datetime.strptime(outcome.decision_date, "%Y-%m-%d") + timedelta(
+            days=outcome.horizon_days
+        )
+        actual = datetime.strptime(outcome.evaluation_date, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return abs((actual - target).days) <= 7
 
 
 def prompt_context(cfg: AppConfig) -> dict:
@@ -61,8 +114,12 @@ def prompt_context(cfg: AppConfig) -> dict:
 
 _SOURCE_LABEL = {"target_review": "Target hit", "stop_review": "Stop hit"}
 _VERDICT_TONE = {
-    "sell": "amber", "trim": "amber", "exit": "red", "add": "emerald",
-    "raise": "sky", "hold": "slate",
+    "sell": "amber",
+    "trim": "amber",
+    "exit": "red",
+    "add": "emerald",
+    "raise": "sky",
+    "hold": "slate",
 }
 
 
@@ -115,8 +172,11 @@ def review_row(r: dict, position: dict | None = None) -> dict:
         "tone": _VERDICT_TONE.get(verdict, "slate"),
         "source_label": _SOURCE_LABEL.get(r["source"], r["source"]),
         "instruction": instruction(
-            verdict, trim_pct=r.get("trim_pct"), new_target_pct=applied,
-            shares=to_trade, sek=sek,
+            verdict,
+            trim_pct=r.get("trim_pct"),
+            new_target_pct=applied,
+            shares=to_trade,
+            sek=sek,
         ),
         "follow_up": follow_up(verdict, r.get("trim_pct"), applied, r.get("old_target_pct")),
         "target_line": _target_line(r),
@@ -126,7 +186,9 @@ def review_row(r: dict, position: dict | None = None) -> dict:
         "what_changed": r.get("what_changed") or "",
         "rationale": r.get("rationale") or "",
         "confidence": r.get("confidence"),
-        "consensus": votes_str(r["votes"], r["n_samples"]) if r.get("votes") and r.get("n_samples") else "",
+        "consensus": votes_str(r["votes"], r["n_samples"])
+        if r.get("votes") and r.get("n_samples")
+        else "",
         "price_at_review": r.get("price_at_review"),
         "when": created[:10],
         "when_time": created[11:16],

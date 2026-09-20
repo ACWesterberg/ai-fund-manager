@@ -8,7 +8,7 @@ from jinja2 import Environment, FileSystemLoader
 from fundmgr.config import AppConfig
 from fundmgr.engine.optimizer import guidance_path, guidance_versions
 from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT
-from fundmgr.state.models import Learning
+from fundmgr.state.models import DecisionOutcome, Learning, RecommendationLog
 from fundmgr.state.store import Store
 from fundmgr.web.views import learnings_context, prompt_context
 
@@ -33,8 +33,9 @@ def store(cfg):
 
 
 def _learning(store, category, body, run_ids=(), created=datetime(2026, 6, 1)):
-    store.save_learning(Learning(category=category, body=body, run_ids=list(run_ids),
-                                 created_at=created))
+    store.save_learning(
+        Learning(category=category, body=body, run_ids=list(run_ids), created_at=created)
+    )
 
 
 def _write_guidance(cfg, text, archived=False, stamp="20260601_020000"):
@@ -42,14 +43,22 @@ def _write_guidance(cfg, text, archived=False, stamp="20260601_020000"):
     p.parent.mkdir(parents=True, exist_ok=True)
     if archived:
         p = p.with_name(f"{p.stem}_{stamp}.json")
-    p.write_text(json.dumps({
-        "created_at": "2026-06-01T02:00:00+00:00",
-        "instructions": text, "prompt_model": "claude-opus-4-8",
-        "n_train_runs": 8, "n_val_runs": 2, "n_outcomes": 34,
-    }))
+    p.write_text(
+        json.dumps(
+            {
+                "created_at": "2026-06-01T02:00:00+00:00",
+                "instructions": text,
+                "prompt_model": "claude-opus-4-8",
+                "n_train_runs": 8,
+                "n_val_runs": 2,
+                "n_outcomes": 34,
+            }
+        )
+    )
 
 
 # ── learnings_context ─────────────────────────────────────────────────────────
+
 
 def test_learnings_context_groups_by_category(cfg, store):
     _learning(store, "calibration", "High-conf buys hit 70%.", run_ids=["r1", "r2"])
@@ -68,6 +77,99 @@ def test_learnings_context_empty(cfg, store):
     ctx = learnings_context(cfg, store)
     assert ctx["total"] == 0 and ctx["by_category"] == {}
     assert ctx["injected"] == 0
+    assert ctx["health"]["outcomes"] == 0
+    assert ctx["health"]["pinned_pct"] == 0
+
+
+def test_learnings_context_reports_learning_health(cfg, store):
+    for run_id, date in (("r1", "2026-05-01"), ("r2", "2026-05-08")):
+        store.save_recommendation(
+            RecommendationLog(
+                run_id=run_id,
+                timestamp=datetime.fromisoformat(date),
+                prompt_snapshot=json.dumps(
+                    {
+                        "fields": {
+                            "mandate": "m",
+                            "macro": "",
+                            "portfolio_state": "p",
+                            "risk_limits": "r",
+                            "universe": "u",
+                            "learnings": "",
+                        }
+                    }
+                ),
+                llm_response="{}",
+                guardrail_log="[]",
+                actions_json="[]",
+            )
+        )
+    rows = [
+        DecisionOutcome(
+            run_id="r1",
+            ticker="AAA.ST",
+            action="buy",
+            price_at_decision=100,
+            price_at_evaluation=110,
+            position_return_pct=10,
+            benchmark_return_pct=2,
+            outperformed=True,
+            evaluation_date="2026-05-29",
+            horizon_days=28,
+            thesis="Margins will expand.",
+            thesis_verdict="held",
+            thesis_evidence="Report.",
+        ),
+        DecisionOutcome(
+            run_id="r2",
+            ticker="BBB.ST",
+            action="buy",
+            price_at_decision=100,
+            price_at_evaluation=90,
+            position_return_pct=-10,
+            benchmark_return_pct=1,
+            outperformed=False,
+            evaluation_date="2026-07-01",
+            horizon_days=28,
+            thesis="Demand will recover.",
+            thesis_verdict="unresolved",
+        ),
+    ]
+    with store._conn() as conn:
+        for row in rows:
+            conn.execute(
+                "INSERT INTO decision_outcomes (run_id, ticker, action, price_at_decision, "
+                "price_at_evaluation, position_return_pct, benchmark_return_pct, outperformed, "
+                "evaluation_date, thesis, thesis_verdict, thesis_evidence, horizon_days) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.run_id,
+                    row.ticker,
+                    row.action,
+                    row.price_at_decision,
+                    row.price_at_evaluation,
+                    row.position_return_pct,
+                    row.benchmark_return_pct,
+                    int(row.outperformed),
+                    row.evaluation_date,
+                    row.thesis,
+                    row.thesis_verdict,
+                    row.thesis_evidence,
+                    row.horizon_days,
+                ),
+            )
+
+    ctx = learnings_context(cfg, store)
+    health = ctx["health"]
+    assert health["evaluated"] == 2
+    assert health["evaluated_runs"] == 2
+    assert health["decision_dates"] == 2
+    assert health["pinned"] == 1
+    assert health["pinned_pct"] == 50
+    assert health["thesis_pct"] == 100
+    assert health["audit_pct"] == 100
+    assert health["verdicts"] == {"held": 1, "broke": 0, "unresolved": 1}
+    assert health["optimizer_runs"] == 2
 
 
 def test_learnings_context_marks_only_the_injected_slice(cfg, store):
@@ -75,8 +177,13 @@ def test_learnings_context_marks_only_the_injected_slice(cfg, store):
     # calibration lesson — the shape that used to push calibration out entirely.
     _learning(store, "calibration", "High-conf buys hit 40%.", created=datetime(2026, 8, 17, 9))
     for i in range(PROMPT_LEARNING_LIMIT + 4):
-        _learning(store, "qualitative", f"Anecdote {i}.", run_ids=["r1"],
-                  created=datetime(2026, 8, 17, 10, i))
+        _learning(
+            store,
+            "qualitative",
+            f"Anecdote {i}.",
+            run_ids=["r1"],
+            created=datetime(2026, 8, 17, 10, i),
+        )
 
     ctx = learnings_context(cfg, store)
     assert ctx["total"] == PROMPT_LEARNING_LIMIT + 5
@@ -107,6 +214,7 @@ def test_learnings_are_per_fund(tmp_path):
 
 
 # ── prompt_context / guidance_versions ────────────────────────────────────────
+
 
 def test_prompt_context_no_guidance(cfg):
     ctx = prompt_context(cfg)
@@ -142,14 +250,24 @@ def test_guidance_versions_per_fund(tmp_path):
 
 # ── template rendering (catches template bugs, both fund + sim contexts) ───────
 
+
 def test_learnings_template_renders_main_and_sim(cfg, store):
     _learning(store, "calibration", "A lesson.")
     ctx = learnings_context(cfg, store)
     main = _jinja.get_template("learnings.html").render(**ctx)
     assert "A lesson." in main and "Learnings" in main
     # Sim context adds sim_prefix — must still render
-    sim = _jinja.get_template("learnings.html").render(**ctx, sim_prefix="/sim-claude", sim_label="Claude")
+    sim = _jinja.get_template("learnings.html").render(
+        **ctx, sim_prefix="/sim-claude", sim_label="Claude"
+    )
     assert "A lesson." in sim
+
+
+def test_learnings_template_renders_learning_health(cfg, store):
+    html = _jinja.get_template("learnings.html").render(**learnings_context(cfg, store))
+    assert "Learning health" in html
+    assert "Optimizer gate" in html
+    assert "0/30 outcomes" in html
 
 
 def test_prompt_template_renders_with_and_without_guidance(cfg):

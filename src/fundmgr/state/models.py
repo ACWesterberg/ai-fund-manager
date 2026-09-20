@@ -141,7 +141,7 @@ class DecisionOutcome:
 @dataclass
 class Learning:
     """A distilled lesson injected into future prompts to improve LLM decisions."""
-    category: str           # calibration | sector_bias | timing | general
+    category: str           # calibration | qualitative
     body: str               # plain-text lesson (≤3 sentences)
     run_ids: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)

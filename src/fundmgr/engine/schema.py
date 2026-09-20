@@ -220,6 +220,13 @@ class Lesson(BaseModel):
             "pattern seen in a single 28-day return is noise, not a lesson."
         ),
     )
+    supersedes_learning_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "IDs of active qualitative lessons that express the same actionable rule. "
+            "List them only when this lesson consolidates or updates that rule."
+        ),
+    )
 
     @field_validator("tickers")
     @classmethod
@@ -237,6 +244,28 @@ class BatchLessons(BaseModel):
             "than a plausible story."
         ),
     )
+
+
+class LearningConsolidation(BaseModel):
+    """A conservative merge of active lessons that say the same thing."""
+
+    learning_ids: list[int] = Field(
+        min_length=2,
+        description="IDs of two or more active qualitative lessons to replace.",
+    )
+    body: str = Field(
+        max_length=400,
+        description=(
+            "At most 2 sentences preserving the shared, evidence-backed actionable rule "
+            "without adding a new claim."
+        ),
+    )
+
+
+class LearningConsolidations(BaseModel):
+    """Non-overlapping groups of genuinely redundant active lessons."""
+
+    consolidations: list[LearningConsolidation] = Field(default_factory=list)
 
 
 class ThesisCheck(BaseModel):

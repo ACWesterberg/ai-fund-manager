@@ -7,14 +7,15 @@ from fundmgr.config import AppConfig, default_heavy_model
 from fundmgr.engine.evaluator import (
     _batch_review_message,
     calibration_body,
+    consolidate_qualitative_learnings,
     evaluate_pending_outcomes,
     generate_learnings,
     generate_qualitative_learnings,
     surviving_lessons,
     wilson_interval,
 )
-from fundmgr.engine.schema import BatchLessons
-from fundmgr.state.models import DecisionOutcome, RecommendationLog
+from fundmgr.engine.schema import BatchLessons, LearningConsolidations
+from fundmgr.state.models import DecisionOutcome, Learning, RecommendationLog
 from fundmgr.state.store import Store
 
 
@@ -92,7 +93,14 @@ def _outcome(ticker, run_id="r1", ret=5.0, bench=1.0, conf=0.6, action="buy"):
 
 def _reply(*lessons) -> BatchLessons:
     return BatchLessons.model_validate({
-        "lessons": [{"body": b, "tickers": t} for b, t in lessons]
+        "lessons": [
+            {
+                "body": lesson[0],
+                "tickers": lesson[1],
+                "supersedes_learning_ids": lesson[2] if len(lesson) > 2 else [],
+            }
+            for lesson in lessons
+        ]
     })
 
 
@@ -104,7 +112,7 @@ def test_batch_lesson_needs_more_than_one_ticker():
         ("Both tanker names tracked freight rates.", ["AAA.ST", "BBB.ST"]),
     )
     kept = surviving_lessons(parsed, outcomes, max_lessons=3)
-    assert [b for b, _ in kept] == ["Both tanker names tracked freight rates."]
+    assert [body for body, _, _ in kept] == ["Both tanker names tracked freight rates."]
     assert kept[0][1] == {"AAA.ST", "BBB.ST"}
 
 
@@ -131,6 +139,17 @@ def test_batch_lessons_respect_max():
     outcomes = [_outcome(t) for t in ("AAA.ST", "BBB.ST", "CCC.ST")]
     parsed = _reply(*[(f"L{i}", ["AAA.ST", "BBB.ST"]) for i in range(5)])
     assert len(surviving_lessons(parsed, outcomes, max_lessons=2)) == 2
+
+
+def test_batch_lessons_only_supersede_active_ids_once():
+    outcomes = [_outcome("AAA.ST"), _outcome("BBB.ST")]
+    parsed = _reply(
+        ("First.", ["AAA.ST", "BBB.ST"], [4, 7, 999]),
+        ("Second.", ["AAA.ST", "BBB.ST"], [7]),
+    )
+    kept = surviving_lessons(parsed, outcomes, 3, active_learning_ids={4, 7})
+    assert kept[0][2] == {4, 7}
+    assert kept[1][2] == set()
 
 
 def test_batch_review_message_uses_the_funds_own_benchmark():
@@ -165,6 +184,86 @@ def test_generate_qualitative_learnings_survives_an_llm_failure(store, monkeypat
 
     monkeypatch.setattr(client_mod, "call_llm", _boom)
     assert generate_qualitative_learnings(store, [_outcome("AAA.ST")], cfg=AppConfig()) == []
+
+
+def test_new_qualitative_lesson_consolidates_existing_evidence(store, monkeypatch):
+    old_a = Learning(category="qualitative", body="Require a dated report.", run_ids=["r-old-a"])
+    old_b = Learning(category="qualitative", body="Require an in-window update.", run_ids=["r-old-b"])
+    old_a.id = store.save_learning(old_a)
+    old_b.id = store.save_learning(old_b)
+    monkeypatch.setattr(
+        "fundmgr.engine.evaluator._call_for_batch_lessons",
+        lambda *args: _reply((
+            "Require a scheduled update inside the holding window.",
+            ["AAA.ST", "BBB.ST"],
+            [old_a.id, old_b.id],
+        )),
+    )
+
+    created = generate_qualitative_learnings(
+        store,
+        [_outcome("AAA.ST", run_id="r-new"), _outcome("BBB.ST", run_id="r-new")],
+        cfg=AppConfig(),
+    )
+
+    assert len(created) == 1
+    assert created[0].run_ids == ["r-new", "r-old-a", "r-old-b"]
+    assert [learning.id for learning in store.get_active_learnings()] == [created[0].id]
+    with store._conn() as conn:
+        rows = conn.execute(
+            "SELECT id, superseded_by FROM learnings WHERE id IN (?, ?) ORDER BY id",
+            (old_a.id, old_b.id),
+        ).fetchall()
+    assert [row["superseded_by"] for row in rows] == [created[0].id, created[0].id]
+
+
+def test_explicit_consolidation_merges_runs_and_preserves_distinct_lessons(store, monkeypatch):
+    first = Learning(category="qualitative", body="Require a dated report.", run_ids=["r1"])
+    second = Learning(category="qualitative", body="Use an in-window update.", run_ids=["r2"])
+    distinct = Learning(category="qualitative", body="Size high-beta names down.", run_ids=["r3"])
+    first.id = store.save_learning(first)
+    second.id = store.save_learning(second)
+    distinct.id = store.save_learning(distinct)
+    reply = LearningConsolidations.model_validate({"consolidations": [{
+        "learning_ids": [first.id, second.id],
+        "body": "Require a scheduled update inside the holding window.",
+    }]})
+    monkeypatch.setattr(
+        "fundmgr.engine.evaluator._call_for_learning_consolidations",
+        lambda *args: reply,
+    )
+
+    proposals = consolidate_qualitative_learnings(store, AppConfig())
+
+    assert len(proposals) == 1
+    replacement, replaced_ids = proposals[0]
+    assert replaced_ids == [first.id, second.id]
+    assert replacement.run_ids == ["r1", "r2"]
+    assert {learning.body for learning in store.get_active_learnings()} == {
+        replacement.body,
+        distinct.body,
+    }
+
+
+def test_consolidation_dry_run_writes_nothing(store, monkeypatch):
+    first = Learning(category="qualitative", body="Require a dated report.", run_ids=["r1"])
+    second = Learning(category="qualitative", body="Use an in-window update.", run_ids=["r2"])
+    first.id = store.save_learning(first)
+    second.id = store.save_learning(second)
+    reply = LearningConsolidations.model_validate({"consolidations": [{
+        "learning_ids": [first.id, second.id],
+        "body": "Require a scheduled update inside the holding window.",
+    }]})
+    monkeypatch.setattr(
+        "fundmgr.engine.evaluator._call_for_learning_consolidations",
+        lambda *args: reply,
+    )
+
+    proposals = consolidate_qualitative_learnings(store, AppConfig(), apply=False)
+
+    assert len(proposals) == 1
+    assert proposals[0][0].id is None
+    assert {learning.id for learning in store.get_active_learnings()} == {first.id, second.id}
 
 
 def test_learning_model_is_the_heavy_reasoner_not_the_decision_model():
@@ -286,6 +385,7 @@ def test_two_qualifying_bands_no_longer_delete_each_other(store):
     assert len(active) == 1
     # One lesson carrying both readings, rather than one band silently lost.
     assert "high (>=0.7)" in active[0].body and "low (<0.4)" in active[0].body
+    assert active[0].run_ids == ["r1"]
 
 
 def test_calibration_refresh_supersedes_the_previous_reading(store):
@@ -303,6 +403,15 @@ def test_calibration_refresh_supersedes_the_previous_reading(store):
     assert len(second) == 1
     assert len(store.get_active_learnings()) == 1
     assert store.get_active_learnings()[0].body == second[0].body
+
+
+def test_calibration_provenance_deduplicates_runs(store):
+    _seed_buys(store, "r1", [(0.5, i % 2 == 0) for i in range(10)])
+    _seed_buys(store, "r2", [(0.5, i % 2 == 0) for i in range(10)])
+
+    created = generate_learnings(store)
+
+    assert created[0].run_ids == ["r1", "r2"]
 
 
 def test_unsupported_calibration_claim_is_retired(store):

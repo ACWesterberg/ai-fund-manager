@@ -18,7 +18,7 @@ from fundmgr.state.store import Store
 
 if TYPE_CHECKING:
     from fundmgr.config import AppConfig
-    from fundmgr.engine.schema import BatchLessons
+    from fundmgr.engine.schema import BatchLessons, LearningConsolidations
 
 logger = logging.getLogger(__name__)
 
@@ -214,8 +214,12 @@ def generate_qualitative_learnings(
         by_run.setdefault(o.run_id, []).append(o)
 
     macro_by_run = {run_id: _macro_summary(store, run_id) for run_id in by_run}
+    active = [
+        learning for learning in store.get_active_learnings()
+        if learning.category == "qualitative"
+    ]
     user_msg = _batch_review_message(
-        by_run, macro_by_run, benchmark_label or cfg.benchmark, max_lessons
+        by_run, macro_by_run, benchmark_label or cfg.benchmark, max_lessons, active
     )
 
     parsed = _call_for_batch_lessons(cfg, user_msg, cfg.evaluation_horizon_days)
@@ -223,17 +227,20 @@ def generate_qualitative_learnings(
         return []
 
     new_learnings: list[Learning] = []
-    for body, tickers in surviving_lessons(parsed, outcomes, max_lessons):
+    for body, tickers, superseded_ids in surviving_lessons(
+        parsed, outcomes, max_lessons, {learning.id for learning in active if learning.id}
+    ):
+        old = [learning for learning in active if learning.id in superseded_ids]
         run_ids = sorted({
             o.run_id for o in outcomes if o.ticker.upper() in tickers
-        })
+        } | {run_id for learning in old for run_id in learning.run_ids})
         learning = Learning(
             category="qualitative",
             body=body,
             run_ids=run_ids,
             created_at=datetime.now(timezone.utc),
         )
-        learning.id = store.save_learning(learning)
+        learning.id = store.replace_learnings(learning, sorted(superseded_ids))
         new_learnings.append(learning)
 
     return new_learnings
@@ -260,6 +267,7 @@ def _batch_review_message(
     macro_by_run: dict[str, str],
     benchmark_label: str | None,
     max_lessons: int,
+    active_learnings: list[Learning] | None = None,
 ) -> str:
     """The batch as one table, plus the dispersion stats that expose a common move."""
     bench_name = benchmark_label or "the benchmark"
@@ -305,6 +313,18 @@ def _batch_review_message(
         f"Each must be supported by at least {MIN_SUPPORTING_TICKERS} of the tickers above. "
         "If the batch shows no repeated, thesis-level pattern, return an empty list."
     )
+    if active_learnings:
+        lines.append("")
+        lines.append("### Existing active qualitative lessons")
+        lines.append(
+            "A new lesson that expresses the same actionable rule must consolidate the "
+            "overlapping IDs instead of being added beside them."
+        )
+        for learning in active_learnings:
+            lines.append(
+                f"- learning_id={learning.id} | evidence_runs={len(learning.run_ids)} | "
+                f"{learning.body}"
+            )
     return "\n".join(lines)
 
 
@@ -333,7 +353,10 @@ def _batch_system_prompt(horizon_days: int) -> str:
         "routinely written that way.\n"
         "6. Returning zero lessons is correct whenever the batch shows no repeated pattern. This "
         "is the expected result for most batches — an empty list is a better answer than a "
-        "plausible story."
+        "plausible story.\n"
+        "7. Existing active lessons appear in the user message. If a supported new pattern is "
+        "the same actionable rule, write one improved combined lesson and list every overlapping "
+        "learning_id in supersedes_learning_ids. Do not list merely related lessons."
 )
 
 
@@ -368,12 +391,16 @@ def _call_for_batch_lessons(
 
 
 def surviving_lessons(
-    parsed: "BatchLessons", outcomes: list[DecisionOutcome], max_lessons: int
-) -> list[tuple[str, set[str]]]:
+    parsed: "BatchLessons",
+    outcomes: list[DecisionOutcome],
+    max_lessons: int,
+    active_learning_ids: set[int] | None = None,
+) -> list[tuple[str, set[str], set[int]]]:
     """
-    (body, supporting tickers) for each returned lesson that clears the evidence
-    bar: real tickers from this batch, at least MIN_SUPPORTING_TICKERS of them,
-    and a non-empty body.
+    (body, supporting tickers, superseded active IDs) for each returned lesson
+    that clears the evidence bar: real tickers from this batch, at least
+    MIN_SUPPORTING_TICKERS of them, and a non-empty body. Superseded IDs are
+    restricted to the active set and can be claimed by only one replacement.
 
     Enforced here rather than trusted to the prompt or the schema — a model told
     "at least two tickers" will still cite one, or cite a name that was not in
@@ -381,15 +408,101 @@ def surviving_lessons(
     mode this pipeline exists to avoid.
     """
     known = {o.ticker.upper() for o in outcomes}
-    kept: list[tuple[str, set[str]]] = []
+    valid_ids = active_learning_ids or set()
+    claimed_ids: set[int] = set()
+    kept: list[tuple[str, set[str], set[int]]] = []
 
     for lesson in parsed.lessons:
         body = (lesson.body or "").strip()
         tickers = set(lesson.tickers) & known
+        superseded = (set(lesson.supersedes_learning_ids) & valid_ids) - claimed_ids
         if body and len(tickers) >= MIN_SUPPORTING_TICKERS:
-            kept.append((body, tickers))
+            kept.append((body, tickers, superseded))
+            claimed_ids.update(superseded)
 
     return kept[:max_lessons]
+
+
+def consolidate_qualitative_learnings(
+    store: Store, cfg: "AppConfig", apply: bool = True
+) -> list[tuple[Learning, list[int]]]:
+    """Merge genuinely redundant active qualitative lessons, conservatively.
+
+    This is an explicit maintenance operation rather than an extra weekly LLM
+    call. New batches prevent recurrence through ``supersedes_learning_ids``;
+    this function repairs duplicates accumulated before that contract existed.
+    """
+    active = [
+        learning for learning in store.get_active_learnings()
+        if learning.category == "qualitative" and learning.id is not None
+    ]
+    if len(active) < 2:
+        return []
+
+    lines = [
+        "Consolidate only lessons that express the same actionable decision rule.",
+        "Related subject matter is not enough. Keep distinct signals or sizing rules separate.",
+        "Every replacement must preserve the shared supported claim and add no new claim.",
+        "Return no consolidation when uncertain.",
+        "",
+        "Active qualitative lessons:",
+    ]
+    for learning in active:
+        lines.append(
+            f"- learning_id={learning.id} | evidence_runs={len(learning.run_ids)} | "
+            f"{learning.body}"
+        )
+
+    parsed = _call_for_learning_consolidations(cfg, "\n".join(lines))
+    if parsed is None:
+        return []
+
+    by_id = {learning.id: learning for learning in active}
+    used: set[int] = set()
+    proposals: list[tuple[Learning, list[int]]] = []
+    for item in parsed.consolidations:
+        ids = list(dict.fromkeys(item.learning_ids))
+        if len(ids) < 2 or any(learning_id not in by_id or learning_id in used for learning_id in ids):
+            continue
+        body = (item.body or "").strip()
+        if not body:
+            continue
+        run_ids = sorted({run_id for learning_id in ids for run_id in by_id[learning_id].run_ids})
+        replacement = Learning(
+            category="qualitative",
+            body=body,
+            run_ids=run_ids,
+            created_at=datetime.now(timezone.utc),
+        )
+        if apply:
+            replacement.id = store.replace_learnings(replacement, ids)
+        proposals.append((replacement, ids))
+        used.update(ids)
+    return proposals
+
+
+def _call_for_learning_consolidations(
+    cfg: "AppConfig", user_msg: str
+) -> "LearningConsolidations | None":
+    from dataclasses import replace
+
+    from fundmgr.engine.client import LLMError, call_llm
+    from fundmgr.engine.schema import LearningConsolidations
+
+    learning_cfg = replace(
+        cfg, llm=replace(cfg.llm, model_id=cfg.learning_model, n_samples=1)
+    )
+    system = (
+        "You audit a fund's active learned rules for semantic duplication. Be conservative: "
+        "merge only near-equivalent actionable rules, never merely related lessons. Preserve "
+        "the intersection of their evidence, not the union of unsupported details."
+    )
+    try:
+        parsed, _ = call_llm(system, user_msg, learning_cfg, schema=LearningConsolidations)
+    except LLMError as exc:
+        logger.warning("Learning consolidation failed on %s: %s", learning_cfg.llm.model_id, exc)
+        return None
+    return parsed
 
 
 CALIBRATION_MIN_SAMPLE = 20  # evaluated buys in a bucket before its rate is reported
@@ -500,9 +613,8 @@ def generate_learnings(
     retired rather than left running: it is injected into every prompt, so an
     unsupported claim left active keeps steering decisions.
     """
-    body = calibration_body(
-        store.get_calibration_stats(), min_sample=min_sample, horizon_days=horizon_days
-    )
+    stats = store.get_calibration_stats()
+    body = calibration_body(stats, min_sample=min_sample, horizon_days=horizon_days)
 
     if body is None:
         store.deactivate_learnings(category="calibration")
@@ -511,19 +623,21 @@ def generate_learnings(
     existing = [
         lrn for lrn in store.get_active_learnings() if lrn.category == "calibration"
     ]
-    if any(lrn.body == body for lrn in existing):
+    qualifying_buckets = {
+        bucket for bucket, values in stats.items() if values.get("n", 0) >= min_sample
+    }
+    run_ids = store.get_calibration_run_ids(qualifying_buckets)
+    if any(lrn.body == body and lrn.run_ids == run_ids for lrn in existing):
         return []  # unchanged reading — keep the original timestamp
 
     learning = Learning(
         category="calibration",
         body=body,
-        run_ids=[],
+        run_ids=run_ids,
         created_at=datetime.now(timezone.utc),
     )
-    learning.id = store.save_learning(learning)
-
-    for old in existing:
-        if old.id:
-            store.supersede_learning(old.id, learning.id)
+    learning.id = store.replace_learnings(
+        learning, [old.id for old in existing if old.id is not None]
+    )
 
     return [learning]

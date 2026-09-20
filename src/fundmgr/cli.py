@@ -24,7 +24,12 @@ from fundmgr.data.universe_selection import (
 )
 from fundmgr.engine.client import LLMError, call_llm_consensus
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
-from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
+from fundmgr.engine.evaluator import (
+    consolidate_qualitative_learnings,
+    evaluate_pending_outcomes,
+    generate_learnings,
+    generate_qualitative_learnings,
+)
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.engine.thesis_check import verify_theses
 from fundmgr.guardrails.rules import apply_guardrails
@@ -1799,6 +1804,43 @@ def prune_learnings_cmd(category: str | None, before: str | None, dry_run: bool,
         click.echo(f"\n  Retired {total_retired} across {len(books)} book(s).")
 
 
+@cli.command("consolidate-learnings")
+@click.option("--dry-run", is_flag=True, help="Show proposed merges, write nothing.")
+@click.option("--all-books", is_flag=True,
+              help="Every configured fund and paper book, not just this one.")
+def consolidate_learnings_cmd(dry_run: bool, all_books: bool):
+    """Merge active qualitative lessons that express the same actionable rule.
+
+    Uses each fund's learning model as a conservative semantic judge. Evidence
+    run IDs are combined and every predecessor links to the replacement; no
+    rows are deleted. A dry run still calls the learning model.
+    """
+    if all_books:
+        books = _all_learning_books_with_configs()
+    else:
+        cfg, store = _get_store()
+        books = [(cfg.display_name, cfg, store)]
+
+    click.echo("\n─── Consolidate active qualitative learnings ───────────────")
+    total = 0
+    for label, cfg, store in books:
+        proposals = consolidate_qualitative_learnings(store, cfg, apply=not dry_run)
+        if not proposals:
+            if all_books:
+                click.echo(f"\n  {label}: no safe merges proposed.")
+            continue
+        click.echo(f"\n  {label}:")
+        for replacement, old_ids in proposals:
+            action = "would merge" if dry_run else "merged"
+            click.echo(f"    {action} IDs {', '.join(map(str, old_ids))}")
+            click.echo(f"      → {replacement.body}")
+            click.echo(f"        evidence: {len(replacement.run_ids)} independent run(s)")
+            total += 1
+
+    suffix = " proposed, nothing written" if dry_run else " completed"
+    click.echo(f"\n  {total} consolidation(s){suffix}.")
+
+
 def _current_learning_book() -> tuple[str, Store]:
     cfg, store = _get_store()
     return cfg.display_name, store
@@ -1811,10 +1853,15 @@ def _all_learning_books() -> list[tuple[str, Store]]:
     that only reached the fund selected by FUND_CONFIG would silently leave the
     other funds' lessons live in their prompts.
     """
+    return [(label, store) for label, _cfg, store in _all_learning_books_with_configs()]
+
+
+def _all_learning_books_with_configs() -> list[tuple[str, object, Store]]:
+    """Every learning book together with the model config used to coach it."""
     from fundmgr import paper
     from fundmgr.config import CONFIG_DIR, load_config
 
-    books: list[tuple[str, Store]] = []
+    books: list[tuple[str, object, Store]] = []
     seen: set[Path] = set()
 
     for path in sorted(CONFIG_DIR.glob("config*.yaml")):
@@ -1826,15 +1873,17 @@ def _all_learning_books() -> list[tuple[str, Store]]:
         if cfg.db_path in seen or not cfg.db_path.exists():
             continue
         seen.add(cfg.db_path)
-        books.append((f"{cfg.display_name} [{path.name}]", Store(cfg.db_path)))
+        books.append((f"{cfg.display_name} [{path.name}]", cfg, Store(cfg.db_path)))
 
     for meta in paper.list_portfolios():
         try:
-            _, store = paper.open_portfolio(meta["slug"])
+            paper_meta, store = paper.open_portfolio(meta["slug"])
         except Exception as exc:
             click.echo(f"  ⚠ skipping paper book {meta['slug']}: {exc}")
             continue
-        books.append((f"{meta['name']} [paper/{meta['slug']}]", store))
+        from fundmgr.config import AppConfig
+        cfg = AppConfig(benchmark=paper_meta["benchmark"])
+        books.append((f"{meta['name']} [paper/{meta['slug']}]", cfg, store))
 
     return books
 

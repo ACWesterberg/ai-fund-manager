@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
 CREATE TABLE IF NOT EXISTS learnings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
-    category    TEXT NOT NULL,   -- calibration | sector_bias | timing | general
+    category    TEXT NOT NULL,   -- calibration | qualitative
     body        TEXT NOT NULL,   -- plain-text lesson (injected into future prompts)
     run_ids     TEXT,            -- JSON list of run_ids this learning derives from
     is_active   INTEGER NOT NULL DEFAULT 1,
@@ -1367,6 +1367,25 @@ class Store:
             for k, v in buckets.items()
         }
 
+    def get_calibration_run_ids(self, qualifying_buckets: set[str]) -> list[str]:
+        """Run provenance behind the calibration bands that cleared the sample bar."""
+        if not qualifying_buckets:
+            return []
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT run_id, confidence FROM decision_outcomes "
+                "WHERE outperformed IS NOT NULL AND action = 'buy' "
+                "AND (source IS NULL OR source = 'run') ORDER BY run_id"
+            ).fetchall()
+
+        def bucket(confidence: float | None) -> str:
+            value = confidence or 0.0
+            return "high" if value >= 0.7 else "medium" if value >= 0.4 else "low"
+
+        return sorted({
+            r["run_id"] for r in rows if bucket(r["confidence"]) in qualifying_buckets
+        })
+
     # ── Learnings ─────────────────────────────────────────────────────────────
 
     def save_learning(self, learning: "Learning") -> int:
@@ -1382,6 +1401,31 @@ class Store:
                 ),
             )
             return cur.lastrowid
+
+    def replace_learnings(self, learning: "Learning", old_ids: list[int]) -> int:
+        """Save one replacement and atomically link every active predecessor to it."""
+        import json as _json
+        ids = list(dict.fromkeys(old_ids))
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO learnings (created_at, category, body, run_ids, is_active) "
+                "VALUES (?, ?, ?, ?, 1)",
+                (
+                    learning.created_at.isoformat(),
+                    learning.category,
+                    learning.body,
+                    _json.dumps(learning.run_ids),
+                ),
+            )
+            new_id = cur.lastrowid
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE learnings SET is_active = 0, superseded_by = ? "
+                    f"WHERE is_active = 1 AND id IN ({placeholders})",
+                    [new_id, *ids],
+                )
+            return new_id
 
     def get_active_learnings(self) -> list["Learning"]:
         import json as _json

@@ -624,7 +624,10 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         timestamp=ts,
     )
 
-    store.apply_fill(txn)
+    try:
+        store.apply_fill(txn)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     gross = shares * price
     direction = "Bought" if side == "buy" else "Sold"
@@ -952,7 +955,7 @@ def check_stops(quiet: bool):
     if triggered and cfg.auto_fill:
         from fundmgr.engine.auto_fill import execute_paper_fills
         sell_actions = [
-            {"ticker": t, "side": "sell", "target_weight_pct": 0, "sek_estimate": price}
+            {"ticker": t, "side": "sell", "target_weight_pct": 0}
             for t, _chg, _pct, price in triggered
         ]
         # notify_skips=False: check-stops runs every 15 min, so a closed-market
@@ -1566,6 +1569,7 @@ def reconcile(holdings_path: str | None, cash_actual: float | None,
 @cli.command()
 def universe():
     """List the enabled tickers in the universe."""
+    cfg = load_config()
     tickers = get_enabled_tickers(cfg.universe_path)
     click.echo(f"\n─── Universe ({len(tickers)} enabled tickers) ───────────────────────────────")
     click.echo(f"  {'Name':<30} {'Ticker':<15} {'Country':<8} {'Sector'}")
@@ -2405,11 +2409,14 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
     if snap_note:
         click.echo(f"  {snap_note}")
     currency = meta["currency_map"].get(ticker, "SEK")
-    store.apply_fill(Transaction(
-        ticker=ticker, side=side, shares=shares,
-        price_sek=price, fee_sek=fee, source="fill",
-        currency=currency, timestamp=ts,
-    ))
+    try:
+        store.apply_fill(Transaction(
+            ticker=ticker, side=side, shares=shares,
+            price_sek=price, fee_sek=fee, source="fill",
+            currency=currency, timestamp=ts,
+        ))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     gross = shares * price
     direction = "Bought" if side == "buy" else "Sold"

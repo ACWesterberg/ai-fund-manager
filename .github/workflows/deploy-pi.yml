@@ -8,7 +8,13 @@ on:
   workflow_dispatch:  # also allows manual trigger from GitHub UI
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+    secrets: inherit
+
   deploy:
+    needs: test
+    if: github.ref_name == 'deploy'
     name: SSH deploy to Pi
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -30,7 +36,7 @@ jobs:
           port: 22
           timeout: 300s
           script: |
-            DEPLOY_BRANCH=deploy bash /home/${{ secrets.PI_SSH_USER }}/Documents/ai-fund-manager/deploy/deploy.sh
+            EXPECTED_REVISION=${{ github.sha }} DEPLOY_BRANCH=deploy bash /home/${{ secrets.PI_SSH_USER }}/Documents/ai-fund-manager/deploy/deploy.sh
 
       - name: Notify Telegram on success
         if: success()

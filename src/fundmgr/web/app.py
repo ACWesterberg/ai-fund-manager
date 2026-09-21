@@ -37,6 +37,9 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app = FastAPI(title="AI Fund Manager", docs_url=None, redoc_url=None)
 
+from fundmgr.web.auth import protect_dashboard
+app.middleware("http")(protect_dashboard)
+
 # Simulation sub-routes — one per model provider
 from fundmgr.web.sim import make_sim_router  # noqa: E402
 app.include_router(make_sim_router(

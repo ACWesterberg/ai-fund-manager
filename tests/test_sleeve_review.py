@@ -1075,7 +1075,7 @@ def test_a_rejected_buy_installs_nothing(env, sleeve, monkeypatch):
     not leave a criterion behind for a position that was never opened."""
     from fundmgr import watchplan
 
-    _stub_llm(monkeypatch, [_new_name(sek_estimate=500)])      # below min_trade_sek
+    _stub_llm(monkeypatch, [_new_name(target_weight_pct=0.5, sek_estimate=500)])      # below min_trade_sek
     result = sleeve_review.review_sleeve(sleeve, include_macro=False)
 
     assert next(a for a in result["actions"] if a["ticker"] == "BETA.ST")["approved"] is False
@@ -1163,7 +1163,7 @@ def test_a_buy_reports_shares_to_buy(env, sleeve, monkeypatch):
     beta = next(a for a in result["actions"] if a["ticker"] == "BETA.ST")
     last_close = _price_rows()[-1]["close"]                 # 125.9, not the live 100
     assert beta["price_sek"] == pytest.approx(last_close, abs=0.01)
-    assert beta["shares"] == math.floor(5_000 / last_close)
+    assert beta["shares"] == math.floor(result["nav_sek"] * 0.20 / last_close)
 
 
 def test_share_counts_are_stored_with_the_decision(env, sleeve, monkeypatch):

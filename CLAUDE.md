@@ -223,3 +223,22 @@ Useful flags: `--force` (ignore the holiday gate), `--force-refresh` (re-fetch p
 - `from __future__ import annotations` at the top of every file
 - Fail open on anything advisory (calendars, aliases, notifications); fail closed on anything that moves money
 - Model output is never `innerHTML` — build DOM nodes and set `textContent`
+
+
+## Portfolio safety contract
+
+Guardrails derive each trade's `sek_estimate` from target weight minus the current
+position value; model estimates are advisory input only. Accepted trades reserve
+cash (including fees), turnover, position slots and bucket exposure against a
+projected book, in confidence order. Duplicate tickers are rejected. Turnover
+rejections appear in the verdict log. No later pruning removes a funding sell.
+Simulated fills never exceed an approved budget and recheck cash at execution;
+mechanical full exits from `check-stops` omit the budget deliberately. NAV and
+sizing use marked prices; incomplete valuations block sizing and never overwrite
+NAV with cost basis. The ledger rejects invalid numeric inputs, oversells and
+unfunded buys atomically; reconcile missing holdings/cash before recording a fill.
+Consensus and clipping preserve the highest-confidence action's monitoring plan.
+
+The dashboard requires `FUND_WEB_PASSWORD`; no configured password means 503.
+Only the GitHub deployment webhook bypasses Basic authentication, retaining its
+own signature validation. Browsers cannot submit authenticated cross-origin writes.

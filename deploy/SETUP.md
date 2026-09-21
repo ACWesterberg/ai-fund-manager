@@ -102,6 +102,8 @@ OPENAI_API_KEY=sk-...           # GPT-5.6-sol simulation fund
 ANTHROPIC_API_KEY=sk-ant-...    # Claude Opus simulation fund
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
+FUND_WEB_USERNAME=fund
+FUND_WEB_PASSWORD=...          # unique strong password; required for the dashboard
 ```
 
 Optional (only needed if using the webhook deploy method):
@@ -404,9 +406,14 @@ systemctl status cloudflared
 
 That's it — no port forwarding, no router config needed. Cloudflare handles HTTPS and the SSL certificate automatically.
 
-### 10e. Optional: restrict access to yourself only
+### 10e. Protect dashboard access
 
-If you don't want the dashboard public, add a Cloudflare Access policy:
+The app requires HTTP Basic authentication through `FUND_WEB_PASSWORD`, even
+behind a tunnel. An unset password returns 503. Set it in the Pi `.env` before
+restarting the web services, and access the dashboard over HTTPS. The `/deploy`
+webhook continues to verify its own GitHub signature.
+
+For an additional email-based access check, add a Cloudflare Access policy:
 
 1. In Cloudflare Zero Trust → **Access** → **Applications** → **Add an application**
 2. Choose **Self-hosted** → enter `fund.yourdomain.com`
@@ -436,3 +443,22 @@ Price data is cached in SQLite for `lookback_days` (252 days). Re-running the sa
 
 **`fund` command not found**
 Make sure you're using the venv's binary: `~/Documents/ai-fund-manager/.venv/bin/fund` or `source ~/.venv/bin/activate` first.
+
+
+## Regression checks and retryable deployments
+
+GitHub Actions runs the test suite before its SSH deployment job. Add a repository
+secret `FINANCEDATA_READ_TOKEN` with read-only contents access to the private
+`ACWesterberg/FinanceData` repository. The test workflow pins its revision and uses
+`uv.lock`; update that revision deliberately when upgrading the shared data layer.
+Fork pull requests cannot access this secret and require a trusted test run.
+
+The deploy script serializes deployments using `flock`, waits for active fund
+runs before changing source or dependencies, and writes `data/deployed-revision`
+only after all services report that they are running. Polling retries an unfinished deployment
+even when Git HEAD is already current. A missing marker causes one full deployment.
+The poller and direct webhook are independent of GitHub's test job; use protected
+`deploy` branches with required checks if those deployment paths are enabled.
+
+The installed `FinanceData` source on the Pi still follows its configured branch;
+CI's pin does not change that operational policy.

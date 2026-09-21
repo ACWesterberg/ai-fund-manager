@@ -193,11 +193,11 @@ def test_max_positions_blocks_new_entry():
 # ── Cash floor ────────────────────────────────────────────────────────────────
 
 def test_min_cash_blocks_buy_that_breaches_floor():
-    cfg = _cfg(min_cash_pct=12)
+    cfg = _cfg(min_cash_pct=12, max_position_pct=100)
     snap = _snap(cash=5_000)  # nav ≈ 5_000, 12% floor = 600 SEK
     features = {"VOLV-B.ST": _feat("VOLV-B.ST", 300)}
     # Buying 4_500 would leave only 500 SEK cash (10%) — below 12% floor
-    decision = _decision([_buy("VOLV-B.ST", 10, 4_500)])
+    decision = _decision([_buy("VOLV-B.ST", 90, 4_500)])
     result = apply_guardrails(decision, snap, features, UNIVERSE, cfg)
     assert len(result.approved_actions) == 0
     assert "cash floor" in result.verdicts[0].rejection_reason.lower()
@@ -347,7 +347,7 @@ def test_a_zero_target_excludes_the_region_outright():
 
 def test_a_sell_out_of_a_capped_region_is_never_blocked():
     """Selling is how an over-weight region gets back inside its band."""
-    cfg = _regional_cfg({"nordics": 10.0}, min_cash_pct=0)
+    cfg = _regional_cfg({"nordics": 10.0}, min_cash_pct=0, max_turnover_pct=100)
     snap = _snap(cash=20_000, positions=[Position("VOLV-B.ST", 800, 100.0)])
     decision = _decision([_sell("VOLV-B.ST", 5.0, 40_000)])
     result = apply_guardrails(decision, snap, _geo_features(), UNIVERSE, cfg)

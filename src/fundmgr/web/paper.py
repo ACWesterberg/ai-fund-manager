@@ -689,10 +689,13 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
 
         tkr, snap_note = paper.snap_ticker_to_plan(store, tkr)
         currency = meta["currency_map"].get(tkr, "SEK")
-        store.apply_fill(Transaction(
-            ticker=tkr, side=side, shares=n_shares, price_sek=price, fee_sek=fee,
-            source="fill", currency=currency, timestamp=ts,
-        ))
+        try:
+            store.apply_fill(Transaction(
+                ticker=tkr, side=side, shares=n_shares, price_sek=price, fee_sek=fee,
+                source="fill", currency=currency, timestamp=ts,
+            ))
+        except ValueError as exc:
+            return _back(str(exc), 0)
         _price_cache.pop(slug, None)
         try:
             bench_rows = store.get_benchmark()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -353,7 +354,22 @@ class Store:
         fills are entered in SEK (OCR reads Köpesumma/Totalt belopp). The
         currency tag is metadata only; no conversion happens here.
         """
+        if txn.side not in ("buy", "sell") or not txn.ticker.strip():
+            raise ValueError("Fill requires a ticker and a buy/sell side")
+        if (not all(math.isfinite(v) for v in (txn.shares, txn.price_sek, txn.fee_sek))
+                or txn.shares <= 0 or txn.price_sek <= 0 or txn.fee_sek < 0
+                or not math.isfinite(txn.gross_sek + txn.fee_sek)):
+            raise ValueError("Fill requires finite positive shares and price, and a nonnegative fee")
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cash = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+            if cash is None:
+                raise ValueError("Portfolio must be initialised before recording fills")
+            held = conn.execute("SELECT shares FROM positions WHERE ticker = ?", (txn.ticker,)).fetchone()
+            if txn.side == "sell" and (held is None or txn.shares > held["shares"]):
+                raise ValueError("Cannot sell more shares than the portfolio holds")
+            if txn.side == "buy" and txn.gross_sek + txn.fee_sek > cash["balance_sek"]:
+                raise ValueError("Insufficient cash for this fill including fees")
             # Record the transaction (price/fee native, plus its currency)
             conn.execute(
                 "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source, currency) "

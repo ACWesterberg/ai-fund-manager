@@ -10,18 +10,19 @@ After each fund run, if auto_fill=True (global fund config), this module:
 """
 from __future__ import annotations
 
+import math
 import time
 from datetime import datetime, timezone
 from typing import NamedTuple
 
 from fundmgr.config import AppConfig
-from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.levels import (
     SKIP_AT_TARGET,
     SKIP_BELOW_MIN,
     SKIP_MARKET_CLOSED,
     SKIP_NOT_HELD,
     SKIP_NO_PRICE,
+    SKIP_RISK,
 )
 from fundmgr.state.models import NavPoint, Transaction
 from fundmgr.state.store import Store
@@ -73,14 +74,38 @@ def execute_paper_fills(
     """
     log: list[str] = []
     skipped: dict[str, str] = {}
-    positions = store.get_positions()
-    pos_map = {p.ticker: p for p in positions}
-    nav = sum(p.shares * (p.current_price_sek or p.avg_cost_sek) for p in positions) + store.get_cash()
+    prices: dict[str, float] = {}
+
+    def quote(ticker: str) -> float | None:
+        if ticker in prices:
+            return prices[ticker]
+        price = _fetch_price(ticker)
+        if price is None or not math.isfinite(price) or price <= 0:
+            return None
+        if cfg.fx_to_sek:
+            from fundmgr.data.fx import rate_to_sek
+            rate = rate_to_sek(currency_by_ticker.get(ticker, "SEK"), store)
+            if rate is None or not math.isfinite(rate) or rate <= 0:
+                return None
+            price *= rate
+        prices[ticker] = price
+        return price
+
+    def marked_nav() -> float | None:
+        value = store.get_cash()
+        for position in store.get_positions():
+            price = quote(position.ticker)
+            if price is None:
+                return None
+            value += position.shares * price
+        return value
 
     # Ticker -> exchange code, so we can check each venue's trading calendar.
     from fundmgr.config import load_universe
     from fundmgr.data.market_hours import is_exchange_open
-    exch_by_ticker = {t.yahoo_ticker: t.exchange for t in load_universe(cfg.universe_path)}
+    universe = load_universe(cfg.universe_path)
+    exch_by_ticker = {t.yahoo_ticker: t.exchange for t in universe}
+    currency_by_ticker = {t.yahoo_ticker: t.currency for t in universe}
     skipped_closed: list[tuple[str, str, str]] = []  # (ticker, side, exchange)
 
     for action in actions:
@@ -104,7 +129,7 @@ def execute_paper_fills(
         price = None
         waited = 0
         while price is None:
-            price = _fetch_price(ticker)
+            price = quote(ticker)
             if price or waited >= max_wait_secs:
                 break
             time.sleep(30)
@@ -115,7 +140,15 @@ def execute_paper_fills(
             log.append(f"  ⚠ {ticker}: could not fetch price — skipped")
             continue
 
+        pos_map = {p.ticker: p for p in store.get_positions()}
+        nav = marked_nav()
+        if (nav is None or nav <= 0) and not (side == "sell" and target_weight_pct == 0):
+            skipped[ticker] = SKIP_NO_PRICE
+            log.append(f"  ⚠ {ticker}: incomplete portfolio valuation — skipped")
+            continue
+
         if side == "buy":
+            target_weight_pct = min(target_weight_pct, cfg.risk.max_position_pct)
             current_weight = (
                 (pos_map[ticker].shares * price / nav * 100) if ticker in pos_map else 0.0
             )
@@ -124,13 +157,22 @@ def execute_paper_fills(
                 skipped[ticker] = SKIP_AT_TARGET
                 log.append(f"  {ticker}: already at/above target weight — skipped")
                 continue
-            buy_sek = nav * weight_gap / 100.0
+            budget = action.get("sek_estimate")
+            if budget is None or not math.isfinite(budget) or budget <= 0:
+                skipped[ticker] = SKIP_RISK
+                log.append(f"  ⚠ {ticker}: missing approved trade budget — skipped")
+                continue
+            buy_sek = min(budget, nav * weight_gap / 100.0)
+            if store.get_cash() - buy_sek - cfg.fees.calc(buy_sek) < nav * cfg.risk.min_cash_pct / 100:
+                skipped[ticker] = SKIP_RISK
+                log.append(f"  ⚠ {ticker}: cash floor including fees — skipped")
+                continue
             if buy_sek < cfg.risk.min_trade_sek:
                 skipped[ticker] = SKIP_BELOW_MIN
                 log.append(f"  {ticker}: trade size {buy_sek:.0f} SEK below minimum — skipped")
                 continue
-            shares = buy_sek / price
-            fee = cfg.fees.calc(buy_sek)
+            shares = math.floor(buy_sek / price * 10000) / 10000
+            fee = cfg.fees.calc(shares * price)
 
         elif side == "sell":
             if ticker not in pos_map:
@@ -150,18 +192,32 @@ def execute_paper_fills(
                     log.append(f"  {ticker}: sell size {sell_sek:.0f} SEK below minimum — skipped")
                     continue
                 shares = sell_sek / price
+            if "sek_estimate" in action:
+                budget = action["sek_estimate"]
+                if not math.isfinite(budget) or budget <= 0:
+                    skipped[ticker] = SKIP_RISK
+                    continue
+                shares = min(shares, math.floor(budget / price * 10000) / 10000)
             fee = cfg.fees.calc(shares * price)
 
+        if shares <= 0:
+            skipped[ticker] = SKIP_BELOW_MIN
+            continue
         txn = Transaction(
             ticker=ticker,
             side=side,
-            shares=round(shares, 4),
-            price_sek=round(price, 4),
-            fee_sek=round(fee, 4),
+            shares=shares,
+            price_sek=price,
+            fee_sek=fee,
             source="auto",
             timestamp=datetime.now(timezone.utc),
         )
-        store.apply_fill(txn)
+        try:
+            store.apply_fill(txn)
+        except ValueError as exc:
+            skipped[ticker] = SKIP_RISK
+            log.append(f"  ⚠ {ticker}: {exc} — skipped")
+            continue
         log.append(
             f"  ✓ {'Bought' if side == 'buy' else 'Sold'} {shares:.2f} × {ticker} "
             f"@ {price:.2f} SEK (fee {fee:.2f})"
@@ -180,19 +236,20 @@ def execute_paper_fills(
 
     # Record NAV snapshot after all fills
     try:
-        from fundmgr.state.store import Store as _S
         bench_rows = store.get_benchmark()
         bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
-        positions_after = store.get_positions()
         cash_after = store.get_cash()
-        nav_after = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash_after
+        nav_after = marked_nav()
+        if nav_after is None:
+            log.append("  ⚠ NAV not saved: incomplete portfolio valuation")
+            return FillOutcome(log, skipped)
         store.upsert_nav(NavPoint(
             date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             portfolio_nav_sek=nav_after,
             benchmark_value=bench_val,
             cash_sek=cash_after,
         ))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.append(f"  ⚠ Could not save NAV: {exc}")
 
     return FillOutcome(log, skipped)

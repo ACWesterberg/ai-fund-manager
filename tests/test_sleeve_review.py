@@ -157,6 +157,23 @@ def _stub_llm(monkeypatch, actions: list[Action], capture: dict | None = None):
     monkeypatch.setattr(sleeve_review, "call_llm_consensus", _fake)
 
 
+def _await_job(client: TestClient, url: str, timeout_s: float = 30.0) -> dict:
+    """Poll a threaded review job until it settles.
+
+    The bare 200-iteration spin this replaces never yielded, so it raced the
+    worker rather than waiting for it. Locally the job landed with ~100 polls to
+    spare; on CI's faster runner all 200 were spent while the review was still
+    going, and three tests failed with status 'running' and no error to show.
+    Sleeping hands the GIL over and bounds the wait in wall-clock time instead.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        job = client.get(url).json()
+        if job["status"] != "running" or time.monotonic() >= deadline:
+            return job
+        time.sleep(0.02)
+
+
 # ── Scope ─────────────────────────────────────────────────────────────────────
 
 def test_list_scopes_counts_enabled_tickers_per_country(env):
@@ -928,10 +945,7 @@ def test_review_job_runs_and_reports_its_result(client, sleeve, monkeypatch):
     assert start.status_code == 200
     job_id = start.json()["job_id"]
 
-    for _ in range(200):  # the worker is a thread; give it a moment
-        job = client.get(f"/live/{sleeve}/review/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
+    job = _await_job(client, f"/live/{sleeve}/review/jobs/{job_id}")
     assert job["status"] == "done", job.get("error")
     assert job["result"]["add_on_count"] == 1
     assert job["result"]["scope"]["country"] == "SE"
@@ -957,10 +971,7 @@ def test_web_review_accepts_risk_overrides(client, sleeve, monkeypatch):
     assert start.status_code == 200
     job_id = start.json()["job_id"]
 
-    for _ in range(200):
-        job = client.get(f"/live/{sleeve}/review/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
+    job = _await_job(client, f"/live/{sleeve}/review/jobs/{job_id}")
     assert job["status"] == "done", job.get("error")
     assert job["result"]["risk"]["max_turnover_pct"] == 45
 
@@ -1704,10 +1715,7 @@ def test_web_review_accepts_a_regional_mix(client, sleeve, monkeypatch):
     assert start.status_code == 200
     job_id = start.json()["job_id"]
 
-    for _ in range(200):
-        job = client.get(f"/live/{sleeve}/review/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
+    job = _await_job(client, f"/live/{sleeve}/review/jobs/{job_id}")
     assert job["status"] == "done", job.get("error")
     assert job["result"]["regions"]["targets"] == {"nordics": 60.0}
     assert job["result"]["regions"]["tolerance_pct"] == 5.0
@@ -1888,10 +1896,7 @@ def test_web_review_accepts_a_style_mix_and_a_brief(client, styled, monkeypatch)
     assert start.status_code == 200
     job_id = start.json()["job_id"]
 
-    for _ in range(200):
-        job = client.get(f"/live/{styled}/review/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
+    job = _await_job(client, f"/live/{styled}/review/jobs/{job_id}")
     assert job["status"] == "done", job.get("error")
     assert job["result"]["styles"]["targets"] == {"quality": 50.0}
     assert job["result"]["styles"]["brief"] == "founder-led only"

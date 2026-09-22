@@ -616,43 +616,12 @@ def test_failed_candidate_save_cannot_publish_or_change_active_guidance(cfg):
     assert guidance_versions(cfg)["candidates"] == []
 
 
-def test_optimization_stages_candidate_without_replacing_incumbent(cfg, monkeypatch):
-    import sys
-    from fundmgr.engine import optimizer
-    captured = {}
-    class Example(dict):
-        def with_inputs(self, *fields):
-            return self
-    class Compiler:
-        def __init__(self, **kwargs):
-            captured["metric"] = kwargs["metric"]
-        def compile(self, program, **kwargs):
-            return _compiled()
-    monkeypatch.setitem(sys.modules, "dspy", SimpleNamespace(
-        Example=Example, ChainOfThought=lambda signature: object(), configure=lambda **kw: None))
-    monkeypatch.setitem(sys.modules, "dspy.teleprompt", SimpleNamespace(MIPROv2=Compiler))
-    monkeypatch.setitem(sys.modules, "optuna", SimpleNamespace())
-    monkeypatch.setitem(sys.modules, "fundmgr.engine.dspy_program", SimpleNamespace(
-        WeeklyDecision=object(), build_lm=lambda *a, **kw: object()))
-    monkeypatch.setattr(optimizer, "build_pooled_trainset", lambda cfg: [
-        {**_V2_FIELDS, "source": "fund", "ticker_alphas": {"AAA": 1.0}} for _ in range(3)
-    ])
-    _write_guidance(cfg, "Keep me")
+def test_optimization_uses_bounded_search_without_dspy(cfg, monkeypatch):
+    from fundmgr.engine import optimizer, bounded_optimizer
+    examples = [{**_V2_FIELDS, "run_id": str(i), "source": "fund", "ticker_alphas": {"AAA": 1.0}} for i in range(5)]
+    monkeypatch.setattr(optimizer, "build_pooled_trainset", lambda cfg: examples)
+    called = []
+    monkeypatch.setattr(bounded_optimizer, "run_search", lambda cfg, plan, path: called.append(plan) or True)
     store = SimpleNamespace(get_evaluated_outcomes=lambda: [object()])
     assert optimizer.run_optimization(cfg, store, min_outcomes=1, min_examples=2)
-    assert captured["metric"] is optimizer.decision_metric
-    assert load_guidance(cfg) == "Keep me"
-    assert len(optimizer.guidance_versions(cfg)["candidates"]) == 1
-
-
-def test_missing_optuna_fails_before_any_model_setup(cfg, monkeypatch, caplog):
-    import sys
-    from fundmgr.engine import optimizer
-
-    monkeypatch.setitem(sys.modules, "dspy", SimpleNamespace())
-    monkeypatch.setitem(sys.modules, "dspy.teleprompt", SimpleNamespace(MIPROv2=object()))
-    monkeypatch.setitem(sys.modules, "optuna", None)
-    monkeypatch.setitem(sys.modules, "fundmgr.engine.dspy_program", None)
-    assert not optimizer.run_optimization(cfg, SimpleNamespace())
-    assert "Optuna is required" in caplog.text
-    assert "No model calls were made" in caplog.text
+    assert len(called) == 1 and len(called[0]["cases"]) == 1

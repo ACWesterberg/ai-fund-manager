@@ -1,17 +1,9 @@
 """
-MIPROv2 optimization of the weekly decision instructions (DeepSwing-style).
-
-Builds run-level training examples from the fielded prompt snapshots that
-`build_prompt` already persists (snapshot v2; v1 rows are reconstructed from the
-flat strings), scored against the realized per-ticker alphas in
-`decision_outcomes`. MIPROv2 searches instruction space for the WeeklyDecision
-signature in `dspy_program.py`: a heavy prompt model writes candidate
-instructions, the configured decision model evaluates them against history, and
-the winner is saved as an inactive candidate. The active guidance loaded by
-`build_prompt` is unchanged until a separately evaluated candidate is promoted.
-
-dspy is an optional dependency (`uv sync --extra optimize`). Everything except
-run_optimization() works without it.
+Learning-driven, bounded instruction optimization from historical decision runs.
+The current search proposes one alternative and evaluates it against incumbent
+instructions on a small shared validation set. It has durable request budgets,
+checkpoints and fail-fast provider errors; no DSPy bootstrapping or few-shot search.
+Only complete winners become inactive candidates for independent evaluation.
 """
 from __future__ import annotations
 
@@ -316,97 +308,28 @@ def run_optimization(
     store: "Store",
     min_outcomes: int | None = None,
     min_examples: int | None = None,
+    *, resume: Path | None = None,
+    retry_failed: bool = False,
 ) -> bool:
-    """
-    Run MIPROv2 over the run-level trainset and persist the winning instructions
-    as an inactive candidate. Returns True if a candidate was saved.
-    """
-    try:
-        import dspy
-        from dspy.teleprompt import MIPROv2
-    except ImportError:
-        logger.error("dspy is not installed — run: uv sync --extra optimize")
-        return False
-
-    # MIPRO imports this lazily after bootstrapping/proposing instructions,
-    # which can already have incurred substantial model costs.
-    try:
-        import optuna  # noqa: F401
-    except ImportError:
-        logger.error("Optuna is required by MIPROv2 — run: uv sync --extra optimize. "
-                     "No model calls were made.")
-        return False
-
-    from fundmgr.engine.dspy_program import WeeklyDecision, build_lm
-
-    min_outcomes = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
-    min_examples = min_examples if min_examples is not None else cfg.optimizer.min_examples
-
-    evaluated = store.get_evaluated_outcomes()
-    if len(evaluated) < min_outcomes:
-        logger.info("Optimizer: only %d evaluated outcomes, need %d — skipping", len(evaluated), min_outcomes)
-        return False
-
-    raw = build_pooled_trainset(cfg)
-    if len(raw) < min_examples:
-        logger.info("Optimizer: only %d usable run examples, need %d — skipping", len(raw), min_examples)
-        return False
-
-    trainset = [dspy.Example(**ex).with_inputs(*INPUT_FIELDS) for ex in raw]
-    split = max(1, int(len(trainset) * 0.8))
-    train, val = trainset[:split], trainset[split:] or trainset[-1:]
-
-    prompt_model_id = cfg.optimizer.prompt_model_id or _default_prompt_model(cfg.llm.provider)
-    # Two roles: the task model runs candidate programs against history (many
-    # calls → the configured decision-tier model); the prompt model writes the
-    # candidate instructions (few calls → the heaviest reasoner).
-    task_lm = build_lm(cfg)
-    prompt_lm = build_lm(cfg, model_id=prompt_model_id)
-
-    program = dspy.ChainOfThought(WeeklyDecision)
-
-    logger.info(
-        "Optimizer: MIPROv2 with %d train / %d val runs (task=%s, prompt=%s)",
-        len(train), len(val), cfg.llm.model_id, prompt_model_id,
+    """Run a bounded instruction-only search; stage only a complete winner."""
+    from fundmgr.engine.bounded_optimizer import (
+        make_plan, checkpoint_path, run_search, _load,
     )
-
-    try:
-        dspy.configure(lm=task_lm)
-        optimizer = MIPROv2(
-            metric=decision_metric,
-            prompt_model=prompt_lm,
-            task_model=task_lm,
-            auto="light",
-            num_threads=1,
-        )
-        compiled = optimizer.compile(
-            program,
-            trainset=train,
-            valset=val,
-            requires_permission_to_run=False,
-        )
-    except Exception as exc:
-        logger.error("Optimizer: MIPROv2 failed: %s", exc, exc_info=True)
+    if resume is not None:
+        plan = _load(resume)["plan"]
+        return run_search(cfg, plan, resume, resume=True, retry_failed=retry_failed)
+    threshold = cfg.optimizer.min_outcomes if min_outcomes is None else min_outcomes
+    examples_threshold = cfg.optimizer.min_examples if min_examples is None else min_examples
+    evaluated = store.get_evaluated_outcomes()
+    if len(evaluated) < threshold:
+        logger.info("Optimizer: only %d evaluated outcomes, need %d — skipping", len(evaluated), threshold)
         return False
-
-    instructions = _compiled_instructions(compiled)
-    if not instructions:
-        logger.error("Optimizer: compiled program carries no instructions — nothing saved")
+    raw = build_pooled_trainset(cfg)
+    if len(raw) < examples_threshold:
+        logger.info("Optimizer: only %d usable run examples, need %d — skipping", len(raw), examples_threshold)
         return False
-
-    candidate = save_guidance_candidate(cfg, compiled, {
-        "n_train_runs": len(train),
-        "n_val_runs": len(val),
-        "n_outcomes": len(evaluated),
-        "training_runs": [{"run_id": e.get("run_id"), "source": e.get("source")} for e in raw[:split]],
-        "validation_runs": [{"run_id": e.get("run_id"), "source": e.get("source")} for e in raw[split:]],
-        "pooled_from": sorted({e.get("source", "") for e in raw} - {""}),
-        "task_model": cfg.llm.model_id,
-        "prompt_model": prompt_model_id,
-        "instructions": instructions,
-    })
-    logger.info("Optimizer: saved inactive candidate to %s; active guidance unchanged", candidate)
-    return True
+    plan = make_plan(cfg, raw)
+    return run_search(cfg, plan, checkpoint_path(cfg, plan))
 
 
 def candidate_directory(cfg: AppConfig) -> Path:

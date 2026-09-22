@@ -28,7 +28,7 @@ The Global and Buffett funds are deliberately **paired across providers on an id
 - **Consensus sampling** — every decision is run 3× in parallel and majority-voted per ticker; unanimous and majority-only actions are labelled separately
 - **Guardrails, not trust** — universe membership, stale-data block on buys, min trade size, position-weight clipping, sector concentration, max open positions, cash floor, and a turnover cap that drops the lowest-confidence trades. Every verdict is logged, so you can see what the model wanted versus what it got
 - **Won't run into a shut market** — cron knows nothing about holidays, so `fund run` resolves its universe's dominant trading calendar and skips before spending anything, naming the next session
-- **Learns from realised outcomes** — decisions are scored at a mandate-chosen horizon (28 days by default; 90 for Buffett), each thesis is judged on whether it *held* or merely *paid*, and the resulting lessons are injected into later prompts. Once enough outcomes accumulate, DSPy/MIPROv2 compiles an inactive decision-guidance candidate for evaluation
+- **Learns from realised outcomes** — decisions are scored at a mandate-chosen horizon (28 days by default; 90 for Buffett), each thesis is judged on whether it *held* or merely *paid*, and the resulting lessons are injected into later prompts. Once enough outcomes accumulate, a bounded instruction-only search proposes and tests an inactive decision-guidance candidate
 - **Monitored sleeves** — mirror a real broker account as a paper book with per-position kill criteria, target prices and add gates, watched daily via Telegram
 - **What-If Lab** — generate a hypothetical from-scratch portfolio for any fund profile against a clean-slate snapshot, optionally with a full monitoring plan, and promote one you like into a live sleeve
 - **Web dashboard** — one route per fund, plus paper books, live sleeves and the Lab
@@ -41,7 +41,7 @@ The Global and Buffett funds are deliberately **paired across providers on an id
 |---|---|
 | Language | Python 3.11+ |
 | LLM clients | `openai` (structured outputs), `anthropic` (JSON mode) |
-| Prompt optimization | `dspy-ai` — MIPROv2, gated on 30 evaluated outcomes |
+| Prompt optimization | Bounded instruction search with call/token limits and resumable checkpoints |
 | Sentiment | FinBERT (`ProsusAI/finbert`) — local, no API cost |
 | Market calendars | `exchange_calendars` — holidays, half-days, session hours |
 | Data | shared `financedata` library (prices, fundamentals, FX, news, macro), `yfinance`, SEC EDGAR |
@@ -106,7 +106,11 @@ are diagnostic only (not rewards for new candidate theses), outcome prices canno
 look past their horizon, and thesis evidence must have been published and cached
 inside the evaluation window. Missing history keeps outcomes pending.
 
-`fund optimize` now writes immutable candidates under
+`fund optimize --dry-run` reports a bounded search plan (default: seven calls,
+2,048 output tokens/call, low reasoning). Checkpoints preserve successful calls;
+provider failures stop the search. See the budget/resume instructions below.
+
+`fund optimize` writes immutable candidates under
 `config/compiled/candidates/<fund>/`. The prompt page lists these separately;
 compilation never replaces active guidance. Existing active guidance is preserved.
 `fund compare-guidance` records paired decisions on complete frozen weekly inputs;

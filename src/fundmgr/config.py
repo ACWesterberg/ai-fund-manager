@@ -107,16 +107,20 @@ def default_heavy_model(provider: str) -> str:
 
 @dataclass
 class OptimizerConfig:
-    # Heavy model that *writes* candidate instructions (MIPRO prompt_model).
-    # None → derived from llm.provider at run time (see default_heavy_model).
+    # Bounded instruction-only search, separate from live decision settings.
+    max_calls: int = 7
+    max_total_tokens: int = 200000  # conservative request reservations, not billed usage
+    max_output_tokens: int = 2048
+    reasoning_effort: str = "low"
+    validation_runs: int = 3
+    min_new_periods: int = 3  # own-fund matured decision dates since prior paid search
+    reuse_evaluations: bool = True
+    # Optional model override for the single instruction-writing call.
+    # None uses the fund's decision model.
     prompt_model_id: str | None = None
     min_outcomes: int = 30       # evaluated outcomes required before optimization runs
-    # Usable run-level examples required before MIPRO runs at all. MIPRO holds
-    # out 20% and picks the winning instructions on that slice, so at 8 examples
-    # it was selecting on 2 runs — with weekly excess return noise of roughly 2pp,
-    # the best of a dozen candidates beats the field by more than that from
-    # chance alone, and the artifact would look like an improvement while being
-    # none. This is the "should we believe it" threshold, not "can it run".
+    # Keep the minimum historical evidence gate even for the smaller search.
+    # Search validation alone never qualifies an artifact for promotion.
     min_examples: int = 25
     # Other funds' configs to pool training examples from (filenames in config/,
     # or absolute paths). Empty = this fund's own history only. Pooling shares

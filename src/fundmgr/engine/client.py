@@ -4,7 +4,6 @@ import json
 import os
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 
 from pydantic import ValidationError
 
@@ -32,7 +31,36 @@ def _schema_hint(schema: type = DecisionRun) -> str:
     )
 
 
-def call_llm(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun) -> tuple:
+def _report_usage(response, provider, callback):
+    """Report provider counters without treating absent usage as zero spend."""
+    if callback is None:
+        return
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        callback(None)
+        return
+    raw = usage.model_dump() if hasattr(usage, "model_dump") else vars(usage)
+    if provider == "openai":
+        inputs, outputs = raw.get("prompt_tokens"), raw.get("completion_tokens")
+        cached = (raw.get("prompt_tokens_details") or {}).get("cached_tokens")
+        reasoning = (raw.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        cache_write = None
+    else:
+        # Anthropic's input_tokens excludes cache reads and writes.
+        cache_write, cached = raw.get("cache_creation_input_tokens"), raw.get("cache_read_input_tokens")
+        inputs = raw.get("input_tokens")
+        if inputs is not None:
+            inputs += (cache_write or 0) + (cached or 0)
+        outputs, reasoning = raw.get("output_tokens"), None
+    callback({"provider": provider, "response_id": getattr(response, "id", None),
+              "model": getattr(response, "model", None), "input_tokens": inputs,
+              "output_tokens": outputs, "cached_input_tokens": cached,
+              "cache_write_input_tokens": cache_write, "reasoning_tokens": reasoning,
+              "raw": raw})
+
+
+def call_llm(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun,
+             *, max_retries: int | None = None, on_usage=None) -> tuple:
     """
     Call the configured LLM and return (parsed `schema` instance, raw response text).
     Uses OpenAI structured outputs when provider=openai, JSON-mode for Anthropic.
@@ -40,17 +68,21 @@ def call_llm(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun)
     model for focused calls like the stop-loss review.
     Raises LLMError on failure.
     """
+    retry_kwargs = {} if max_retries is None else {"max_retries": max_retries}
+    if on_usage is not None:
+        retry_kwargs["on_usage"] = on_usage
     if cfg.llm.provider == "openai":
-        return _call_openai(system, user, cfg, schema)
+        return _call_openai(system, user, cfg, schema, **retry_kwargs)
     elif cfg.llm.provider == "anthropic":
-        return _call_anthropic(system, user, cfg, schema)
+        return _call_anthropic(system, user, cfg, schema, **retry_kwargs)
     else:
         raise LLMError(f"Unknown LLM provider: {cfg.llm.provider!r}")
 
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 
-def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun) -> tuple:
+def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun,
+                 *, max_retries: int | None = None, on_usage=None) -> tuple:
     try:
         from openai import OpenAI
     except ImportError:
@@ -60,7 +92,7 @@ def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = Decision
     if not api_key:
         raise LLMError("OPENAI_API_KEY not set in environment / .env file")
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, **({"max_retries": max_retries} if max_retries is not None else {}))
 
     # gpt-5+ / o-series use max_completion_tokens and don't support custom temperature
     _NEW_API_PREFIXES = ("gpt-5", "o1", "o3", "o4")
@@ -92,9 +124,15 @@ def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = Decision
             **reasoning_kwargs,
         )
     except Exception as e:
+        completion = getattr(e, "completion", None)
+        if completion is not None:
+            _report_usage(completion, "openai", on_usage)
         raise LLMError(f"OpenAI API call failed: {e}") from e
 
+    _report_usage(response, "openai", on_usage)
     choice = response.choices[0]
+    if choice.finish_reason == "length":
+        raise LLMError("OpenAI response exceeded the output token limit")
     raw_text = choice.message.content or ""
 
     if choice.message.parsed is None:
@@ -111,7 +149,8 @@ def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = Decision
 
 # ── Anthropic ─────────────────────────────────────────────────────────────────
 
-def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun) -> tuple:
+def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun,
+                    *, max_retries: int | None = None, on_usage=None) -> tuple:
     try:
         import anthropic
     except ImportError:
@@ -121,7 +160,7 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
     if not api_key:
         raise LLMError("ANTHROPIC_API_KEY not set in environment / .env file")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, **({"max_retries": max_retries} if max_retries is not None else {}))
 
     # Same in-context schema text as the OpenAI path (fair head-to-head).
     schema_hint = _schema_hint(schema)
@@ -159,6 +198,10 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
             response = stream.get_final_message()
     except Exception as e:
         raise LLMError(f"Anthropic API call failed: {e}") from e
+
+    _report_usage(response, "anthropic", on_usage)
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise LLMError("Anthropic response exceeded the output token limit")
 
     # With thinking enabled the first block is a thinking block — take the text.
     raw_text = next(

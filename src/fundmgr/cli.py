@@ -1667,53 +1667,93 @@ def export_dspy(output: str, score_first: bool):
 
 
 @cli.command()
-@click.option("--min-outcomes", type=int, default=None,
-              help="Override the evaluated-outcome threshold from config")
-@click.option("--dry-run", is_flag=True, help="Report trainset stats without running MIPRO")
-def optimize(min_outcomes: int | None, dry_run: bool):
-    """Optimize the decision prompt from evaluated outcomes (DSPy MIPROv2).
-
-    Builds one training example per past run whose 28-day per-ticker outcomes
-    vs the benchmark are known, searches instruction space for the
-    WeeklyDecision signature with an alpha-weighted metric, and saves the
-    winning instructions as an inactive candidate for subsequent evaluation.
-    """
+@click.option("--min-outcomes", type=int, default=None, help="Override the evaluated-outcome threshold")
+@click.option("--dry-run", is_flag=True, help="Inspect data and worst-case request reservations without paid calls")
+@click.option("--max-calls", type=click.IntRange(min=1), default=None)
+@click.option("--max-total-tokens", type=click.IntRange(min=1), default=None,
+              help="Cumulative conservative token reservations, not billed usage or a dollar cap")
+@click.option("--max-output-tokens", type=click.IntRange(min=1), default=None)
+@click.option("--resume", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option("--retry-failed", is_flag=True, help="Explicitly retry an uncertain/failed request; may bill again")
+@click.option("--force-search", is_flag=True, help="Bypass the new-evidence gate; retain all call/token limits")
+def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search):
+    """Bounded instruction-only search. Save a winner as an inactive candidate."""
     import logging
+    from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory
+    from fundmgr.engine.bounded_optimizer import make_plan, plan_cost, checkpoint_path, _load, identity, run_search
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     cfg, store = _get_store()
-    from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory, guidance_path, run_optimization
+    for key, value in (("max_calls", max_calls), ("max_total_tokens", max_total_tokens),
+                       ("max_output_tokens", max_output_tokens)):
+        if value is not None:
+            setattr(cfg.optimizer, key, value)
+    if retry_failed and resume is None:
+        raise click.ClickException("--retry-failed requires --resume")
+    try:
+        if resume:
+            saved = _load(resume)
+            plan = saved["plan"]
+            if plan["identity"] != identity(cfg):
+                raise ValueError("Checkpoint settings changed; keep model/output/reasoning settings identical")
+            path = resume
+            click.echo(f"Saved requests: {len(saved['attempts'])}; reserved tokens: "
+                       f"{sum(a['reserved_tokens'] for a in saved['attempts'])}")
+        else:
+            outcomes = store.get_evaluated_outcomes()
+            examples = build_pooled_trainset(cfg)
+            threshold = cfg.optimizer.min_outcomes if min_outcomes is None else min_outcomes
+            click.echo(f"Evaluated outcomes: {len(outcomes)} (need {threshold})")
+            click.echo(f"Usable run examples: {len(examples)} (need {cfg.optimizer.min_examples})")
+            if len(outcomes) < threshold or len(examples) < cfg.optimizer.min_examples:
+                click.echo("Minimum data not met; no model calls made.")
+                return
+            plan = make_plan(cfg, examples)
+            path = checkpoint_path(cfg, plan)
+        if not resume and not path.exists():
+            from fundmgr.engine.research_costs import evidence_gate
+            gate = evidence_gate(cfg, plan)
+            click.echo(f"New own-fund decision dates: {len(gate['new_periods'])}; required after first search: {gate['required']}")
+            if not gate["eligible"] and not force_search:
+                click.echo("Search skipped: insufficient new evidence. No paid calls.")
+                return
+        cost = plan_cost(plan)
+        click.echo(f"Instruction-only search: {cost['planned_calls']} planned calls; hard cap {cfg.optimizer.max_calls}")
+        click.echo(f"Output cap: {cfg.optimizer.max_output_tokens} tokens/call; reasoning: {cfg.optimizer.reasoning_effort}")
+        click.echo(f"Worst-case token reservation: {cost['reserved_token_estimate']:,}; budget {cfg.optimizer.max_total_tokens:,}")
+        click.echo("Reservations use text bytes + schema/protocol allowance + output cap; this is not a dollar estimate.")
+        click.echo(f"Checkpoint: {path}")
+        click.echo(f"Candidate directory: {candidate_directory(cfg)}")
+        if dry_run:
+            if cost["planned_calls"] > cfg.optimizer.max_calls or cost["reserved_token_estimate"] > cfg.optimizer.max_total_tokens:
+                click.echo("Plan exceeds configured budget; a new search would make no calls.")
+            click.echo("Dry run: no paid calls. Existing MIPRO runs cannot be resumed by this search.")
+            return
+        if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search):
+            click.echo("Inactive candidate saved. Active guidance unchanged; forward evaluation required.")
+        else:
+            click.echo("No improved candidate saved. Active guidance unchanged.")
+    except (OSError, ValueError, RuntimeError, KeyError, LLMError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    threshold = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
-    evaluated = store.get_evaluated_outcomes()
-    examples = build_pooled_trainset(cfg)
-    resolved = sum(
-        1 for e in examples for v in (e.get("ticker_theses") or {}).values()
-        if v in ("held", "broke")
-    )
 
-    click.echo("\n─── Prompt Optimizer ───────────────────────────────")
-    click.echo(f"  Evaluated outcomes:   {len(evaluated)} (need {threshold})")
-    click.echo(f"  Usable run examples:  {len(examples)} (need {cfg.optimizer.min_examples})")
-    if cfg.optimizer.pool_configs:
-        by_source: dict[str, int] = {}
-        for e in examples:
-            by_source[e.get("source") or "?"] = by_source.get(e.get("source") or "?", 0) + 1
-        click.echo("    pooled from:        " + ", ".join(
-            f"{src} ({n})" for src, n in sorted(by_source.items())
-        ))
-    click.echo(f"  Resolved theses:      {resolved} (diagnostic only; excluded from search reward)")
-    click.echo(f"  Active guidance:      {guidance_path(cfg)}")
-    click.echo(f"  Candidate directory:  {candidate_directory(cfg)}")
 
-    if dry_run:
-        click.echo("  (dry run — MIPRO not executed)")
-        return
-
-    if run_optimization(cfg, store, min_outcomes=min_outcomes):
-        click.echo("\n  ✓ Inactive candidate saved — evaluation is required; active guidance is unchanged.")
-    else:
-        click.echo("\n  No new guidance produced (threshold not met or optimization failed).")
+@cli.command("optimizer-usage")
+def optimizer_usage():
+    """Report saved provider usage across funds sharing the compiled directory."""
+    from fundmgr.engine.research_costs import usage_report
+    cfg = load_config()
+    try:
+        report = usage_report(cfg.optimizer.compiled_dir / "searches")
+    except (OSError, ValueError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Searches: {report['searches']}; request attempts: {report['attempts']}; local cache hits: {report['local_cache_hits']}")
+    for model, totals in sorted(report["by_model"].items()):
+        click.echo(f"{model}: {totals['input_tokens']:,} input; {totals['output_tokens']:,} output tokens")
+        click.echo(f"  Reported subsets: {totals['cached_input_tokens']:,} cached input; "
+                   f"{totals['cache_write_input_tokens']:,} cache writes; {totals['reasoning_tokens']:,} reasoning")
+    click.echo(f"Attempts without complete provider usage: {report['unknown_usage_attempts']}")
+    click.echo("Subset totals include only reported counters. Missing usage is unknown, not free.")
+    click.echo("This covers saved optimizer calls only, not account billing or earlier MIPRO runs. No dollar estimate.")
 
 
 @cli.command("repair-outcomes")

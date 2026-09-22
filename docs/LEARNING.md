@@ -24,7 +24,7 @@ they are not interchangeable with profitable allocations.
 - **Decision identity:** each thesis judgment carries an outcome ID. Distinct
   decisions on the same ticker retain their own evidence and verdicts. Legacy
   ticker-only responses are accepted only when the ticker is unique in the batch.
-- **Inactive candidates:** `fund optimize` writes a compiled program and guidance
+- **Inactive candidates:** `fund optimize` writes an instruction artifact and guidance
   manifest under `config/compiled/candidates/<fund>/<candidate>/`. The manifest
   records the metric, config fingerprint and incumbent guidance fingerprint.
   The prompt page lists candidates separately from active and archived guidance.
@@ -37,6 +37,92 @@ promotion dataset. Rebuilding historical labels is a separate, explicit operatio
 A news article first cached after a window is deliberately ineligible, even if it
 claims an earlier publication date. This conservative rule can reduce evidence
 coverage until a reliable historical availability source is implemented.
+
+## Bounded optimizer: inspect cost before running
+
+`fund optimize` now uses a small native instruction-only search, replacing MIPRO's
+bootstrapping and few-shot search. It proposes **one** alternative, then evaluates
+that alternative and the incumbent on the same historical cases. It emits a
+candidate only after every call succeeds and its mean directional score exceeds
+the incumbent's. This search reward is still a surrogate, not proof of portfolio
+improvement. No DSPy or Optuna installation is needed for this path; the optional
+DSPy prototype and older artifacts remain available separately.
+
+Default settings (independent of the live fund's reasoning/output settings):
+
+```yaml
+optimizer:
+  max_calls: 7
+  max_total_tokens: 200000
+  max_output_tokens: 2048
+  reasoning_effort: low
+  validation_runs: 3
+```
+
+The chronological 80/20 split remains; at most three runs from the validation
+portion are used, selected by date before performance is examined. The proposal
+uses bounded summaries of up to six training runs; no validation labels enter
+that request. Validation calls retain their full historical context, with no
+few-shot demonstrations or extra textual chain-of-thought field. The configured
+fund model is used for evaluation and, by default, proposal writing. An explicit
+`prompt_model_id` still overrides the latter. Live consensus settings are not
+changed; search uses one sample per case and requires independent forward review.
+
+First inspect the data, checkpoint path, and complete worst-case reservation:
+
+```sh
+FUND_CONFIG=config/config.yaml .venv/bin/fund optimize --dry-run
+```
+
+A new run refuses to start if the entire planned search exceeds either limit.
+Large historical contexts may exceed the default budget; inspect that result
+before explicitly choosing a larger limit. There is no automatic budget increase.
+`max_total_tokens` is an **admission-control reservation**, calculated from UTF-8
+text bytes, schema text twice, an 8,192-token protocol allowance per request, and
+the output cap. It deliberately overestimates normal text tokenization and never
+refunds unused output allocations. It is not measured provider usage, an invoice
+estimate, or a guaranteed dollar cap. Each provider request also receives the
+actual output token cap; OpenAI's completion limit includes reasoning tokens
+([official reasoning documentation](https://developers.openai.com/api/docs/guides/reasoning)).
+Budgets apply to one search, not the account or all scheduled funds combined.
+
+When satisfied with the displayed limits, invoke `fund optimize` without
+`--dry-run`. SDK retries are disabled. Billing/quota, transport, truncation and
+schema failures stop immediately; no fallback model calls or zero-valued scores
+hide failures. Small output limits can cause truncation; this stops the search
+rather than silently paying for a larger response.
+
+Each request is reserved on disk **before** transmission. Completed structured
+responses and proposals are saved atomically under
+`config/compiled/searches/<fund>/<plan-hash>.json`, together with the frozen
+training/validation selection, settings and cumulative reservations. A per-file
+lock prevents concurrent callers from executing the same search. Successful
+responses are reused on resume, and completed searches return their existing
+result rather than starting over.
+
+```sh
+fund optimize --resume config/compiled/searches/fund/PLAN_HASH.json --dry-run
+fund optimize --resume config/compiled/searches/fund/PLAN_HASH.json
+```
+
+Failed/interrupted requests remain charged against both budgets because they may
+already have been billed. Retrying one requires explicit `--retry-failed`; if the
+extra attempt would exceed the cap, explicitly increase the **cumulative** limit:
+
+```sh
+fund optimize --resume config/compiled/searches/fund/PLAN_HASH.json \
+  --retry-failed --max-calls 8
+```
+
+The token reservation cap can similarly be changed with `--max-total-tokens`.
+Changing model, mandate, incumbent guidance, output cap, reasoning effort, or
+validation count rejects resume: those change the experiment and require a new
+search. Resumes use the saved data even if more history has since arrived.
+Checkpoints are local recovery records with checksums, not tamper-proof receipts.
+Do not delete a checkpoint to bypass limits. Ctrl+C preserves completed work;
+a hard process kill can leave an uncertain in-flight request that also requires
+explicit retry authorization. Older MIPRO runs cannot be resumed through this
+checkpoint format, and their cache is not imported.
 
 ## Frozen paired comparisons
 
@@ -261,3 +347,33 @@ portfolio scoring is a separate comparison step, not its training reward.
 
 Regression tests use temporary stores, mocked providers and mocked model output.
 They establish accounting and isolation behavior, not investment performance.
+
+
+### Avoiding repeated search spending
+
+The default `optimizer.min_new_periods: 3` requires three new distinct evaluated
+own-fund decision dates after a paid search, including an interrupted search.
+Pooled funds do not advance this gate. The initial outcome/example minimums still
+apply. Dates are a scheduling proxy, not proof of independent evidence. Scheduled
+weekly commands can therefore check eligibility without paying every week.
+Resume interrupted work explicitly; `--force-search` bypasses only this scheduling
+gate and records the override, preserving call and token limits.
+
+With `optimizer.reuse_evaluations: true` (default), successful search evaluation
+responses are cached under `config/compiled/request_cache/`. Keys include exact
+system/user content, model settings, output schema, schema hint and transport
+version. Proposals are not shared. Identical requests across searches or funds
+sharing this directory can reuse one response; changed requests make fresh calls.
+Scores are recomputed against the current labels. Reused responses are the same
+sample, not additional independent evidence. This cache does not change production
+or forward evaluation calls, and does not automatically span other projects.
+
+`FUND_CONFIG=config/config.yaml .venv/bin/fund optimizer-usage` is an offline report
+across saved searches in the configured compiled directory. It reports provider
+input/output counts and available cache/reasoning subsets, without double-counting
+local cache hits. Reasoning is part of output; cache reads/writes are part of input.
+Missing counters and interrupted calls without a usage response remain unknown.
+The report does not reconstruct old MIPRO costs or other application spending and
+is not an invoice or a dollar budget. Conservative admission reservations remain
+separate from provider usage. Keep checkpoints and caches private and preserve
+checkpoints for accounting; deleting them also removes scheduling history.

@@ -123,9 +123,10 @@
 # 30 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-watch >> data/logs/paper_watch.log 2>&1
 
 
-# ═══ PROMPT OPTIMIZATION (DSPy MIPROv2) — Sunday, markets closed ═════════════
-# Needs the optional dep (uv sync --extra optimize) + 30 evaluated outcomes and
-# 8 scored runs per fund; skips harmlessly until then. Staggered per fund.
+# ═══ BOUNDED PROMPT SEARCH — Sunday eligibility checks ═════════════════════
+# Needs 30 evaluated outcomes and 25 usable runs (pooling allowed). After the
+# first paid search, waits for 3 new own-fund evaluated decision dates. Skips
+# without calls until eligible. Winners remain inactive pending evaluation.
 
 0 2 * * 0 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund optimize >> data/logs/optimize.log 2>&1
 30 2 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_global.yaml .venv/bin/fund optimize >> data/logs/optimize_global.log 2>&1

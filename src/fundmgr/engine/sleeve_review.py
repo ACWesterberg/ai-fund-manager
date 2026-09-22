@@ -45,9 +45,9 @@ value is still exactly what the decision left, since an edit you made afterwards
 is yours to keep.
 
 Funding model: the sleeve's NAV is fixed — no new capital. A buy has to be paid
-for out of the book, so guardrails see a snapshot with the run's own sells
-already settled (`_fund_from_sells`). That is what makes "sell A, add B" pass
-the cash floor in a fully-deployed sleeve instead of being rejected outright.
+for out of the book. Shared guardrails reserve accepted sales and purchases
+in confidence order against the original snapshot. Only accepted sales can
+fund later buys; `_fund_from_sells` reports that funding without changing it.
 """
 from __future__ import annotations
 
@@ -879,18 +879,10 @@ def _share_counts(actions, snap: PortfolioSnapshot, features: dict,
 # ── Funding ───────────────────────────────────────────────────────────────────
 
 def _fund_from_sells(snap: PortfolioSnapshot, decision, cfg: AppConfig) -> PortfolioSnapshot:
-    """Settle the run's own sells before the guardrails price its buys.
+    """Report the cash available after accepted sales, including their fees.
 
-    Guardrails check a buy against cash on hand and reject anything that would
-    breach the cash floor. A fully-deployed sleeve holds almost no cash, so
-    without this every add-on is rejected no matter how well funded the paired
-    sell leaves it. Applying the sells first — shares down, proceeds to cash,
-    NAV unchanged — models settlement and lets "sell A, add B" through, while
-    an unfunded buy still fails the same floor it always did.
-
-    Sells themselves are unaffected: guardrails check them for universe
-    membership and minimum trade size only, neither of which reads the
-    snapshot.
+    This snapshot is for reporting only. Guardrails must receive the original
+    book because they already project accepted trades themselves.
     """
     by_ticker = {p.ticker: p for p in snap.positions}
     positions = [copy.copy(p) for p in snap.positions]
@@ -1180,13 +1172,11 @@ def review_sleeve(
 
     decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, cfg)
 
-    # Guardrails price the buys against a book where this run's sells have
-    # settled — see _fund_from_sells. Held and planned names join the scoped
-    # universe so an existing position is never rejected as "not in universe".
-    funded = _fund_from_sells(snap, decision, cfg)
+    # The shared guardrails settle accepted trades against the original book.
+    # Pre-settling proposed sells here would count their proceeds twice.
     universe_tickers = {t.yahoo_ticker for t in universe} | must_have
-    guardrails = apply_guardrails(decision, funded, features, universe_tickers, cfg)
-    unfunded = _drop_unfunded_buys(guardrails, snap, cfg)
+    guardrails = apply_guardrails(decision, snap, features, universe_tickers, cfg)
+    funded = _fund_from_sells(snap, _SellsOnly(guardrails.approved_actions), cfg)
 
     approved = {(a.ticker, a.side) for a in guardrails.approved_actions}
     sizing = _share_counts(guardrails.approved_actions, snap, features, meta, store)
@@ -1232,17 +1222,6 @@ def review_sleeve(
             "add_on": a.side == "buy" and a.ticker not in held_tickers and a.ticker not in targets,
             "approved": (a.ticker, a.side) in approved,
         })
-    # Both post-verdict passes drop actions the per-action checks approved, so
-    # say which one did it rather than leaving a silently un-approved row.
-    for row in actions:
-        if row["status"] == "APPROVED" and not row["approved"]:
-            row["status"] = "DROPPED"
-            row["reason"] = (
-                "Unfunded once the turnover cap dropped the sells paying for it"
-                if row["ticker"] in unfunded and row["side"] == "buy"
-                else "Dropped by turnover cap (lower confidence than kept trades)"
-            )
-
     buys = [r for r in actions if r["side"] == "buy" and r["approved"]]
     sells = [r for r in actions if r["side"] == "sell" and r["approved"]]
     # A swap costs turnover twice, so the cap truncates paired trades before it
@@ -1256,7 +1235,7 @@ def review_sleeve(
         "proposed_sek": round(wanted),
         "kept_sek": round(kept),
         "dropped": sum(1 for r in actions
-                       if r["status"] == "DROPPED" and "turnover cap" in r["reason"]),
+                       if not r["approved"] and "turnover cap" in r["reason"]),
     }
     ages = sorted(f.data_age_trading_days for f in screened.values())
 

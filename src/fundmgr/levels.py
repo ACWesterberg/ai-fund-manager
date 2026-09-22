@@ -16,6 +16,7 @@ SKIP_NO_PRICE = "no_price"
 SKIP_NOT_HELD = "not_held"
 SKIP_BELOW_MIN = "below_min"
 SKIP_AT_TARGET = "at_target"
+SKIP_RISK = "risk_limit"
 
 _DEFERRED_NOTES: dict[str, str] = {
     SKIP_MARKET_CLOSED: "market closed, sells on the next open",
@@ -23,6 +24,7 @@ _DEFERRED_NOTES: dict[str, str] = {
     SKIP_NOT_HELD: "no longer held",
     SKIP_BELOW_MIN: "below the minimum trade size",
     SKIP_AT_TARGET: "already at target weight",
+    SKIP_RISK: "fill rejected by portfolio limits",
 }
 
 # Said when the filler recorded no reason at all. Names the consequence, which

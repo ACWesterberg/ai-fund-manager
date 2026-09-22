@@ -582,7 +582,7 @@ def test_paper_fill_cli(paper_dir, mock_market):
     from click.testing import CliRunner
     from fundmgr.cli import cli
 
-    paper.create_portfolio("Fillable", 100_000, "AAPL 100%")
+    paper.create_portfolio("Fillable", 100_000, "AAPL 80%")
     before = {p.ticker: p.shares for p in paper.open_portfolio("fillable")[1].get_positions()}
 
     result = CliRunner().invoke(

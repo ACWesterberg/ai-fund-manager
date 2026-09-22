@@ -56,11 +56,15 @@ The Global and Buffett funds are deliberately **paired across providers on an id
 
 ```bash
 uv sync                                   # or: pip install -e .
-cp .env.example .env                      # API keys + Telegram
+cp .env.example .env                      # API keys, Telegram + FUND_WEB_PASSWORD
 fund init                                 # initialise a portfolio
 fund run --dry-run                        # full pipeline, nothing saved
 uvicorn fundmgr.web.app:app --reload      # dashboard at localhost:8000
 ```
+
+The dashboard requires `FUND_WEB_PASSWORD` in `.env` (username defaults to `fund`).
+Use HTTPS when accessing it remotely. Until a password is configured, dashboard
+requests return 503; the separately signed deployment webhook remains available.
 
 Select a fund with `FUND_CONFIG`; unset means the Nordic book:
 

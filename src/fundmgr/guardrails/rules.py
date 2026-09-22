@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Literal
 
 from fundmgr import regions, styles
 from fundmgr.config import AppConfig
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.engine.schema import Action, DecisionRun
-from fundmgr.state.models import PortfolioSnapshot
+from fundmgr.state.models import PortfolioSnapshot, Position
 
 
 # The allocation dials a buy is measured against. Ceilings only, in both cases:
@@ -72,20 +73,43 @@ def apply_guardrails(
     verdicts: list[GuardrailVerdict] = []
 
     nav = snap.nav_sek
-    current_positions = {p.ticker for p in snap.positions if p.shares > 0}
+    projected = deepcopy(snap)
     mix_ceilings = _mix_ceilings(cfg)
+    counts = Counter(a.ticker for a in decision.actions)
+    turnover = 0.0
 
-    for action in decision.actions:
+    # Reserve cash, exposure and turnover as each trade is accepted. There is
+    # no later pruning that could remove a sell another trade depended upon.
+    for action in sorted(decision.actions, key=lambda a: a.confidence, reverse=True):
+        if counts[action.ticker] > 1:
+            verdicts.append(GuardrailVerdict(action, False, rejection_reason="Duplicate ticker"))
+            continue
+        current_positions = {p.ticker for p in projected.positions if p.shares > 0}
         verdict = _check_action(
-            action, snap, features, universe_tickers, current_positions, cfg, nav,
+            action, projected, features, universe_tickers, current_positions, cfg, nav,
             mix_ceilings,
         )
         verdicts.append(verdict)
-        if verdict.approved:
-            approved.append(verdict.action)
-
-    # Turnover cap: if aggregate trade value exceeds max, drop lowest-confidence trades
-    approved = _apply_turnover_cap(approved, nav, cfg)
+        if not verdict.approved:
+            continue
+        action = verdict.action
+        if action.side != "hold":
+            if turnover + action.sek_estimate > nav * cfg.risk.max_turnover_pct / 100 + 1e-9:
+                verdict.approved = False
+                verdict.rejection_reason = "Aggregate turnover cap exceeded"
+                continue
+            turnover += action.sek_estimate
+            pos = next((p for p in projected.positions if p.ticker == action.ticker), None)
+            current = pos.market_value_sek if pos else 0.0
+            delta = action.sek_estimate * (1 if action.side == "buy" else -1)
+            if pos is None:
+                pos = Position(action.ticker, 0, 1, 1)
+                projected.positions.append(pos)
+            # Synthetic shares keep the projected snapshot in book currency.
+            pos.current_price_sek = 1.0
+            pos.shares = max(0.0, current + delta)
+            projected.cash_sek -= delta + cfg.fees.calc(action.sek_estimate)
+        approved.append(action)
 
     # Cash target clamping
     cash_target = decision.cash_target_pct
@@ -144,7 +168,7 @@ def _check_action(
     # 2. Stale data block (buys only)
     if action.side == "buy":
         feat = features.get(action.ticker)
-        if feat is None:
+        if feat is None or not math.isfinite(feat.last_price) or feat.last_price <= 0:
             v.approved = False
             v.rejection_reason = "No price data available"
             return v
@@ -153,35 +177,31 @@ def _check_action(
             v.rejection_reason = f"Stale data ({feat.data_age_trading_days} trading days old)"
             return v
 
-    # 3. Min trade size
-    if action.sek_estimate < cfg.risk.min_trade_sek and action.side != "hold":
-        v.approved = False
-        v.rejection_reason = (
-            f"Trade size {action.sek_estimate:.0f} SEK below minimum {cfg.risk.min_trade_sek:.0f} SEK"
-        )
-        return v
+    if not math.isfinite(nav) or nav <= 0:
+        return GuardrailVerdict(action, False, rejection_reason="Invalid portfolio NAV")
+    if any(p.shares > 0 and (not math.isfinite(p.current_price_sek) or p.current_price_sek <= 0)
+           for p in snap.positions):
+        return GuardrailVerdict(action, False, rejection_reason="Missing portfolio valuation")
 
-    # 4. Max position weight — clip the target weight
-    if action.side == "buy" and action.target_weight_pct > cfg.risk.max_position_pct:
-        clipped_weight = cfg.risk.max_position_pct
-        clipped_sek = nav * clipped_weight / 100
-        requested_weight = action.target_weight_pct  # the note's "from" — lost once we rebuild
-        # Adjust sek_estimate proportionally
-        action = Action(
-            ticker=action.ticker,
-            side=action.side,
-            target_weight_pct=clipped_weight,
-            sek_estimate=clipped_sek,
-            confidence=action.confidence,
-            thesis=action.thesis,
-            stop_loss_pct=action.stop_loss_pct,
-            take_profit_pct=action.take_profit_pct,
-        )
-        v.action = action
+    requested_weight = action.target_weight_pct
+    target_weight = (min(requested_weight, cfg.risk.max_position_pct)
+                     if action.side == "buy" else requested_weight)
+    current_value = sum(p.market_value_sek for p in snap.positions if p.ticker == action.ticker)
+    target_value = nav * target_weight / 100
+    trade_value = (max(0.0, target_value - current_value) if action.side == "buy"
+                   else max(0.0, current_value - target_value))
+    action = action.model_copy(update={"target_weight_pct": target_weight, "sek_estimate": trade_value})
+    v.action = action
+    if target_weight != requested_weight:
         v.clipped = True
-        v.clip_note = (
-            f"Weight clipped from {requested_weight:.1f}% to {clipped_weight:.1f}% (max_position_pct)"
-        )
+        v.clip_note = f"Weight clipped from {requested_weight:.1f}% to {target_weight:.1f}% (max_position_pct)"
+
+    if trade_value <= 0:
+        return GuardrailVerdict(action, False, rejection_reason="Already at target or position not held")
+    if trade_value < cfg.risk.min_trade_sek:
+        v.approved = False
+        v.rejection_reason = f"Trade size {trade_value:.0f} SEK below minimum {cfg.risk.min_trade_sek:.0f} SEK"
+        return v
 
     # 5. Sector concentration cap
     if action.side == "buy":
@@ -248,7 +268,7 @@ def _check_action(
 
     # 8. Cash floor check for buys
     if action.side == "buy":
-        projected_cash = snap.cash_sek - action.sek_estimate
+        projected_cash = snap.cash_sek - action.sek_estimate - cfg.fees.calc(action.sek_estimate)
         projected_cash_pct = projected_cash / nav * 100 if nav > 0 else 0
         if projected_cash_pct < cfg.risk.min_cash_pct:
             v.approved = False
@@ -260,36 +280,11 @@ def _check_action(
     return v
 
 
-def _apply_turnover_cap(
-    actions: list[Action],
-    nav: float,
-    cfg: AppConfig,
-) -> list[Action]:
-    """Drop lowest-confidence non-hold trades until aggregate turnover is within cap."""
-    max_turnover = nav * cfg.risk.max_turnover_pct / 100
-    trades = [a for a in actions if a.side != "hold"]
-    holds = [a for a in actions if a.side == "hold"]
-
-    total = sum(a.sek_estimate for a in trades)
-    if total <= max_turnover:
-        return actions
-
-    # Sort by confidence descending; drop lowest-confidence trades until within cap
-    trades_sorted = sorted(trades, key=lambda a: a.confidence, reverse=True)
-    kept: list[Action] = []
-    running = 0.0
-    for trade in trades_sorted:
-        if running + trade.sek_estimate <= max_turnover:
-            kept.append(trade)
-            running += trade.sek_estimate
-
-    return holds + kept
-
-
 def shares_for_action(
     action: Action,
     snap: PortfolioSnapshot,
     features: dict[str, TickerFeatures],
+    cfg: AppConfig | None = None,
 ) -> int | None:
     """
     Calculate the number of whole shares to trade for a buy/sell action.
@@ -300,21 +295,18 @@ def shares_for_action(
         return None
 
     price = feat.last_price
-    if price <= 0:
+    if cfg is not None and cfg.fx_to_sek and feat.currency != "SEK":
+        from fundmgr.data.fx import rate_to_sek
+        rate = rate_to_sek(feat.currency)
+        if rate is None or not math.isfinite(rate) or rate <= 0:
+            return None
+        price *= rate
+    if not math.isfinite(price) or price <= 0:
         return None
-
-    if action.side == "buy":
-        shares = math.floor(action.sek_estimate / price)
-    else:  # sell
-        # Sell down to target weight
-        target_value = snap.nav_sek * action.target_weight_pct / 100
-        current_pos = next((p for p in snap.positions if p.ticker == action.ticker), None)
-        if current_pos is None:
-            return 0
-        current_value = current_pos.shares * price
-        sell_value = current_value - target_value
-        if sell_value <= 0:
-            return 0
-        shares = math.floor(sell_value / price)
-
+    if action.side == "hold":
+        return 0
+    shares = math.floor(action.sek_estimate / price)
+    if action.side == "sell":
+        position = next((p for p in snap.positions if p.ticker == action.ticker), None)
+        shares = min(shares, math.floor(position.shares)) if position else 0
     return max(0, shares)

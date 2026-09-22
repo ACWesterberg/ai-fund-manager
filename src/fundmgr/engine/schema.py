@@ -19,7 +19,7 @@ class Action(BaseModel):
     )
     sek_estimate: float = Field(
         ge=0,
-        description="Approximate SEK value of the trade (0 for holds). Used for guardrail checks.",
+        description="Approximate SEK value of the trade (0 for holds). Guardrails recompute the approved amount from the target weight and current holding.",
     )
     confidence: float = Field(
         ge=0, le=1,

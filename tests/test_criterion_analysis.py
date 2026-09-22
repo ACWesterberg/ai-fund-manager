@@ -576,6 +576,7 @@ def test_the_cli_can_set_an_add_criterion(store, fake_llm, monkeypatch, tmp_path
     monkeypatch.setattr(paper, "_search_symbol", lambda name: None)
     import fundmgr.data.benchmark as benchmark
     monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", lambda store, **kw: True)
+    monkeypatch.setattr("fundmgr.data.quotes.live_prices", lambda tickers: {t: 77.0 for t in tickers})
     paper.create_portfolio("Svenska Aktier", 10_000, "", kind="live",
                            holdings_override=[{"ticker": "DYVOX.ST", "name": "Dynavox",
                                                "weight_pct": 100, "shares": 10,

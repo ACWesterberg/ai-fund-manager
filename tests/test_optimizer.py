@@ -631,6 +631,7 @@ def test_optimization_stages_candidate_without_replacing_incumbent(cfg, monkeypa
     monkeypatch.setitem(sys.modules, "dspy", SimpleNamespace(
         Example=Example, ChainOfThought=lambda signature: object(), configure=lambda **kw: None))
     monkeypatch.setitem(sys.modules, "dspy.teleprompt", SimpleNamespace(MIPROv2=Compiler))
+    monkeypatch.setitem(sys.modules, "optuna", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "fundmgr.engine.dspy_program", SimpleNamespace(
         WeeklyDecision=object(), build_lm=lambda *a, **kw: object()))
     monkeypatch.setattr(optimizer, "build_pooled_trainset", lambda cfg: [
@@ -642,3 +643,16 @@ def test_optimization_stages_candidate_without_replacing_incumbent(cfg, monkeypa
     assert captured["metric"] is optimizer.decision_metric
     assert load_guidance(cfg) == "Keep me"
     assert len(optimizer.guidance_versions(cfg)["candidates"]) == 1
+
+
+def test_missing_optuna_fails_before_any_model_setup(cfg, monkeypatch, caplog):
+    import sys
+    from fundmgr.engine import optimizer
+
+    monkeypatch.setitem(sys.modules, "dspy", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "dspy.teleprompt", SimpleNamespace(MIPROv2=object()))
+    monkeypatch.setitem(sys.modules, "optuna", None)
+    monkeypatch.setitem(sys.modules, "fundmgr.engine.dspy_program", None)
+    assert not optimizer.run_optimization(cfg, SimpleNamespace())
+    assert "Optuna is required" in caplog.text
+    assert "No model calls were made" in caplog.text

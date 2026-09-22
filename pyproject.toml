@@ -46,7 +46,7 @@ torch = [
     "torch>=2.2",        # install separately: pip install torch --index-url https://download.pytorch.org/whl/cpu
 ]
 optimize = [
-    "dspy>=2.6",         # MIPROv2 prompt optimization (fund optimize)
+    "dspy[optuna]>=2.6", # MIPROv2 requires Optuna for instruction search
 ]
 dev = [
     "pytest>=8.0",

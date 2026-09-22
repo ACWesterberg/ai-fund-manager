@@ -328,6 +328,15 @@ def run_optimization(
         logger.error("dspy is not installed — run: uv sync --extra optimize")
         return False
 
+    # MIPRO imports this lazily after bootstrapping/proposing instructions,
+    # which can already have incurred substantial model costs.
+    try:
+        import optuna  # noqa: F401
+    except ImportError:
+        logger.error("Optuna is required by MIPROv2 — run: uv sync --extra optimize. "
+                     "No model calls were made.")
+        return False
+
     from fundmgr.engine.dspy_program import WeeklyDecision, build_lm
 
     min_outcomes = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes

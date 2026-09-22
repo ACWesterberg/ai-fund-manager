@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel, Field
 
-from fundmgr.engine.client import call_llm, _schema_hint
+from fundmgr.engine.client import call_llm, _schema_hint, LLMError
 from fundmgr.engine.experiments import digest
 from fundmgr.engine.prompt import assemble_system_prompt
 from fundmgr.engine.schema import DecisionRun
@@ -127,13 +127,16 @@ def plan_cost(plan):
                     for case in plan["cases"]
                     for user in (raw_task_input(case), case["compact_input"]))
         return {"planned_calls": 2 * len(plan["cases"]), "reserved_token_estimate": total,
+                "proposal_reservation": 0, "evaluation_reservation": total,
                 "max_output_tokens_per_call": output, "max_output_tokens_total": 2 * len(plan["cases"]) * output}
-    total = reservation(plan["proposal_system"], plan["proposal_user"], Proposal, output)
+    proposal_reservation = reservation(plan["proposal_system"], plan["proposal_user"], Proposal, output)
+    total = proposal_reservation
     for case in plan["cases"]:
         for guidance in (ident["guidance"], "x" * 16000):  # max 4000 Unicode chars -> <=16000 UTF-8 bytes
             total += reservation(assemble_system_prompt(case["fields"]["mandate"], guidance),
                                  task_input(case), DecisionRun, output)
     return {"planned_calls": 1 + 2 * len(plan["cases"]), "reserved_token_estimate": total,
+            "proposal_reservation": proposal_reservation, "evaluation_reservation": total - proposal_reservation,
             "max_output_tokens_per_call": output,
             "max_output_tokens_total": (1 + 2 * len(plan["cases"])) * output}
 
@@ -157,10 +160,16 @@ def _cache_lock(path, enabled):
         yield
 
 
-def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False):
+def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False, batch_id=None):
     import fcntl
     from fundmgr.engine.optimizer import decision_metric, save_guidance_candidate, guidance_versions
 
+    from fundmgr.engine.optimizer_batch import BatchPending
+    batch_mode = plan.get("execution") == "batch"
+    if batch_mode and cfg.llm.provider != "openai":
+        raise ValueError("Batch execution currently supports OpenAI funds only")
+    if batch_id and not batch_mode:
+        raise ValueError("--batch-id requires a batch checkpoint")
     if cfg.optimizer.max_calls < 1 or cfg.optimizer.max_total_tokens < 1:
         raise ValueError("Call and token budgets must be positive")
     if plan["identity"] != identity(cfg):
@@ -204,7 +213,9 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                 _save(path, state)
                 return True
 
-        def request(key, system, user, schema, model):
+        pending = []
+
+        def request(key, system, user, schema, model, collect=False):
             if key in state["results"]:
                 return schema.model_validate(state["results"][key]["parsed"])
             task_cfg = copy.deepcopy(cfg)
@@ -229,6 +240,13 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                     _save(path, state)
                     logger.info("Optimizer cache hit: %s (no paid call)", key)
                     return parsed
+                if collect:
+                    pending.append({"key": key, "descriptor": descriptor, "cache_key": cache_key,
+                                    "cache_path": str(cache_path),
+                                    "reserved_tokens": reservation(system, user, schema, plan["identity"]["output_tokens"])})
+                    return None
+                if batch_mode and schema is DecisionRun:
+                    raise SearchStopped("Batch evaluation unresolved; no direct fallback call is allowed")
                 prior = [a for a in state["attempts"] if a["key"] == key]
                 if prior and not retry_failed:
                     raise SearchStopped("Failed or interrupted request requires --retry-failed; it may already have been billed")
@@ -262,8 +280,25 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                     _save(path, state)
                     raise
 
+        def prefetch(jobs):
+            if not batch_mode:
+                return
+            from fundmgr.engine.optimizer_batch import process_batch
+            for key, system, user in jobs:
+                request(key, system, user, DecisionRun, plan["identity"]["llm"]["model_id"], collect=True)
+            try:
+                process_batch(cfg, plan, path, state, pending, retry_failed=retry_failed, adopt_id=batch_id)
+            except (BatchPending, SearchStopped, ValueError):
+                raise
+            except Exception as exc:
+                raise LLMError(f"Batch API operation failed; checkpoint preserved: {exc}") from exc
+
         try:
             if plan.get("context_mode") == "compare":
+                prefetch([(f"{name}:{index}",
+                           assemble_system_prompt(case["fields"]["mandate"], plan["identity"]["guidance"]), user)
+                          for index, case in enumerate(plan["cases"])
+                          for name, user in (("full", raw_task_input(case)), ("compact", case["compact_input"]))])
                 from fundmgr.engine.context_compaction import compare_decisions
                 comparisons = []
                 for index, case in enumerate(plan["cases"]):
@@ -279,6 +314,9 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                 return False
             proposal = request("proposal", plan["proposal_system"], plan["proposal_user"], Proposal,
                                plan["identity"]["prompt_model"])
+            prefetch([(f"{name}:{index}", assemble_system_prompt(case["fields"]["mandate"], guidance), task_input(case))
+                      for name, guidance in (("incumbent", plan["identity"]["guidance"]), ("candidate", proposal.instructions))
+                      for index, case in enumerate(plan["cases"])])
             scores = {}
             for name, guidance in (("incumbent", plan["identity"]["guidance"]), ("candidate", proposal.instructions)):
                 scores[name] = []
@@ -299,6 +337,7 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                     "instructions": proposal.instructions, "optimization_run_id": digest(plan),
                     "search_method": VERSION, "search_scores": scores,
                     "context_mode": plan.get("context_mode", "full"),
+                    "execution": plan.get("execution", "direct"),
                     "context_version": plan.get("context_version"),
                     "task_model": cfg.llm.model_id, "prompt_model": plan["identity"]["prompt_model"],
                     "training_runs": plan["training_runs"],
@@ -312,6 +351,8 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
             _save(path, state)
             logger.info("Search complete: %s", candidate_path or "candidate did not beat incumbent; no artifact promoted")
             return candidate_path is not None
+        except BatchPending:
+            raise
         except BaseException:
             state["status"] = "stopped"
             _save(path, state)

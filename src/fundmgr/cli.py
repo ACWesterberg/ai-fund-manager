@@ -1678,23 +1678,31 @@ def export_dspy(output: str, score_first: bool):
 @click.option("--force-search", is_flag=True, help="Bypass the new-evidence gate; retain all call/token limits")
 @click.option("--context-mode", type=click.Choice(["full", "compact", "compare"]), default=None,
               help="Default full; compact is experimental; compare checks full versus compact without proposing guidance")
-def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search, context_mode):
+@click.option("--execution", type=click.Choice(["direct", "batch"]), default=None,
+              help="Batch uses OpenAI asynchronous evaluations; proposal stays direct")
+@click.option("--batch-id", default=None, help="Recover an uncertain submission ID with --resume")
+def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search, context_mode, execution, batch_id):
     """Bounded instruction-only search. Save a winner as an inactive candidate."""
     import logging
     from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory
     from fundmgr.engine.bounded_optimizer import make_plan, plan_cost, checkpoint_path, _load, identity, run_search
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from fundmgr.engine.optimizer_batch import BatchPending
     cfg, store = _get_store()
     for key, value in (("max_calls", max_calls), ("max_total_tokens", max_total_tokens),
                        ("max_output_tokens", max_output_tokens)):
         if value is not None:
             setattr(cfg.optimizer, key, value)
+    if batch_id and resume is None:
+        raise click.ClickException("--batch-id requires --resume")
     if retry_failed and resume is None:
         raise click.ClickException("--retry-failed requires --resume")
     try:
         if resume:
             saved = _load(resume)
             plan = saved["plan"]
+            if execution is not None and execution != plan.get("execution", "direct"):
+                raise ValueError("Resume execution must match the saved plan")
             if context_mode is not None and context_mode != plan.get("context_mode", "full"):
                 raise ValueError("Resume context mode must match the saved plan")
             if plan["identity"] != identity(cfg):
@@ -1715,12 +1723,19 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
             if context_mode in ("compact", "compare"):
                 from fundmgr.engine.context_compaction import prepare
                 plan = prepare(plan, context_mode)
+            if execution == "batch":
+                plan["execution"] = "batch"
             path = checkpoint_path(cfg, plan)
+        if plan.get("execution") == "batch" and cfg.llm.provider != "openai":
+            raise ValueError("Batch execution currently supports OpenAI funds only")
+        click.echo(f"Execution: {plan.get('execution', 'direct')}; batch pricing does not reduce token reservations.")
         from fundmgr.engine.context_compaction import profile
         sizes = profile(plan)
         click.echo("Validation context bytes (one copy per case; not token counts):")
         for field, size in sorted(sizes["field_bytes"].items(), key=lambda item: -item[1]):
             click.echo(f"  {field}: {size:,}")
+        click.echo(f"Universe breakdown: {sizes['universe_feature_bytes']:,} metric-row bytes; "
+                   f"{sizes['universe_other_bytes']:,} other bytes (names, news, warnings, etc.).")
         click.echo(f"User context: {sizes['full_bytes']:,} full -> {sizes['compact_bytes']:,} compact bytes; "
                    f"saved {sizes['saved_bytes']:,}. Every original character is recoverable.")
         click.echo(f"Context mode: {plan.get('context_mode', 'full')}; compact decision equivalence is unproven.")
@@ -1736,6 +1751,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
         click.echo(f"{label}: {cost['planned_calls']} planned calls; hard cap {cfg.optimizer.max_calls}")
         click.echo(f"Output cap: {cfg.optimizer.max_output_tokens} tokens/call; reasoning: {cfg.optimizer.reasoning_effort}")
         click.echo(f"Worst-case token reservation: {cost['reserved_token_estimate']:,}; budget {cfg.optimizer.max_total_tokens:,}")
+        click.echo(f"Reservation split: {cost['proposal_reservation']:,} proposal (no universe); "
+                   f"{cost['evaluation_reservation']:,} historical evaluations.")
         click.echo("Reservations use text bytes + schema/protocol allowance + output cap; this is not a dollar estimate.")
         click.echo(f"Checkpoint: {path}")
         click.echo(f"Candidate directory: {candidate_directory(cfg)}")
@@ -1744,7 +1761,7 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
                 click.echo("Plan exceeds configured budget; a new search would make no calls.")
             click.echo("Dry run: no paid calls. Existing MIPRO runs cannot be resumed by this search.")
             return
-        if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search):
+        if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search, batch_id=batch_id):
             click.echo("Inactive candidate saved. Active guidance unchanged; forward evaluation required.")
         elif plan.get("context_mode") == "compare":
             comparisons = _load(path)["comparisons"]
@@ -1754,6 +1771,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
             click.echo("No guidance candidate created. This small comparison does not establish risk or performance equivalence.")
         else:
             click.echo("No improved candidate saved. Active guidance unchanged.")
+    except BatchPending as exc:
+        click.echo(str(exc))
     except (OSError, ValueError, RuntimeError, KeyError, LLMError) as exc:
         raise click.ClickException(str(exc)) from exc
 

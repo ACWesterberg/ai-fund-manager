@@ -432,3 +432,224 @@ def test_context_cli_dry_run_and_resume_mode_guard(search, monkeypatch):
     path = next((cfg.optimizer.compiled_dir / 'searches' / 'fund').glob('*.json'))
     result = CliRunner().invoke(commands.cli, ['optimize', '--resume', str(path), '--context-mode', 'compact'])
     assert result.exit_code != 0 and 'context mode' in result.output
+
+
+@pytest.fixture
+def fake_batch(monkeypatch):
+    from fundmgr.engine import optimizer_batch as batch
+    client = MagicMock()
+    submitted = []
+    payloads = []
+    def upload(**kw):
+        payloads.append([json.loads(line) for line in kw['file'][1].decode().splitlines()])
+        return SimpleNamespace(id=f'file-{len(payloads)}')
+    def create(**kw):
+        remote = SimpleNamespace(id=f'batch-{len(submitted)}', status='in_progress',
+                                 input_file_id=kw['input_file_id'], metadata=kw['metadata'],
+                                 output_file_id=f'output-{len(submitted)}', error_file_id=None)
+        submitted.append(remote)
+        return remote
+    def content(file_id):
+        index = int(file_id.split('-')[1])
+        rows = []
+        for request in reversed(payloads[index]):
+            ticker = 'B' if 'Prefer B' in request['body']['messages'][0]['content'] else 'A'
+            result = DecisionRun(run_id='sample', market_summary='Test', cash_target_pct=90,
+                actions=[Action(ticker=ticker, side='buy', target_weight_pct=10,
+                                sek_estimate=10000, confidence=.8, thesis='Evidence')])
+            rows.append({'custom_id': request['custom_id'], 'response': {'status_code': 200,
+                         'body': {'choices': [{'finish_reason': 'stop', 'message': {'content': result.model_dump_json()}}],
+                                  'usage': {'prompt_tokens': 200, 'completion_tokens': 30}}}})
+        return SimpleNamespace(text='\n'.join(json.dumps(row) for row in rows))
+    client.files.create.side_effect = upload
+    client.batches.create.side_effect = create
+    client.batches.retrieve.side_effect = lambda id: submitted[int(id.split('-')[1])]
+    client.files.content.side_effect = content
+    monkeypatch.setattr(batch, 'batch_client', lambda: client)
+    return client, submitted, payloads
+
+
+def test_batch_submits_six_evaluations_then_resumes_without_rebilling(search, fake_batch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    from fundmgr.engine.research_costs import usage_report
+    cfg, plan, _, calls, _ = search
+    client, submitted, payloads = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending, match='submitted'):
+        bo.run_search(cfg, plan, path)
+    assert len(calls) == 1 and len(payloads[0]) == 6
+    assert bo._load(path)['status'] == 'batch_pending'
+    assert not guidance_versions(cfg)['candidates']
+    with pytest.raises(BatchPending, match='in_progress'):
+        bo.run_search(cfg, plan, path, resume=True)
+    assert client.batches.create.call_count == 1
+    submitted[0].status = 'completed'
+    assert bo.run_search(cfg, plan, path, resume=True)
+    assert len(calls) == 1 and len(bo._load(path)['attempts']) == 7
+    report = usage_report(cfg.optimizer.compiled_dir / 'searches')
+    assert sum(m['input_tokens'] for m in report['by_model'].values()) == 1300
+    assert bo.run_search(cfg, plan, path, resume=True)
+    assert client.batches.create.call_count == 1
+
+
+def test_uncertain_batch_requires_matching_id_even_with_retry_flag(search, fake_batch):
+    cfg, plan, _, calls, _ = search
+    client, submitted, _ = fake_batch
+    original = client.batches.create.side_effect
+    def uncertain(**kw):
+        original(**kw)
+        raise TimeoutError('connection lost after acceptance')
+    client.batches.create.side_effect = uncertain
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(bo.SearchStopped, match='uncertain'):
+        bo.run_search(cfg, plan, path)
+    with pytest.raises(bo.SearchStopped, match='Uncertain'):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True)
+    assert client.batches.create.call_count == 1
+    submitted[0].status = 'completed'
+    submitted[0].metadata = {'wrong': 'metadata'}
+    with pytest.raises(ValueError, match='does not match'):
+        bo.run_search(cfg, plan, path, resume=True, batch_id='batch-0')
+    submitted[0].metadata = bo._load(path)['batches'][0]['metadata']
+    assert bo.run_search(cfg, plan, path, resume=True, batch_id='batch-0')
+    assert len(calls) == 1
+
+
+def test_batch_partial_errors_save_success_and_retry_only_failed(search, fake_batch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    cfg, plan, _, calls, _ = search
+    client, submitted, payloads = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    original = client.files.content.side_effect
+    def partial(file_id):
+        rows = [json.loads(line) for line in original(file_id).text.splitlines()]
+        rows[0] = {'custom_id': rows[0]['custom_id'], 'error': {'code': 'batch_expired'}}
+        return SimpleNamespace(text='\n'.join(json.dumps(row) for row in rows))
+    client.files.content.side_effect = partial
+    submitted[0].status = 'expired'
+    with pytest.raises(bo.SearchStopped, match='1 batch request'):
+        bo.run_search(cfg, plan, path, resume=True)
+    assert len(bo._load(path)['results']) == 6  # proposal plus five successful evaluations
+    with pytest.raises(bo.SearchStopped, match='retry-failed'):
+        bo.run_search(cfg, plan, path, resume=True)
+    with pytest.raises(bo.SearchStopped, match='Budget exhausted'):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True)
+    cfg.optimizer.max_calls = 8
+    client.files.content.side_effect = original
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True)
+    assert len(payloads[1]) == 1
+    submitted[1].status = 'completed'
+    assert bo.run_search(cfg, plan, path, resume=True)
+    assert len(calls) == 1
+
+
+def test_unsupported_batch_provider_and_budget_fail_before_proposal(search, fake_batch):
+    cfg, plan, _, calls, _ = search
+    client, _, _ = fake_batch
+    plan['execution'] = 'batch'
+    cfg.optimizer.max_calls = 1
+    with pytest.raises(bo.SearchStopped, match='exceeds budget'):
+        bo.run_search(cfg, plan, bo.checkpoint_path(cfg, plan))
+    cfg.llm.provider = 'anthropic'
+    with pytest.raises(ValueError, match='OpenAI funds only'):
+        bo.run_search(cfg, plan, bo.checkpoint_path(cfg, plan))
+    assert not calls and not client.files.create.called
+
+
+@pytest.mark.parametrize('problem', ['truncated', 'refused', 'invalid_json'])
+def test_batch_invalid_response_retains_usage_and_never_scores_zero(search, fake_batch, problem):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    cfg, plan, _, _, _ = search
+    client, submitted, _ = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    original = client.files.content.side_effect
+    def invalid(file_id):
+        rows = [json.loads(line) for line in original(file_id).text.splitlines()]
+        choice = rows[0]['response']['body']['choices'][0]
+        if problem == 'truncated':
+            choice['finish_reason'] = 'length'
+        elif problem == 'refused':
+            choice['message']['refusal'] = 'refused'
+        else:
+            choice['message']['content'] = 'invalid JSON'
+        return SimpleNamespace(text='\n'.join(json.dumps(row) for row in rows))
+    client.files.content.side_effect = invalid
+    submitted[0].status = 'completed'
+    with pytest.raises(bo.SearchStopped, match='1 batch request'):
+        bo.run_search(cfg, plan, path, resume=True)
+    state = bo._load(path)
+    assert 'scores' not in state and not guidance_versions(cfg)['candidates']
+    assert sum(a['usage']['input_tokens'] for a in state['attempts']) == 1300
+
+
+def test_batch_network_failure_during_retrieval_never_resubmits(search, fake_batch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    cfg, plan, _, calls, _ = search
+    client, _, _ = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    client.batches.retrieve.side_effect = TimeoutError('read timeout')
+    with pytest.raises(LLMError, match='checkpoint preserved'):
+        bo.run_search(cfg, plan, path, resume=True)
+    assert client.batches.create.call_count == 1 and len(calls) == 1
+    assert bo._load(path)['batches'][0]['id'] == 'batch-0'
+
+
+def test_batch_cli_dry_run_submission_and_resume(search, fake_batch, monkeypatch):
+    import fundmgr.cli as commands
+    from fundmgr.engine import optimizer
+    cfg, plan, _, calls, _ = search
+    client, submitted, payloads = fake_batch
+    cfg.llm.model_id = "gpt-5.6-sol"
+    plan["identity"] = bo.identity(cfg)
+    cfg.optimizer.min_examples = 1
+    monkeypatch.setattr(commands, '_get_store', lambda: (cfg, SimpleNamespace(get_evaluated_outcomes=lambda: [None]*30)))
+    monkeypatch.setattr(optimizer, 'build_pooled_trainset', lambda cfg: [None]*5)
+    monkeypatch.setattr(bo, 'make_plan', lambda *a: dict(plan))
+    result = CliRunner().invoke(commands.cli, ['optimize', '--execution', 'batch', '--dry-run'])
+    assert result.exit_code == 0, result.output
+    assert 'proposal (no universe)' in result.output
+    assert not client.files.create.called and not calls
+    result = CliRunner().invoke(commands.cli, ['optimize', '--execution', 'batch'])
+    assert result.exit_code == 0 and 'submitted' in result.output, result.output
+    body = payloads[0][0]['body']
+    assert body['response_format']['json_schema']['strict']
+    assert body['max_completion_tokens'] == 2048
+    assert body['reasoning_effort'] == 'low'
+    assert 'ticker_alphas' not in json.dumps(body)
+    path = next((cfg.optimizer.compiled_dir / 'searches' / 'fund').glob('*.json'))
+    submitted[0].status = 'completed'
+    result = CliRunner().invoke(commands.cli, ['optimize', '--resume', str(path)])
+    assert result.exit_code == 0 and 'Inactive candidate saved' in result.output, result.output
+
+
+@pytest.mark.parametrize('reuse,expected_requests', [(True, 3), (False, 6)])
+def test_batch_context_comparison_honors_reuse_setting(search, fake_batch, reuse, expected_requests):
+    from fundmgr.engine.context_compaction import prepare
+    from fundmgr.engine.optimizer_batch import BatchPending
+    cfg, plan, _, calls, _ = search
+    _, submitted, payloads = fake_batch
+    cfg.optimizer.reuse_evaluations = reuse
+    plan = prepare(plan, 'compare')  # Small inputs stay literal: each full/compact pair is identical.
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    assert len(payloads[0]) == expected_requests
+    submitted[0].status = 'completed'
+    assert not bo.run_search(cfg, plan, path, resume=True)
+    state = bo._load(path)
+    assert len(state['results']) == 6 and len(state['attempts']) == expected_requests
+    assert len(state['comparisons']) == 3
+    assert not calls and not guidance_versions(cfg)['candidates']

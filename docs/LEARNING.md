@@ -386,9 +386,10 @@ counts. Field totals count each selected case once; reservations also include
 both evaluations, the proposal, schema/protocol allowance and output ceilings.
 The original `full` mode remains the default.
 
-The experimental `--context-mode compact` uses `exact_lines_v1`: repeated long
-lines are stored once in a shared JSON array and referenced at each original
-location. All characters, numbers, attribution, uncertainty and ordering can be
+The experimental `--context-mode compact` uses `asset_templates_v2`: repeated
+metric-row labels become shared templates with exact string values per asset.
+It also considers the earlier exact-line deduplication, choosing the smallest
+representation, including the original text. All characters, numbers, attribution, uncertainty and ordering can be
 reconstructed exactly. The mandate remains unchanged. Unique text is not dropped,
 ranked, truncated or paraphrased. If the representation is not smaller, the
 original text is used. The original fields and packed inputs stay in the frozen
@@ -420,3 +421,61 @@ paired sample cannot establish risk or performance equivalence, and model sampli
 can also cause differences. Cached results are reused observations. No comparison
 automatically enables compression. Production and forward evaluation retain their
 existing context; compact search winners still require full forward evaluation.
+
+### Small learning requests, compact evaluations, optional OpenAI batches
+
+The proposal request contains the mandate, current guidance and bounded training
+summaries, **not the asset universe**. The universe belongs to the historical
+candidate/incumbent evaluations. Dry runs now split those reservations and show
+how much universe text consists of recognized metric rows versus other text
+(names, news, warnings and unrecognized historical formats).
+
+Asset templates keep all supplied eligible tickers and every rendered value,
+including signs, units, dates and held-position markers. They do not round numbers
+or use later outcomes to select assets. News, contradictions, uncertain evidence,
+names and warnings remain literal. Savings depend on the actual history: large
+unique news snippets will remain large. Frozen old checkpoints retain their saved
+representation on resume. Compact format is still experimental and opt-in; test
+full versus compact behavior before relying on it.
+
+For OpenAI funds, `--execution batch` sends outstanding historical evaluations via
+the [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch), which
+provides 50% lower input/output token pricing with a 24-hour processing window.
+The one proposal call stays direct. The model, reasoning effort and output limits
+remain configured as before. Anthropic batch execution is not implemented here;
+selecting it fails before the proposal. Nothing automatically changes cron jobs.
+
+```bash
+# Free inspection of both context size and reservations:
+FUND_CONFIG=config/config.yaml .venv/bin/fund optimize --context-mode compact --execution batch --dry-run
+
+# When the inspected plan fits the budget, remove --dry-run to start it.
+# Submission prints a checkpoint path; collect later without submitting again:
+FUND_CONFIG=config/config.yaml .venv/bin/fund optimize --resume /absolute/path/to/checkpoint.json
+```
+
+Batch pricing changes dollars per token, not the token reservation. An oversized
+plan still refuses to start. No API dollars are estimated and no limits are raised
+automatically. Each batch item counts toward the call cap, not just the HTTP batch
+submission. Reservations are saved before submission and never refunded on failure.
+Completed cached responses are reused, and identical requests within a batch are
+coalesced. Separate simultaneously pending searches are not globally coalesced.
+
+Pending batches exit without waiting and resume checks their status once. Results
+are matched by `custom_id`, not line order. Successful results and usage are saved
+before scoring. Missing, refused, truncated and invalid responses cannot become
+zero scores or incomplete winners. Partial failure stops; explicitly use
+`--resume ... --retry-failed` and sufficient cumulative limits to batch only the
+remaining failed requests. There is no direct evaluation fallback.
+
+An ambiguous submit timeout never automatically resubmits, even with
+`--retry-failed`. Recover the batch ID in the provider dashboard and use
+`--resume ... --batch-id batch_...`; its input file and optimizer metadata must
+match the checkpoint. Preserve checkpoints while batches run. Retrieve completed
+results promptly, before provider file expiry. Cancellation can be performed in
+the provider dashboard; resume collects any completed items and records failures.
+
+Batch can also run `--context-mode compare`; it creates no proposal or candidate.
+That diagnostic remains a paid bounded comparison and does not automatically
+activate compact context. `optimizer-usage` includes saved per-item provider usage
+for both normal and batch calls, including available usage on invalid responses.

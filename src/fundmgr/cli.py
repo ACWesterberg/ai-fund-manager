@@ -1676,7 +1676,9 @@ def export_dspy(output: str, score_first: bool):
 @click.option("--resume", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--retry-failed", is_flag=True, help="Explicitly retry an uncertain/failed request; may bill again")
 @click.option("--force-search", is_flag=True, help="Bypass the new-evidence gate; retain all call/token limits")
-def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search):
+@click.option("--context-mode", type=click.Choice(["full", "compact", "compare"]), default=None,
+              help="Default full; compact is experimental; compare checks full versus compact without proposing guidance")
+def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search, context_mode):
     """Bounded instruction-only search. Save a winner as an inactive candidate."""
     import logging
     from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory
@@ -1693,6 +1695,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
         if resume:
             saved = _load(resume)
             plan = saved["plan"]
+            if context_mode is not None and context_mode != plan.get("context_mode", "full"):
+                raise ValueError("Resume context mode must match the saved plan")
             if plan["identity"] != identity(cfg):
                 raise ValueError("Checkpoint settings changed; keep model/output/reasoning settings identical")
             path = resume
@@ -1708,8 +1712,19 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
                 click.echo("Minimum data not met; no model calls made.")
                 return
             plan = make_plan(cfg, examples)
+            if context_mode in ("compact", "compare"):
+                from fundmgr.engine.context_compaction import prepare
+                plan = prepare(plan, context_mode)
             path = checkpoint_path(cfg, plan)
-        if not resume and not path.exists():
+        from fundmgr.engine.context_compaction import profile
+        sizes = profile(plan)
+        click.echo("Validation context bytes (one copy per case; not token counts):")
+        for field, size in sorted(sizes["field_bytes"].items(), key=lambda item: -item[1]):
+            click.echo(f"  {field}: {size:,}")
+        click.echo(f"User context: {sizes['full_bytes']:,} full -> {sizes['compact_bytes']:,} compact bytes; "
+                   f"saved {sizes['saved_bytes']:,}. Every original character is recoverable.")
+        click.echo(f"Context mode: {plan.get('context_mode', 'full')}; compact decision equivalence is unproven.")
+        if not resume and not path.exists() and plan.get("context_mode") != "compare":
             from fundmgr.engine.research_costs import evidence_gate
             gate = evidence_gate(cfg, plan)
             click.echo(f"New own-fund decision dates: {len(gate['new_periods'])}; required after first search: {gate['required']}")
@@ -1717,7 +1732,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
                 click.echo("Search skipped: insufficient new evidence. No paid calls.")
                 return
         cost = plan_cost(plan)
-        click.echo(f"Instruction-only search: {cost['planned_calls']} planned calls; hard cap {cfg.optimizer.max_calls}")
+        label = "Context comparison" if plan.get("context_mode") == "compare" else "Instruction-only search"
+        click.echo(f"{label}: {cost['planned_calls']} planned calls; hard cap {cfg.optimizer.max_calls}")
         click.echo(f"Output cap: {cfg.optimizer.max_output_tokens} tokens/call; reasoning: {cfg.optimizer.reasoning_effort}")
         click.echo(f"Worst-case token reservation: {cost['reserved_token_estimate']:,}; budget {cfg.optimizer.max_total_tokens:,}")
         click.echo("Reservations use text bytes + schema/protocol allowance + output cap; this is not a dollar estimate.")
@@ -1730,6 +1746,12 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
             return
         if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search):
             click.echo("Inactive candidate saved. Active guidance unchanged; forward evaluation required.")
+        elif plan.get("context_mode") == "compare":
+            comparisons = _load(path)["comparisons"]
+            changed = sum(c["actions_changed"] or c["cash_target_changed"] for c in comparisons)
+            click.echo(f"Context comparison complete: {changed}/{len(comparisons)} cases changed actions or cash targets.")
+            click.echo(f"Review paired decisions and frozen risk limits in {path}")
+            click.echo("No guidance candidate created. This small comparison does not establish risk or performance equivalence.")
         else:
             click.echo("No improved candidate saved. Active guidance unchanged.")
     except (OSError, ValueError, RuntimeError, KeyError, LLMError) as exc:

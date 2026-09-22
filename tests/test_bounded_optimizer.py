@@ -378,3 +378,57 @@ def test_corrupt_cache_is_rejected_before_evaluation_call(search):
     with pytest.raises(ValueError, match='checksum'):
         bo.run_search(cfg, second, bo.checkpoint_path(cfg, second), force_search=True)
     assert len(calls) == 8
+
+
+def test_context_comparison_is_bounded_resumable_and_never_publishes(search):
+    from fundmgr.engine.context_compaction import prepare
+    from fundmgr.engine.research_costs import evidence_gate, usage_report
+    cfg, plan, _, calls, _ = search
+    repeated = ('Material evidence from source dated 2026-01-01: revenue down 15%; ' * 5) + '\n'
+    for case in plan['cases']:
+        case['fields']['universe'] = ''.join(f'Ticker {i}\n{repeated}' for i in range(8))
+    plan = prepare(plan, 'compare')
+    path = bo.checkpoint_path(cfg, plan)
+    assert bo.plan_cost(plan)['planned_calls'] == 6
+    assert not bo.run_search(cfg, plan, path)
+    assert len(calls) == 6 and all(call[3] is DecisionRun for call in calls)
+    state = bo._load(path)
+    assert len(state['comparisons']) == 3
+    assert not guidance_versions(cfg)['candidates']
+    assert evidence_gate(cfg, plan)['first_search']
+    assert usage_report(cfg.optimizer.compiled_dir / 'searches')['attempts'] == 6
+    assert not bo.run_search(cfg, plan, path, resume=True)
+    assert len(calls) == 6
+
+
+def test_compact_search_preserves_original_and_costs_match_request(search):
+    from fundmgr.engine.context_compaction import prepare, unpack
+    cfg, plan, _, calls, _ = search
+    for case in plan['cases']:
+        case['fields']['universe'] = ('Exact dated evidence and risk uncertainty. ' * 10 + '\n') * 12
+    compact = prepare(plan, 'compact')
+    assert bo.plan_cost(compact)['reserved_token_estimate'] < bo.plan_cost(plan)['reserved_token_estimate']
+    bo.run_search(cfg, compact, bo.checkpoint_path(cfg, compact))
+    assert unpack(calls[1][1]) == bo.raw_task_input(plan['cases'][0])
+    candidate = guidance_versions(cfg)['candidates'][0]
+    assert candidate['context_mode'] == 'compact'
+
+
+def test_context_cli_dry_run_and_resume_mode_guard(search, monkeypatch):
+    import fundmgr.cli as commands
+    from fundmgr.engine import optimizer
+    cfg, plan, _, calls, _ = search
+    cfg.optimizer.min_examples = 1
+    monkeypatch.setattr(commands, '_get_store', lambda: (cfg, SimpleNamespace(get_evaluated_outcomes=lambda: [None]*30)))
+    monkeypatch.setattr(optimizer, 'build_pooled_trainset', lambda cfg: [None]*5)
+    monkeypatch.setattr(bo, 'make_plan', lambda *a: plan)
+    result = CliRunner().invoke(commands.cli, ['optimize', '--context-mode', 'compare', '--dry-run'])
+    assert result.exit_code == 0, result.output
+    assert 'Context comparison: 6 planned calls' in result.output
+    assert 'universe:' in result.output and not calls
+    result = CliRunner().invoke(commands.cli, ['optimize', '--context-mode', 'compare'])
+    assert result.exit_code == 0, result.output
+    assert 'No guidance candidate created' in result.output
+    path = next((cfg.optimizer.compiled_dir / 'searches' / 'fund').glob('*.json'))
+    result = CliRunner().invoke(commands.cli, ['optimize', '--resume', str(path), '--context-mode', 'compact'])
+    assert result.exit_code != 0 and 'context mode' in result.output

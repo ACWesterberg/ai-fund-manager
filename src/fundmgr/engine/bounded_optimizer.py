@@ -111,12 +111,23 @@ def make_plan(cfg, examples):
 
 
 def task_input(case):
+    return case.get("search_input", raw_task_input(case))
+
+
+def raw_task_input(case):
     return "\n\n".join(case["fields"][k] for k in ("macro", "portfolio_state", "risk_limits", "universe", "learnings"))
 
 
 def plan_cost(plan):
     ident = plan["identity"]
     output = ident["output_tokens"]
+    if plan.get("context_mode") == "compare":
+        total = sum(reservation(assemble_system_prompt(case["fields"]["mandate"], ident["guidance"]),
+                                user, DecisionRun, output)
+                    for case in plan["cases"]
+                    for user in (raw_task_input(case), case["compact_input"]))
+        return {"planned_calls": 2 * len(plan["cases"]), "reserved_token_estimate": total,
+                "max_output_tokens_per_call": output, "max_output_tokens_total": 2 * len(plan["cases"]) * output}
     total = reservation(plan["proposal_system"], plan["proposal_user"], Proposal, output)
     for case in plan["cases"]:
         for guidance in (ident["guidance"], "x" * 16000):  # max 4000 Unicode chars -> <=16000 UTF-8 bytes
@@ -175,7 +186,7 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                 raise ValueError("Resume checkpoint does not exist")
             from fundmgr.engine.research_costs import evidence_gate
             gate = evidence_gate(cfg, plan)
-            if not force_search and not gate["eligible"]:
+            if plan.get("context_mode") != "compare" and not force_search and not gate["eligible"]:
                 logger.info("Search skipped: %d new own-fund decision dates; need %d. No paid calls.",
                             len(gate["new_periods"]), gate["required"])
                 return False
@@ -252,6 +263,20 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                     raise
 
         try:
+            if plan.get("context_mode") == "compare":
+                from fundmgr.engine.context_compaction import compare_decisions
+                comparisons = []
+                for index, case in enumerate(plan["cases"]):
+                    system = assemble_system_prompt(case["fields"]["mandate"], plan["identity"]["guidance"])
+                    full = request(f"full:{index}", system, raw_task_input(case), DecisionRun,
+                                   plan["identity"]["llm"]["model_id"])
+                    compact = request(f"compact:{index}", system, case["compact_input"], DecisionRun,
+                                      plan["identity"]["llm"]["model_id"])
+                    comparisons.append({"run_id": case["run_id"], "source": case["source"],
+                                        **compare_decisions(full, compact)})
+                state.update(status="complete", comparisons=comparisons, candidate_path=None)
+                _save(path, state)
+                return False
             proposal = request("proposal", plan["proposal_system"], plan["proposal_user"], Proposal,
                                plan["identity"]["prompt_model"])
             scores = {}
@@ -273,6 +298,8 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                 candidate_path = save_guidance_candidate(cfg, Program(), {
                     "instructions": proposal.instructions, "optimization_run_id": digest(plan),
                     "search_method": VERSION, "search_scores": scores,
+                    "context_mode": plan.get("context_mode", "full"),
+                    "context_version": plan.get("context_version"),
                     "task_model": cfg.llm.model_id, "prompt_model": plan["identity"]["prompt_model"],
                     "training_runs": plan["training_runs"],
                     "validation_runs": [{"run_id": c["run_id"], "source": c["source"]} for c in plan["cases"]],

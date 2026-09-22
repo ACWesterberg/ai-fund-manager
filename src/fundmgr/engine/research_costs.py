@@ -25,7 +25,7 @@ def evidence_gate(cfg, plan):
     root = cfg.optimizer.compiled_dir / "searches" / cfg.db_path.stem
     for path in sorted(root.glob("*.json")):
         state = _load(path)
-        if not state.get("attempts"):
+        if state["plan"].get("context_mode") == "compare" or not state.get("attempts"):
             continue
         searches += 1
         previous = state["plan"]

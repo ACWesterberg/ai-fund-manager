@@ -377,3 +377,46 @@ The report does not reconstruct old MIPRO costs or other application spending an
 is not an invoice or a dollar budget. Conservative admission reservations remain
 separate from provider usage. Keep checkpoints and caches private and preserve
 checkpoints for accounting; deleting them also removes scheduling history.
+
+### Inspect and compare compact historical context
+
+Every `fund optimize --dry-run` now prints UTF-8 byte totals for each selected
+validation field, plus full/compact user-context sizes. These are not tokenizer
+counts. Field totals count each selected case once; reservations also include
+both evaluations, the proposal, schema/protocol allowance and output ceilings.
+The original `full` mode remains the default.
+
+The experimental `--context-mode compact` uses `exact_lines_v1`: repeated long
+lines are stored once in a shared JSON array and referenced at each original
+location. All characters, numbers, attribution, uncertainty and ordering can be
+reconstructed exactly. The mandate remains unchanged. Unique text is not dropped,
+ranked, truncated or paraphrased. If the representation is not smaller, the
+original text is used. The original fields and packed inputs stay in the frozen
+checkpoint, and outcome labels never enter evaluation context. This provides no
+promise of savings on mostly unique evidence, or of identical model behavior.
+
+First inspect the real history without API calls:
+
+```bash
+FUND_CONFIG=config/config.yaml .venv/bin/fund optimize --dry-run
+FUND_CONFIG=config/config.yaml .venv/bin/fund optimize --context-mode compact --dry-run
+FUND_CONFIG=config/config.yaml .venv/bin/fund optimize --context-mode compare --dry-run
+```
+
+`--context-mode compare` runs up to two requests per selected validation case,
+using the same incumbent guidance/model/settings with full and compact inputs.
+It creates no proposal or guidance candidate. Remove `--dry-run` only when ready
+to pay for that bounded diagnostic. The existing call/token ceilings, persistent
+request cache, explicit failed-request retries, and `--resume` all apply. Resume
+uses the frozen context mode; a conflicting explicit mode is rejected. Comparison
+calls appear in `optimizer-usage`, but do not consume the new-evidence scheduling
+gate for instruction searches.
+
+The checkpoint's `comparisons` records action details and cash-target differences;
+`plan.cases` retains the frozen risk limits and evidence for manual review. Check
+changed tickers, buy/sell/hold choices, position sizes, stops/targets, missing or
+misattributed evidence, and compliance with those original risk limits. One small
+paired sample cannot establish risk or performance equivalence, and model sampling
+can also cause differences. Cached results are reused observations. No comparison
+automatically enables compression. Production and forward evaluation retain their
+existing context; compact search winners still require full forward evaluation.

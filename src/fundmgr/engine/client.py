@@ -201,7 +201,7 @@ def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str
     consensus_actions: list[Action] = []
     vote_counts: dict[str, int] = {}
 
-    for ticker in all_tickers:
+    for ticker in sorted(all_tickers):
         per_run = [a for run in runs for a in run.actions if a.ticker == ticker]
         if not per_run:
             continue
@@ -216,16 +216,13 @@ def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str
         take_profits   = [a.take_profit_pct  for a in agreeing if a.take_profit_pct  is not None]
         best_action    = max(agreeing, key=lambda a: a.confidence)
 
-        consensus_actions.append(Action(
-            ticker=ticker,
-            side=best_side,
-            target_weight_pct=round(sum(a.target_weight_pct for a in agreeing) / len(agreeing), 1),
-            sek_estimate=round(sum(a.sek_estimate for a in agreeing) / len(agreeing), 0),
-            confidence=round(sum(a.confidence for a in agreeing) / len(agreeing), 3),
-            thesis=best_action.thesis,
-            stop_loss_pct=round(sum(stop_losses) / len(stop_losses), 1) if stop_losses else None,
-            take_profit_pct=round(sum(take_profits) / len(take_profits), 1) if take_profits else None,
-        ))
+        consensus_actions.append(best_action.model_copy(update={
+            "target_weight_pct": round(sum(a.target_weight_pct for a in agreeing) / len(agreeing), 1),
+            "sek_estimate": round(sum(a.sek_estimate for a in agreeing) / len(agreeing), 0),
+            "confidence": round(sum(a.confidence for a in agreeing) / len(agreeing), 3),
+            "stop_loss_pct": round(sum(stop_losses) / len(stop_losses), 1) if stop_losses else None,
+            "take_profit_pct": round(sum(take_profits) / len(take_profits), 1) if take_profits else None,
+        }))
         vote_counts[ticker] = best_n
 
     seen_notes: list[str] = []

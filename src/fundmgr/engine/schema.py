@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Action(BaseModel):
@@ -110,8 +110,7 @@ class DecisionRun(BaseModel):
         description="2-3 sentence read of current market conditions relevant to the portfolio",
     )
     actions: list[Action] = Field(
-        description="One entry per ticker you have a view on. Omit tickers with no view.",
-        min_length=1,
+        description="One entry per ticker you have a view on. Empty is valid when there is no actionable view.",
     )
     cash_target_pct: float = Field(
         ge=0, le=100,
@@ -122,6 +121,14 @@ class DecisionRun(BaseModel):
         max_length=1000,
         description="Any concerns, data quality issues, or tickers you'd like added to the universe",
     )
+
+
+    @model_validator(mode="after")
+    def unique_tickers(self):
+        tickers = [action.ticker for action in self.actions]
+        if len(tickers) != len(set(tickers)):
+            raise ValueError("Each decision must have at most one action per ticker")
+        return self
 
 
 class TargetReview(BaseModel):
@@ -271,6 +278,11 @@ class LearningConsolidations(BaseModel):
 class ThesisCheck(BaseModel):
     """Whether one decision's stated thesis came true, judged on evidence."""
     ticker: str = Field(description="The ticker this verdict is for")
+    outcome_id: int | None = Field(
+        default=None,
+        description="Copy the outcome_id from this decision's heading; different decisions "
+                    "on the same ticker must receive separate verdicts.",
+    )
     verdict: Literal["held", "broke", "unresolved"] = Field(
         description=(
             "held = the specific claim in the thesis demonstrably came true; "

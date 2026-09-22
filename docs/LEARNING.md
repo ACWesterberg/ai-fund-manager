@@ -1,0 +1,263 @@
+# Learning-driven prompt improvement
+
+The product is a decision prompt that improves from experience. The objective is
+benchmark-relative return after estimated costs within the mandate's risk limits.
+Use the fund's intended horizon (28 days by default, 90 days for the Buffett
+profiles), with downside and turnover checks. Thesis judgments explain decisions;
+they are not interchangeable with profitable allocations.
+
+## Implemented foundation
+
+- **Candidate reward:** historical thesis verdicts no longer reward new theses
+  about the same ticker. The search metric is versioned `directional_alpha_v2`.
+  It remains an interim directional-return surrogate: it does not yet measure
+  allocation sizing, fees, feasibility, or full portfolio returns. Duplicate
+  ticker actions cannot multiply its reward.
+- **Historical price labels:** use the latest valid cached close on or before the
+  requested horizon, no more than seven calendar days earlier. Store the actual
+  evaluation date. No live-price fallback; missing history or benchmark data
+  leaves the outcome pending instead of generating an incomplete lesson batch.
+- **Thesis evidence:** include only news both published and cached inside the
+  inclusive UTC date window, ending at the earlier of the actual evaluation date
+  and the requested horizon. Undated/unparseable news is excluded. Repeated cache
+  copies do not crowd distinct headlines out of the evidence cap.
+- **Decision identity:** each thesis judgment carries an outcome ID. Distinct
+  decisions on the same ticker retain their own evidence and verdicts. Legacy
+  ticker-only responses are accepted only when the ticker is unique in the batch.
+- **Inactive candidates:** `fund optimize` writes a compiled program and guidance
+  manifest under `config/compiled/candidates/<fund>/<candidate>/`. The manifest
+  records the metric, config fingerprint and incumbent guidance fingerprint.
+  The prompt page lists candidates separately from active and archived guidance.
+  Compilation never changes the active guidance file.
+
+Existing active guidance and stored outcomes/learnings are not rewritten. Old
+labels may still contain the previously permitted price/news leakage. They must
+be audited and rebuilt from historical evidence before serving as a clean
+promotion dataset. Rebuilding historical labels is a separate, explicit operation.
+A news article first cached after a window is deliberately ineligible, even if it
+claims an earlier publication date. This conservative rule can reduce evidence
+coverage until a reliable historical availability source is implemented.
+
+## Frozen paired comparisons
+
+New weekly snapshots archive the structured features for every shown candidate,
+portfolio marks, risk limits, fees, model settings, mandate, guidance, and FX.
+The prompt renderer now retains the full upstream screen instead of silently
+cutting it to 75 names. Older snapshots without this context are rejected; current
+market data is never substituted to fill historical gaps.
+
+Run an explicit comparison against a saved weekly run:
+
+```sh
+fund compare-guidance --run-id RUN_ID \
+  --candidate config/compiled/candidates/FUND/CANDIDATE/guidance.json \
+  --output comparison.json
+fund score-guidance comparison.json --outcomes outcomes.json --output score.json
+```
+
+Use the same fund configuration/environment as the saved run for the first
+command. It makes **two sets of paid model calls** with the archived sample count.
+Both arms use the same frozen user prompt, model settings, production consensus,
+and guardrails. Only decision guidance changes. Incomplete samples and infeasible
+allocations are recorded as invalid, making the pair unscoreable. Neither command
+books trades or activates guidance. Reports require a new output filename.
+
+The scorer is offline. Supply an outcomes file shaped as follows (illustrative
+only; actual tickers, dates, horizon, and hash must match the comparison):
+
+```json
+{
+  "case_hash": "COPY_FROM_COMPARISON",
+  "basis": "SEK",
+  "benchmark": "^OMXSPI",
+  "source": "Describe the price/FX source and valuation convention",
+  "observations": [
+    {"date": "2026-01-01", "prices": {"A": 100, "B": 100}, "benchmark": 100},
+    {"date": "2026-01-02", "prices": {"A": 95, "B": 80}, "benchmark": 99},
+    {"date": "2026-01-03", "prices": {"A": 90, "B": 120}, "benchmark": 101}
+  ]
+}
+```
+
+Provide every calendar date through the exact matured horizon, explicitly
+carrying non-trading marks forward, and **every shown ticker**, including names
+neither arm bought. Initial marks must match the frozen snapshot; subsequent
+marks should use consistent closing valuations. For SEK cases, convert all
+security valuations to SEK at each observation and supply benchmark levels on
+the same currency basis. For synthetic simulations, copy `synthetic_native` from
+the case instead. The importer checks shape, completeness, identity and finite
+values; it cannot independently establish the accuracy or historical availability
+of a user-supplied source. Splits, distributions and other corporate actions need
+consistent total-return treatment in the supplied valuation series.
+
+Execution is an explicit **fractional-share, buy-and-hold research convention**:
+targets are sized from initial NAV at archived quotes, sells precede buys, estimated
+fees reduce cash, omitted holdings remain invested, and cash earns zero. Extra
+cumulative checks cover cash, position count, turnover, sector and allocation
+ceilings. Unknown sectors prevent buys when the sector ceiling cannot be checked.
+Existing concentration breaches may be reduced or retained, but not increased by
+buying into the affected bucket. This is not broker execution parity: slippage,
+lot sizes, intraday exits, ongoing rebalancing and funding costs are not modeled.
+
+Scores report net portfolio return, benchmark-relative return, daily valuation
+drawdown, turnover, fees and candidate advantage, with artifact hashes and source
+lineage. Hashes detect accidental changes; they are not signatures or proof of
+when a decision was made. Historical replays are labeled `retrospective_diagnostic`;
+`same_day_shadow` requires the candidate to predate the frozen case and both calls
+to finish on that UTC day. This label alone does not establish unseen evidence.
+**Every report remains ineligible for promotion.**
+
+## Automatic forward collection (opt-in)
+
+Configure one inactive candidate in the fund's YAML file:
+
+```yaml
+shadow:
+  candidate: config/compiled/candidates/FUND/CANDIDATE/guidance.json
+  benchmark_currency: SEK
+  benchmark_calendar: XSTO
+```
+
+Currency and calendar must describe the configured benchmark; the example is for
+`^OMXSPI`. Do not reuse these values blindly for another index. Relative candidate
+paths resolve from the repository root. Profiles are disabled by default, and
+none were enabled as part of implementation.
+
+A saved `fund run` now registers the frozen case and candidate before running two
+additional model sample sets. The candidate must predate the case; the case must
+be less than two hours old, with known exchange calendars for all shown names.
+Dry runs never register comparisons. Shadow failures are reported separately
+from the normal portfolio run. Registration exclusively reserves that run ID;
+failed, interrupted or invalid model runs are retained and never automatically
+rerolled. A reservation that lacks `comparison.json` needs inspection; the next
+scheduled weekly run will create a separate experiment.
+
+Registered experiments live under `data/shadow/<fund>/` beside the fund database
+(or the corresponding database parent's `shadow/` directory). Each contains an
+immutable registration and original comparison. Collection runs at the end of
+subsequent saved weekly runs, even if the candidate has since been disabled. It
+can also be triggered without any model calls or trading:
+
+```sh
+fund collect-guidance
+```
+
+No new scheduler/service is installed. Existing weekly runs drive collection;
+this standalone command can also be used by an operator between weekly runs.
+
+The forward convention differs from historical replay: **execution is the first
+common trading date strictly after both decisions finish**, across all shown
+securities and the benchmark. If no common session exists within 14 days, the
+case remains pending. The starting book is revalued at that future close, approved
+target weights are applied with fees, and cumulative feasibility is checked
+again. The evaluation horizon starts at this entry date. Collection waits until
+the following UTC day after the full horizon to avoid partial closing bars.
+Returns before entry are excluded from the scored period.
+
+Collection fetches adjusted daily histories directly through yfinance for every
+shown security, the exact benchmark, and (for SEK cases) historical currency/SEK
+rates. It archives the provider rows, dividends/splits, request range, currency,
+retrieval timestamp and provider version. Adjusted-close ratios include the
+provider's treatment of splits and cash distributions; histories are normalized
+to the archived quote to avoid artificial losses when older prices are revised
+for a split. These are **synthetic total-return units**, including reinvestment
+implicit in the provider's adjustment, not raw-share broker fills. Benchmark
+returns follow the configured index: an adjusted price index is still a price
+index, not a dividend-inclusive total-return index.
+
+Only confirmed exchange closures permit carrying a security/index close forward.
+Missing open-session bars, unverified currencies, duplicate/invalid prices,
+unknown calendars or infeasible entry allocations leave the case pending. FX
+permits weekend carry only; a missing weekday FX bar also leaves it pending.
+Minor-unit currency mismatches such as GBP versus GBp are rejected rather than
+silently converted. Missing or delisted alternatives are not dropped, so some
+cases require a better data source before they can ever score.
+
+A collection attempt archives `history.json`, then on success a derived
+`valuation_case.json` and `outcomes.json`. The derived case is accounting context;
+the original decision prompts and model responses remain in `comparison.json`.
+Failed collection attempts retain their errors. Successful `result.json` files
+bind registration, original comparison and history hashes, and are never
+recomputed on later invocations. Publication is atomic and refuses overwrites;
+per-case locks prevent concurrent collectors. To investigate provider revisions,
+use the preserved evidence rather than replacing an existing score.
+
+Yahoo's adjustments are provider claims, not independently audited corporate
+actions. There is no delisting settlement feed, tax model, slippage model, lot
+rounding or intraday execution simulation. Collection timestamps establish when
+this system retrieved evidence, not when the provider first published it. All
+forward results therefore remain **ineligible for automatic promotion**.
+
+## Aggregate evidence audit
+
+```sh
+fund evaluate-guidance --output evidence.json
+# Or inspect full directories for several funds (results remain separate):
+fund evaluate-guidance --root data/shadow/fund --root data/shadow/fund_global \
+  --min-periods 8 --output evidence.json
+```
+
+This offline command scans every reservation in each supplied fund directory,
+including interrupted recordings and cases without results. It verifies artifact
+hashes and chronology, reconstructs future-entry allocations and daily outcomes
+from the archived provider history, and recomputes performance. Modified or
+missing evidence is reported as invalid, not silently skipped. Identical copied
+experiments count once; conflicting copies invalidate that experiment. Output
+must be a new file. No network, model, trading or promotion calls occur.
+
+Groups separate fund, exact candidate artifact, full incumbent instructions,
+mandate, model settings, risk limits, fees, benchmark, currency convention,
+horizon and execution convention. There is no pooled return across funds or
+candidates. Within each group, entry dates choose the earliest available period,
+then exclude any subsequent period whose inclusive date window overlaps it.
+Ties use recorded decision time and registration hash. This selection uses dates
+before inspecting scores; failed or missing periods still reserve their window.
+Thus an overlapping winner cannot replace an inconvenient missing observation.
+Non-overlap reduces repeated exposure but **does not prove statistical independence**.
+
+The report includes every case status, selected and overlapping registrations,
+coverage of matured selected windows, mean/median/worst paired advantage, wins,
+mean net and benchmark-relative returns, worst period returns, drawdown, turnover
+and fees for both arms. These are descriptive averages of separate experiments,
+not a compounded backtest or an annualized investment return. Cases with unknown
+windows remain visible and prevent a group's positive label.
+
+Labels are exploratory:
+
+- `incomplete_evidence`: the group has unresolved or invalid cases, even when
+  some remaining periods performed well.
+- `insufficient_periods`: fewer than the requested number of scored,
+  non-overlapping periods (default eight; not a statistically validated threshold).
+- `mixed_results`: enough periods, but return, drawdown or turnover checks do not
+  all support the candidate.
+- `promising_descriptive`: positive mean and median advantage, more wins than
+  half the sample, no worse mean/worst drawdown, and no higher mean turnover.
+
+No label establishes significance or authorizes promotion. Waiting cases are
+shown but excluded from the matured coverage denominator. A report can audit only
+the directories supplied: it cannot detect deleted or intentionally omitted
+experiments, prove a source was historically available, or correct provider data.
+Invalid artifacts produce a nonzero CLI exit after saving the audit report.
+
+## Next milestone: validated promotion
+
+There is no promotion command yet. Do not copy an unevaluated candidate over the
+active guidance. The optimizer still searches with the interim directional metric;
+portfolio scoring is a separate comparison step, not its training reward.
+
+1. Validate the provider against independent corporate-action and delisting data;
+   expose evidence gaps and coverage before interpreting returns.
+2. Group validation by decision period across funds and exclude training outcomes
+   unavailable at the validation decision time. Stratify mandates and horizons.
+   The optimizer's existing 80/20 split is search validation, not promotion proof.
+3. Validate promotion thresholds on held-out forward evidence, including uncertainty
+   and repeated candidate selection. Descriptive aggregation is implemented, but
+   does not establish independence or significance. Retain the incumbent when
+   results are inconclusive. Promotion must bind evaluated artifact
+   hashes, support rollback, and fail if the candidate or incumbent has changed.
+4. Compare base mandate, selected lessons, and optimized guidance separately to
+   establish which learning channel adds value. Then add structured provisional,
+   active, and retired lessons with applicability and contradicting evidence.
+
+Regression tests use temporary stores, mocked providers and mocked model output.
+They establish accounting and isolation behavior, not investment performance.

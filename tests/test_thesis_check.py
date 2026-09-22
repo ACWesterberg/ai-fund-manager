@@ -28,12 +28,18 @@ def _seed(store, ticker="AAA.ST", thesis="Order intake recovers in Q3.", conf=0.
     return [o for o in store.get_all_outcomes() if o.ticker == ticker][0]
 
 
-def _news(store, ticker, headline, days_ago=10):
+def _news(store, ticker, headline, days_ago=20):
     store.save_news_sentiment(ticker, [{
         "headline": headline, "summary": "", "source_url": "",
         "published_at": (datetime.utcnow() - timedelta(days=days_ago)).strftime("%Y-%m-%d"),
         "sentiment_label": "neutral", "sentiment_score": 0.0,
     }])
+
+
+    # Historical evidence was available in the holding window, not first
+    # fetched on the day this test audits the already-matured decision.
+    with store._conn() as conn:
+        conn.execute("UPDATE news_cache SET fetched_at = published_at WHERE ticker = ?", (ticker,))
 
 
 def _reply(*checks) -> ThesisChecks:
@@ -134,13 +140,13 @@ def test_verification_survives_an_llm_failure(store, monkeypatch):
 def test_review_message_keeps_each_company_to_its_own_evidence():
     outcomes = [
         DecisionOutcome(run_id="r1", ticker="AAA.ST", action="buy", thesis="A recovers",
-                        decision_date="2026-07-01"),
+                        decision_date="2026-07-01", id=1),
         DecisionOutcome(run_id="r1", ticker="BBB.ST", action="buy", thesis="B expands margin",
-                        decision_date="2026-07-01"),
+                        decision_date="2026-07-01", id=2),
     ]
     evidence = {
-        "AAA.ST": [{"headline": "A wins contract", "published_at": "2026-07-10", "summary": ""}],
-        "BBB.ST": [{"headline": "B guides margin down", "published_at": "2026-07-12", "summary": ""}],
+        1: [{"headline": "A wins contract", "published_at": "2026-07-10", "summary": ""}],
+        2: [{"headline": "B guides margin down", "published_at": "2026-07-12", "summary": ""}],
     }
     msg = _review_message(outcomes, evidence)
     a_section = msg.split("### BBB.ST")[0]
@@ -274,3 +280,63 @@ def test_coverage_on_an_empty_book(store):
     cov = store.get_thesis_coverage()
     assert cov == {"evaluated": 0, "with_thesis": 0, "audited": 0,
                    "no_evidence": 0, "no_thesis": 0}
+
+
+@pytest.mark.parametrize("published,fetched,expected", [
+    ("2026-07-01", "2026-07-01", True),
+    ("2026-07-29", "2026-07-29", True),
+    ("2026-07-30", "2026-07-30", False),  # after the horizon
+    ("2026-06-30", "2026-07-02", False),  # old news fetched later
+    ("2026-07-10", "2026-08-01", False),  # unavailable inside the window
+    (None, "2026-07-10", False),
+    ("bad date", "2026-07-10", False),
+    ("Fri, 10 Jul 2026 12:00:00 GMT", "2026-07-10", True),
+    ("2026-07-30T01:00:00+02:00", "2026-07-29", True),  # UTC Jul 29
+])
+def test_news_window_requires_publication_and_availability(store, published, fetched, expected):
+    from fundmgr.engine.thesis_check import _news_window
+    store.save_news_sentiment("AAA", [{"headline": "Evidence", "published_at": published}])
+    with store._conn() as conn:
+        conn.execute("UPDATE news_cache SET fetched_at = ?", (fetched,))
+    outcome = DecisionOutcome(run_id="r", ticker="AAA", action="buy", decision_date="2026-07-01")
+    assert bool(_news_window(store, outcome, 28)) == expected
+
+
+def test_evidence_cap_keeps_distinct_headlines_and_uses_actual_end_date(store):
+    from fundmgr.engine.thesis_check import _news_window
+    store.save_news_sentiment("AAA", [
+        *[{"headline": "Repeated", "published_at": "2026-07-20"}] * 20,
+        {"headline": "Earlier distinct", "published_at": "2026-07-19"},
+        {"headline": "After actual evaluation", "published_at": "2026-07-29"},
+    ])
+    with store._conn() as conn:
+        conn.execute("UPDATE news_cache SET fetched_at = published_at")
+    outcome = DecisionOutcome(run_id="r", ticker="AAA", action="buy",
+                              decision_date="2026-07-01", evaluation_date="2026-07-28")
+    assert [i["headline"] for i in _news_window(store, outcome, 28)] == ["Repeated", "Earlier distinct"]
+
+
+def test_same_ticker_decisions_get_separate_verdicts(store, monkeypatch):
+    first = _seed(store)
+    store.save_recommendation(RecommendationLog(
+        run_id="r2", timestamp=datetime.fromisoformat(first.decision_date),
+        prompt_snapshot="{}", llm_response="{}", guardrail_log="[]", actions_json="[]"))
+    store.seed_outcomes_for_run("r2", json.dumps([
+        {"ticker": "AAA.ST", "side": "sell", "confidence": 0.8,
+         "thesis": "Order intake deteriorates"}]), prices={"AAA.ST": 100})
+    second = next(o for o in store.get_all_outcomes() if o.run_id == "r2")
+    _news(store, "AAA.ST", "Orders recovered")
+    reply = ThesisChecks.model_validate({"checks": [
+        {"outcome_id": first.id, "ticker": "AAA.ST", "verdict": "held", "evidence": "recovered"},
+        {"outcome_id": second.id, "ticker": "AAA.ST", "verdict": "broke", "evidence": "recovered"},
+    ]})
+    captured = _patch_call(monkeypatch, reply)
+    result = verify_theses(store, [first, second], AppConfig())
+    assert result["verdicts"] == {"held": 1, "broke": 1}
+    assert f"outcome_id={first.id}" in captured["msg"]
+    assert f"outcome_id={second.id}" in captured["msg"]
+    stored = {o.id: o.thesis_verdict for o in store.get_all_outcomes()}
+    assert stored[first.id] == "held" and stored[second.id] == "broke"
+    # A ticker-only verdict is ambiguous and must not overwrite either claim.
+    _patch_call(monkeypatch, _reply(("AAA.ST", "held", "ambiguous")))
+    assert verify_theses(store, [first, second], AppConfig())["verdicts"] == {}

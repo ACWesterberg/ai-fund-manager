@@ -127,6 +127,14 @@ class OptimizerConfig:
 
 
 @dataclass
+class ShadowConfig:
+    # Explicit opt-in: each new weekly run makes two additional sample sets.
+    candidate: str | None = None
+    benchmark_currency: str = ""
+    benchmark_calendar: str = ""
+
+
+@dataclass
 class AppConfig:
     capital_sek: float = 50000.0
     cadence: str = "weekly"
@@ -138,6 +146,7 @@ class AppConfig:
     web: WebConfig = field(default_factory=WebConfig)
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    shadow: ShadowConfig = field(default_factory=ShadowConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -308,6 +317,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.optimizer = OptimizerConfig(**opt_raw)
         if compiled:
             cfg.optimizer.compiled_dir = ROOT / compiled
+    if shadow_raw := raw.get("shadow"):
+        cfg.shadow = ShadowConfig(**shadow_raw)
+        if cfg.shadow.candidate:
+            cfg.shadow.candidate = str(ROOT / cfg.shadow.candidate)
     if env_prompt_model := os.getenv("FUND_OPTIMIZER_PROMPT_MODEL"):
         cfg.optimizer.prompt_model_id = env_prompt_model
 

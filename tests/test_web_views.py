@@ -272,7 +272,21 @@ def test_learnings_template_renders_learning_health(cfg, store):
 
 def test_prompt_template_renders_with_and_without_guidance(cfg):
     empty = _jinja.get_template("prompt.html").render(**prompt_context(cfg))
-    assert "No optimized guidance yet" in empty and "Beat OMXSPI." in empty
+    assert "No active optimized guidance" in empty and "Beat OMXSPI." in empty
     _write_guidance(cfg, "Prefer momentum entries.")
     filled = _jinja.get_template("prompt.html").render(**prompt_context(cfg), sim_prefix="/sim")
     assert "Prefer momentum entries." in filled and "claude-opus-4-8" in filled
+
+
+
+def test_prompt_template_distinguishes_candidate_from_active_guidance(cfg):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from fundmgr.engine.optimizer import save_guidance_candidate
+    _write_guidance(cfg, "Active rule")
+    save_guidance_candidate(cfg, SimpleNamespace(save=lambda p: Path(p).write_text("{}")),
+                            {"instructions": "Unevaluated rule", "task_model": "test-model"})
+    html = _jinja.get_template("prompt.html").render(**prompt_context(cfg))
+    assert "Active rule" in html
+    assert "awaiting evaluation — not active" in html
+    assert "Unevaluated rule" in html

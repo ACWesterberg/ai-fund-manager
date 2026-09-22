@@ -1524,6 +1524,24 @@ class Store:
             return None
         return row["date"], float(row["close"])
 
+    def close_on_or_before(
+        self, ticker: str, target_date: str, max_delta_days: int = 7
+    ) -> tuple[str, float] | None:
+        """Finite positive historical close without looking beyond the horizon."""
+        import math
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT date, close FROM price_cache WHERE ticker = ? "
+                "AND date <= ? AND date >= DATE(?, ?) AND close > 0 "
+                "ORDER BY date DESC",
+                (ticker, target_date, target_date, f"-{max_delta_days} days"),
+            ).fetchall()
+        for row in rows:
+            if math.isfinite(row["close"]):
+                return row["date"], float(row["close"])
+        return None
+
     def save_benchmark(self, rows: list[dict]) -> None:
         """rows: list of {date, close}."""
         now = datetime.utcnow().isoformat()
@@ -1578,6 +1596,53 @@ class Store:
                 (ticker, since_date),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_news_in_window(self, ticker: str, since_date: str, until_date: str) -> list[dict]:
+        """News published and available inside an inclusive UTC date window.
+
+        Unknown publication dates are not historical evidence. Both ISO dates
+        and RFC 2822 feed dates are accepted. This intentionally differs from
+        the live sentiment feed, which selects by cache freshness alone.
+        """
+        from datetime import date, timezone
+        from email.utils import parsedate_to_datetime
+
+        start, end = date.fromisoformat(since_date), date.fromisoformat(until_date)
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT headline, summary, source_url, published_at, fetched_at "
+                "FROM news_cache WHERE ticker = ? "
+                "AND DATE(fetched_at) >= ? AND DATE(fetched_at) <= ?",
+                (ticker, since_date, until_date),
+            ).fetchall()
+        items = []
+        for row in rows:
+            published = row["published_at"]
+            if not published:
+                continue
+            try:
+                try:
+                    timestamp = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                except ValueError:
+                    timestamp = parsedate_to_datetime(published)
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                published_day = timestamp.astimezone(timezone.utc).date()
+                fetched_day = datetime.fromisoformat(row["fetched_at"]).date()
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if start <= published_day <= end and published_day <= fetched_day:
+                items.append((timestamp, dict(row)))
+        items.sort(key=lambda item: item[0], reverse=True)
+        # Repeated feed fetches must not crowd distinct evidence out of the cap.
+        seen = set()
+        result = []
+        for _, item in items:
+            key = (item["headline"], item["published_at"], item["source_url"])
+            if key not in seen:
+                result.append(item)
+                seen.add(key)
+        return result
 
     # ── News triggers ─────────────────────────────────────────────────────────
 

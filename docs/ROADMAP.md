@@ -5,6 +5,15 @@ issue or a `fund` command when picked up.
 
 ---
 
+## Current priority: evidence-driven prompt improvement
+
+See [LEARNING.md](LEARNING.md). New optimizer output is staged as an inactive
+candidate. Frozen paired comparisons and offline portfolio scoring are available;
+opt-in weekly forward registration and automated outcome collection are available.
+Offline evidence auditing and non-overlapping-period aggregation are available.
+The next milestone is validated promotion thresholds and a tested promotion gate. The older exploration notes below are background, not the
+current delivery order.
+
 ## Historical backtest / replay (bootstrap the optimizer's trainset)
 
 **Idea.** Replay the fund over historical weeks to generate `(decision → 28-day

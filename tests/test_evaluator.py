@@ -464,3 +464,44 @@ def test_calibration_body_states_the_fund_s_own_horizon():
     stats = _stats(high=(11, 25), low=(14, 25))
     assert "over 28 days" in calibration_body(stats, horizon_days=28)
     assert "over 90 days" in calibration_body(stats, horizon_days=90)
+
+
+@pytest.mark.parametrize("offset,expected", [(-8, None), (-7, 110), (-1, 110), (0, 110), (1, None)])
+def test_horizon_price_never_looks_ahead_or_uses_distant_history(store, offset, expected):
+    from fundmgr.engine.evaluator import _evaluation_price
+    target = datetime(2026, 7, 29)
+    day = (target + timedelta(days=offset)).strftime("%Y-%m-%d")
+    store.save_prices("AAA", [{"date": day, "open": 0, "high": 0, "low": 0,
+                              "close": 110, "volume": 0}])
+    o = DecisionOutcome(run_id="r", ticker="AAA", action="buy", decision_date="2026-07-01")
+    price, actual_date = _evaluation_price(store, o, 28)
+    assert price == expected
+    assert actual_date == (day if expected else "")
+
+
+def test_missing_horizon_history_stays_pending_until_backfilled(store):
+    _save_run(store, "r", days_ago=40)
+    store.seed_outcomes_for_run("r", json.dumps([
+        {"ticker": "AAA", "side": "buy", "confidence": 0.8, "thesis": "t"}]),
+        prices={"AAA": 100})
+    target = _iso(12)
+    store.save_prices("AAA", [{"date": _iso(0), "open": 0, "high": 0, "low": 0,
+                              "close": 200, "volume": 0}])
+    store.save_benchmark([{"date": _iso(40), "close": 100}, {"date": target, "close": 105}])
+    assert evaluate_pending_outcomes(store) == []
+    assert store.get_all_outcomes()[0].evaluation_date is None
+    store.save_prices("AAA", [{"date": target, "open": 0, "high": 0, "low": 0,
+                              "close": 110, "volume": 0}])
+    scored = evaluate_pending_outcomes(store)
+    assert len(scored) == 1 and scored[0].price_at_evaluation == 110
+    assert evaluate_pending_outcomes(store) == []  # no repeated lesson input
+
+
+def test_missing_benchmark_cannot_produce_a_learning_batch(store):
+    _save_run(store, "r", days_ago=40)
+    store.seed_outcomes_for_run("r", json.dumps([
+        {"ticker": "AAA", "side": "buy", "thesis": "t"}]), prices={"AAA": 100})
+    store.save_prices("AAA", [{"date": _iso(12), "open": 0, "high": 0, "low": 0,
+                              "close": 110, "volume": 0}])
+    assert evaluate_pending_outcomes(store) == []
+    assert store.get_all_outcomes()[0].evaluation_date is None

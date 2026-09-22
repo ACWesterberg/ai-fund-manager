@@ -22,6 +22,7 @@ price move is withheld, and "unresolved" is stated to be the expected answer.
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 from fundmgr.state.models import DecisionOutcome
@@ -57,7 +58,8 @@ def _system_prompt(horizon_days: int) -> str:
         "job properly, not failing it, and on short windows it is the common answer.\n"
         "4. A vague thesis that makes no falsifiable claim is 'unresolved'. Do not "
         "reconstruct a claim it did not make.\n"
-        "5. Judge each decision only on its own company's evidence."
+        "5. Judge each decision only on its own supplied evidence. Copy its outcome_id "
+        "into the verdict; different decisions on one ticker have different claims and windows."
 )
 
 
@@ -97,10 +99,10 @@ def verify_theses(
     if lookback_days is None:
         lookback_days = cfg.evaluation_horizon_days
 
-    evidence = {o.ticker: _news_window(store, o, lookback_days) for o in judgeable}
+    evidence = {o.id: _news_window(store, o, lookback_days) for o in judgeable}
     # Nothing to judge against is not a verdict — say nothing rather than let the
     # model fall back on what it knows about the company in general.
-    judgeable = [o for o in judgeable if evidence.get(o.ticker)]
+    judgeable = [o for o in judgeable if evidence.get(o.id)]
     funnel["with_evidence"] = len(judgeable)
     if not judgeable:
         logger.info(
@@ -116,12 +118,22 @@ def verify_theses(
     if parsed is None:
         return funnel
 
-    by_ticker = {o.ticker.upper(): o for o in judgeable}
+    by_id = {o.id: o for o in judgeable}
+    by_ticker: dict[str, list[DecisionOutcome]] = {}
+    for outcome in judgeable:
+        by_ticker.setdefault(outcome.ticker.upper(), []).append(outcome)
     counts: dict[str, int] = {}
+    seen: set[int] = set()
     for check in parsed.checks:
-        outcome = by_ticker.get(check.ticker)
-        if outcome is None or not outcome.id:
+        outcome = by_id.get(check.outcome_id)
+        # Compatibility with older responses is safe only for unique tickers.
+        if check.outcome_id is None:
+            matches = by_ticker.get(check.ticker, [])
+            outcome = matches[0] if len(matches) == 1 else None
+        if (outcome is None or not outcome.id or outcome.id in seen
+                or outcome.ticker.upper() != check.ticker):
             continue
+        seen.add(outcome.id)
         store.set_thesis_verdict(outcome.id, check.verdict, check.evidence)
         outcome.thesis_verdict = check.verdict
         outcome.thesis_evidence = check.evidence
@@ -137,25 +149,30 @@ def verify_theses(
 
 
 def _news_window(store: Store, outcome: DecisionOutcome, lookback_days: int) -> list[dict]:
-    """The ticker's cached news from the decision date on, newest first."""
+    """Evidence available during this decision's bounded evaluation window."""
     since = outcome.decision_date or ""
     if not since:
         return []
     try:
-        items = store.get_recent_news(outcome.ticker, since_date=since)
+        horizon = outcome.horizon_days or lookback_days
+        until = (date.fromisoformat(since) + timedelta(days=horizon)).isoformat()
+        if outcome.evaluation_date:
+            until = min(until, outcome.evaluation_date)
+        items = store.get_news_in_window(outcome.ticker, since, until)
     except Exception as exc:
         logger.warning("Thesis check: news lookup failed for %s: %s", outcome.ticker, exc)
         return []
     return items[:MAX_HEADLINES_PER_TICKER]
 
 
-def _review_message(outcomes: list[DecisionOutcome], evidence: dict[str, list[dict]]) -> str:
+def _review_message(outcomes: list[DecisionOutcome], evidence: dict[int, list[dict]]) -> str:
     lines: list[str] = []
     for o in outcomes:
-        lines.append(f"### {o.ticker} — {o.action.upper()} on {o.decision_date or 'unknown date'}")
+        lines.append(f"### {o.ticker} — {o.action.upper()} on {o.decision_date or 'unknown date'} "
+                     f"| outcome_id={o.id}")
         lines.append(f"Thesis stated at entry: {o.thesis}")
         lines.append("News published since:")
-        for item in evidence.get(o.ticker, []):
+        for item in evidence.get(o.id, []):
             published = (item.get("published_at") or "")[:10]
             headline = item.get("headline") or ""
             summary = (item.get("summary") or "").strip()

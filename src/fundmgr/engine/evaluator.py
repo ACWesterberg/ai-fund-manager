@@ -10,8 +10,6 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-import yfinance as yf
-
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.state.models import DecisionOutcome, Learning
 from fundmgr.state.store import Store
@@ -28,11 +26,11 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
     For each pending outcome older than lookback_days, compute return vs
     benchmark over a *fixed* horizon and persist. Returns the evaluated outcomes.
 
-    The evaluation price is the cached close nearest to decision_date +
-    lookback_days, so every outcome is a true `lookback_days` outcome regardless
-    of when the run that evaluates it happens to fire. When the cache has no
-    close near that target (thin history), it falls back to the live price at
-    "now" — the previous behaviour — so an outcome is still recorded.
+    The evaluation price is the latest cached close on or before decision_date +
+    lookback_days (at most seven calendar days earlier). The actual close date
+    is persisted regardless of when this evaluator runs. When the cache has no
+    close on or before that target, the outcome stays pending. A later live
+    quote must not masquerade as a fixed-horizon observation.
     """
     pending = store.get_pending_outcomes(older_than_days=lookback_days)
     if not pending:
@@ -54,9 +52,9 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
             store, since_date=outcome.decision_date, until_date=eval_date
         )
 
-        outperformed = None
-        if bench_return is not None:
-            outperformed = position_return > bench_return
+        if bench_return is None:
+            continue  # incomplete labels must not generate lessons repeatedly
+        outperformed = position_return > bench_return
 
         outcome.price_at_evaluation = eval_price
         outcome.position_return_pct = round(position_return, 2)
@@ -74,25 +72,18 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
 def _evaluation_price(
     store: Store, outcome: DecisionOutcome, horizon_days: int
 ) -> tuple[float | None, str]:
-    """(price, date) to evaluate an outcome at: pinned cached close, else live price."""
+    """Last cached close at/before the horizon, within seven calendar days.
+
+    The preceding close accommodates non-trading days without observing beyond
+    the requested window. Missing history leaves the label pending.
+    """
     target = (
         datetime.strptime(outcome.decision_date, "%Y-%m-%d") + timedelta(days=horizon_days)
     ).strftime("%Y-%m-%d")
-
-    near = store.close_near(outcome.ticker, target, max_delta_days=7)
-    if near is not None:
-        return near[1], near[0]
-
-    # Fallback: live price at "now" (thin cache — better a rough outcome than none).
-    try:
-        current_price = yf.Ticker(outcome.ticker).fast_info.last_price
-    except Exception:
-        current_price = None
-    return (
-        (float(current_price), datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-        if current_price
-        else (None, "")
-    )
+    close = store.close_on_or_before(outcome.ticker, target, max_delta_days=7)
+    if close is None:
+        return None, ""
+    return close[1], close[0]
 
 
 def repair_outcomes(store: Store, dry_run: bool = False) -> dict[str, int]:

@@ -236,8 +236,6 @@ def learnings_count(learnings_block: str) -> int:
     )
 
 
-_CANDIDATE_LIMIT = 75  # non-held tickers shown to LLM per run
-
 
 def _signal_score(f: TickerFeatures) -> float:
     """
@@ -288,8 +286,9 @@ def _features_block(
     held = {t: f for t, f in features.items() if t in current_tickers}
     rest = {t: f for t, f in features.items() if t not in current_tickers}
 
-    # Rank non-held candidates by signal, take top N
-    top_candidates = sorted(rest.values(), key=_signal_score, reverse=True)[:_CANDIDATE_LIMIT]
+    # The upstream screener owns selection, including pinned/region/style slots.
+    # Rendering must not silently apply a second, incompatible selection.
+    top_candidates = sorted(rest.values(), key=lambda f: (-_signal_score(f), f.ticker))
 
     total_universe = len(features)
     shown = len(held) + len(top_candidates)
@@ -310,6 +309,19 @@ def _features_block(
         lines.append("")
 
     return "\n".join(lines)
+
+
+def assemble_system_prompt(mandate: str, guidance: str = "") -> str:
+    """Shared assembly for live decisions and frozen prompt comparisons."""
+    section = (
+        "\n\n---\n## Decision Guidance (optimized from your realized outcomes)\n" + guidance
+        if guidance else ""
+    )
+    return (
+        mandate + section + "\n\n---\n"
+        "Return ONLY a valid JSON object matching the DecisionRun schema. "
+        "No markdown, no explanation outside the JSON."
+    )
 
 
 def build_prompt(
@@ -348,19 +360,7 @@ def build_prompt(
     # Optimized decision guidance (from `fund optimize`, once compiled)
     from fundmgr.engine.optimizer import load_guidance
     guidance = load_guidance(cfg)
-    guidance_section = (
-        "\n\n---\n## Decision Guidance (optimized from your realized outcomes)\n" + guidance
-        if guidance else ""
-    )
-
-    # Add structured output instruction to mandate
-    system = (
-        mandate
-        + guidance_section
-        + "\n\n---\n"
-        + "Return ONLY a valid JSON object matching the DecisionRun schema. "
-        + "No markdown, no explanation outside the JSON."
-    )
+    system = assemble_system_prompt(mandate, guidance)
 
     # Benchmark return since first NAV entry
     nav_history = store.get_nav_history()
@@ -388,6 +388,7 @@ def build_prompt(
 
     fields = {
         "mandate":         mandate,
+        "guidance":        guidance,
         "macro":           macro_block,
         "portfolio_state": portfolio_state,
         "risk_limits":     risk_limits,
@@ -450,6 +451,10 @@ def snapshot_to_dict(
     user: str,
     fields: dict[str, str] | None = None,
     cfg: "AppConfig | None" = None,
+    *,
+    features: dict[str, TickerFeatures] | None = None,
+    universe_tickers: set[str] | None = None,
+    fx_rates: dict[str, float] | None = None,
 ) -> str:
     """Serialise full prompt context for the recommendation log.
 
@@ -491,4 +496,10 @@ def snapshot_to_dict(
             "learnings_hash": learnings_fingerprint(learnings_block),
             "learnings_n":    learnings_count(learnings_block),
         }
+    if cfg is not None and features is not None and fields is not None:
+        from fundmgr.engine.experiments import capture_case
+        out["evaluation_case"] = capture_case(
+            cfg, snap, features, universe_tickers or set(features), fields,
+            system, user, fx_rates or {},
+        )
     return json.dumps(out)

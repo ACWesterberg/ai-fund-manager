@@ -340,6 +340,20 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"\n      Cold start detected (cash {snap.cash_pct:.0f}%): "
                    f"turnover cap → {cfg.risk.cold_start_turnover_pct:.0f}%")
 
+    # Archive FX for all shown candidates, including alternatives we do not buy.
+    # Missing rates remain missing; offline comparisons must not invent parity.
+    if cfg.fx_to_sek:
+        for currency in sorted({f.currency for f in screened_features.values()} - {"SEK"}):
+            try:
+                rate = rate_to_sek(currency, store)
+            except Exception as exc:
+                click.echo(f"      Evaluation FX unavailable for {currency}: {exc}", err=True)
+                rate = None
+            if rate is not None:
+                fx_cache[currency] = rate
+            else:
+                fx_cache.pop(currency, None)
+
     system_msg, user_msg, prompt_fields = build_prompt(effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block)
 
     # ── Call LLM (with optional consensus sampling) ───────────────────────────
@@ -379,7 +393,11 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         rec = RecommendationLog(
             run_id=run_id,
             timestamp=datetime.utcnow(),
-            prompt_snapshot=snapshot_to_dict(snap, system_msg, user_msg, prompt_fields, effective_cfg),
+            prompt_snapshot=snapshot_to_dict(
+                snap, system_msg, user_msg, prompt_fields, effective_cfg,
+                features=screened_features, universe_tickers=universe_tickers,
+                fx_rates=fx_cache,
+            ),
             llm_response=raw_response,
             guardrail_log=json.dumps(guardrail_result.to_log()),
             actions_json=json.dumps([a.model_dump() for a in guardrail_result.approved_actions]),
@@ -554,6 +572,22 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         )
         for line in fill_log:
             click.echo(line)
+
+    if not dry_run:
+        # Shadow research is isolated from fills and uses the saved pre-trade book.
+        from fundmgr.engine.forward import record_forward, collect_forward
+        try:
+            shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers)
+            if shadow_path:
+                click.echo(f"\n  Forward comparison recorded: {shadow_path}")
+        except Exception as exc:
+            click.echo(f"  Forward comparison unavailable: {exc}", err=True)
+        try:
+            for result in collect_forward(cfg):
+                click.echo(f"  Shadow {result['case']}: {result['status']}"
+                           + (f" — {result['error']}" if result.get("error") else ""))
+        except Exception as exc:
+            click.echo(f"  Shadow collection unavailable: {exc}", err=True)
 
 
 def _print_feature_table(features, cfg):
@@ -1638,13 +1672,13 @@ def optimize(min_outcomes: int | None, dry_run: bool):
     Builds one training example per past run whose 28-day per-ticker outcomes
     vs the benchmark are known, searches instruction space for the
     WeeklyDecision signature with an alpha-weighted metric, and saves the
-    winning instructions as guidance injected into every future 'fund run'.
+    winning instructions as an inactive candidate for subsequent evaluation.
     """
     import logging
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     cfg, store = _get_store()
-    from fundmgr.engine.optimizer import build_pooled_trainset, guidance_path, run_optimization
+    from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory, guidance_path, run_optimization
 
     threshold = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
     evaluated = store.get_evaluated_outcomes()
@@ -1664,15 +1698,16 @@ def optimize(min_outcomes: int | None, dry_run: bool):
         click.echo("    pooled from:        " + ", ".join(
             f"{src} ({n})" for src, n in sorted(by_source.items())
         ))
-    click.echo(f"  Resolved theses:      {resolved} (metric signal beyond raw alpha)")
-    click.echo(f"  Guidance artifact:    {guidance_path(cfg)}")
+    click.echo(f"  Resolved theses:      {resolved} (diagnostic only; excluded from search reward)")
+    click.echo(f"  Active guidance:      {guidance_path(cfg)}")
+    click.echo(f"  Candidate directory:  {candidate_directory(cfg)}")
 
     if dry_run:
         click.echo("  (dry run — MIPRO not executed)")
         return
 
     if run_optimization(cfg, store, min_outcomes=min_outcomes):
-        click.echo("\n  ✓ New guidance saved — it will be injected into the next 'fund run'.")
+        click.echo("\n  ✓ Inactive candidate saved — evaluation is required; active guidance is unchanged.")
     else:
         click.echo("\n  No new guidance produced (threshold not met or optimization failed).")
 
@@ -2924,9 +2959,6 @@ def _print_review(result: dict, slug: str, dry_run: bool) -> None:
 
 
 
-if __name__ == "__main__":
-    cli()
-
 
 @cli.command("paper-metric")
 @click.argument("slug")
@@ -3232,3 +3264,104 @@ def paper_edgar(slug, ticker, quarters, apply_):
     tail = f" ({older} older quarter(s) skipped — the series holds {MAX_SNAPSHOTS})" if older else ""
     click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s)"
                f"{tail}, {periods[0]} to {periods[-1]}.")
+
+
+@cli.command("compare-guidance")
+@click.option("--run-id", required=True, help="Saved weekly run with frozen evaluation context")
+@click.option("--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), required=True)
+def compare_guidance_cmd(run_id: str, candidate: Path, output: Path):
+    """Record incumbent/candidate decisions on identical inputs.
+
+    Makes two sets of model calls at the frozen sample count. No orders, fills,
+    or guidance changes. Historical replays are labelled diagnostic only.
+    """
+    from fundmgr.engine.experiments import compare_guidance, write_report
+
+    if output.exists() or not output.parent.is_dir():
+        raise click.ClickException("Output must be a new file in an existing directory")
+    _, store = _get_store()
+    rec = store.get_recommendation_by_run_id(run_id)
+    if rec is None:
+        raise click.ClickException(f"Unknown run: {run_id}")
+    try:
+        payload = compare_guidance(json.loads(rec.prompt_snapshot), json.loads(candidate.read_text()))
+        write_report(output, payload)
+    except (ValueError, OSError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Comparison saved: {output} ({payload['mode']})")
+    for name, arm in payload["arms"].items():
+        click.echo(f"  {name}: {arm['status']}" + (f" — {arm['error']}" if arm.get("error") else ""))
+    if any(arm["status"] != "ready" for arm in payload["arms"].values()):
+        raise click.ClickException("Comparison recorded but not scoreable; inspect the arm errors")
+    click.echo("Score later with score-guidance; this command does not activate the candidate.")
+
+
+@cli.command("score-guidance")
+@click.argument("comparison", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--outcomes", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), required=True)
+def score_guidance_cmd(comparison: Path, outcomes: Path, output: Path):
+    """Score a recorded pair using supplied daily valuations. No model calls."""
+    from fundmgr.engine.experiments import Outcomes, score_comparison, write_report
+
+    if output.exists() or not output.parent.is_dir():
+        raise click.ClickException("Output must be a new file in an existing directory")
+    try:
+        result = score_comparison(json.loads(comparison.read_text()),
+                                  Outcomes.model_validate_json(outcomes.read_text()))
+        write_report(output, result)
+    except (ValueError, OSError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    for name, metrics in result["scores"].items():
+        click.echo(f"  {name}: net {metrics['net_return_pct']:+.2f}%, "
+                   f"benchmark-relative {metrics['excess_return_pp']:+.2f}pp, "
+                   f"daily drawdown {metrics['max_daily_drawdown_pct']:.2f}%")
+    click.echo(f"Candidate advantage: {result['candidate_advantage_pp']:+.2f}pp")
+    click.echo(f"Score saved: {output}. {result['limitation']}")
+
+
+@cli.command("collect-guidance")
+def collect_guidance_cmd():
+    """Fetch and score matured forward comparisons. No model calls or fills."""
+    from fundmgr.engine.forward import collect_forward
+
+    cfg = load_config()
+    results = collect_forward(cfg)
+    if not results:
+        click.echo("No registered forward comparisons for this fund.")
+    for result in results:
+        click.echo(f"{result['case']}: {result['status']}"
+                   + (f" — {result['error']}" if result.get("error") else ""))
+    if any(result["status"] == "pending" for result in results):
+        raise click.ClickException("Some comparisons remain pending; inspect missing evidence before retrying")
+
+
+@cli.command("evaluate-guidance")
+@click.option("--root", "roots", multiple=True, type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Full fund shadow directory; repeat for multiple funds. Defaults to selected fund.")
+@click.option("--min-periods", default=8, type=click.IntRange(min=2), show_default=True)
+@click.option("--output", required=True, type=click.Path(dir_okay=False, path_type=Path))
+def evaluate_guidance_cmd(roots, min_periods, output):
+    """Audit and aggregate forward evidence offline. Never promotes guidance."""
+    from fundmgr.engine.aggregate import aggregate_evidence
+    from fundmgr.engine.forward import experiment_root
+    from fundmgr.engine.experiments import write_report
+
+    if output.exists() or not output.parent.is_dir():
+        raise click.ClickException("Output must be a new file in an existing directory")
+    try:
+        report = aggregate_evidence(list(roots) or [experiment_root(load_config())], min_periods)
+        write_report(output, report)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    for group in report["groups"]:
+        click.echo(f"{group['identity']['fund_id']} {group['group'][:12]}: {group['status']} "
+                   f"({group['scored_selected_periods']}/{group['matured_selected_periods']} matured non-overlapping periods scored)")
+    click.echo(f"Evidence report saved: {output}. Descriptive only; no promotion.")
+    if report["counts"].get("invalid"):
+        raise click.ClickException("Report includes invalid artifacts; inspect case errors")
+
+
+if __name__ == "__main__":
+    cli()

@@ -74,7 +74,7 @@ def test_metric_mixes_multiple_tickers():
 def test_metric_unknown_tickers_and_holds_are_neutral():
     ex = _example(**{"AAA.ST": 4.0})
     with_noise = decision_metric(
-        ex, _prediction(("AAA.ST", "buy"), ("ZZZ.ST", "buy"), ("AAA.ST", "hold"))
+        ex, _prediction(("AAA.ST", "buy"), ("ZZZ.ST", "buy"), ("HELD.ST", "hold"))
     )
     plain = decision_metric(ex, _prediction(("AAA.ST", "buy")))
     assert with_noise == pytest.approx(plain)
@@ -475,36 +475,26 @@ def test_metric_unchanged_when_no_thesis_verdicts_exist():
     )
 
 
-def test_metric_rewards_buying_a_name_whose_thesis_held():
-    """The point of the blend: reward being right about the business, which is a
-    far less noisy signal than a 28-day price move."""
-    alphas = {"AAA": 0.0, "BBB": 0.0}   # price said nothing either way
-    held = _ex(alphas, {"AAA": "held"})
-    broke = _ex(alphas, {"AAA": "broke"})
-    assert decision_metric(held, _pred(("AAA", "buy"))) > 0.5
-    assert decision_metric(broke, _pred(("AAA", "buy"))) < 0.5
-
-
-def test_metric_rewards_selling_a_name_whose_thesis_broke():
-    alphas = {"AAA": 0.0}
-    broke = _ex(alphas, {"AAA": "broke"})
-    assert decision_metric(broke, _pred(("AAA", "sell"))) > 0.5
-
-
-def test_thesis_term_can_temper_a_lucky_win():
-    """A position that beat on a thesis that broke is luck; the metric should not
-    reward it as fully as the same win on a thesis that held."""
+@pytest.mark.parametrize("side", ["buy", "sell", "hold"])
+@pytest.mark.parametrize("verdict", ["held", "broke", "unresolved"])
+def test_historical_thesis_verdict_cannot_reward_a_new_claim(side, verdict):
+    # The old thesis might be bearish while the new one is bullish. A verdict
+    # about the old text says nothing about the new decision, even on one ticker.
     alphas = {"AAA": 6.0}
-    lucky = decision_metric(_ex(alphas, {"AAA": "broke"}), _pred(("AAA", "buy")))
-    earned = decision_metric(_ex(alphas, {"AAA": "held"}), _pred(("AAA", "buy")))
-    assert earned > lucky
+    plain = decision_metric(_ex(alphas), _pred(("AAA", side)))
+    labelled = decision_metric(_ex(alphas, {"AAA": verdict}), _pred(("AAA", side)))
+    assert labelled == pytest.approx(plain)
 
 
-def test_metric_stays_bounded_with_thesis_signal():
-    alphas = {t: 50.0 for t in ("A", "B", "C")}
-    theses = {t: "held" for t in ("A", "B", "C")}
-    score = decision_metric(_ex(alphas, theses), _pred(*[(t, "buy") for t in alphas]))
-    assert 0.0 < score < 1.0
+def test_correct_bearish_thesis_does_not_reward_an_opposite_buy():
+    ex = _ex({"AAA": 0.0}, {"AAA": "held"})
+    assert decision_metric(ex, _pred(("AAA", "sell"))) == 0.5
+    assert decision_metric(ex, _pred(("AAA", "buy"))) == 0.5
+
+
+def test_duplicate_ticker_cannot_multiply_alpha_reward():
+    ex = _ex({"AAA": 10.0})
+    assert decision_metric(ex, _pred(("AAA", "buy"), ("AAA", "buy"))) == 0.0
 
 
 # ── Pooled trainset ───────────────────────────────────────────────────────────
@@ -578,3 +568,77 @@ def test_pooling_survives_an_unreadable_sibling(tmp_path, monkeypatch):
     monkeypatch.setattr("fundmgr.config.CONFIG_DIR", tmp_path)
     cfg.optimizer.pool_configs = ["does-not-exist.yaml"]
     assert len(build_pooled_trainset(cfg)) == 1
+
+
+# ── Candidate isolation ──────────────────────────────────────────────────────
+
+def _compiled(text="Candidate instructions"):
+    from pathlib import Path
+    return SimpleNamespace(
+        save=lambda path: Path(path).write_text('{"compiled": true}'),
+        named_predictors=lambda: [("predict", SimpleNamespace(
+            signature=SimpleNamespace(instructions=text)))],
+    )
+
+
+@pytest.mark.parametrize("has_incumbent", [False, True])
+def test_candidate_is_reviewable_but_never_loaded_into_live_prompt(cfg, store, has_incumbent):
+    from fundmgr.engine.optimizer import save_guidance_candidate, guidance_versions
+    if has_incumbent:
+        _write_guidance(cfg, "Incumbent instructions")
+    before = guidance_fingerprint(cfg)
+    manifest = save_guidance_candidate(cfg, _compiled(), {"instructions": "Candidate instructions"})
+    payload = json.loads(manifest.read_text())
+    assert payload["status"] == "pending_evaluation"
+    assert payload["metric_version"] == "directional_alpha_v2"
+    assert payload["incumbent_guidance_hash"] == before
+    assert (manifest.parent / "program.json").exists()
+    system, _, _ = build_prompt(cfg, PortfolioSnapshot([], 100000), {}, store, "test")
+    assert "Candidate instructions" not in system
+    assert ("Incumbent instructions" in system) == has_incumbent
+    versions = guidance_versions(cfg)
+    assert versions["history"] == []
+    assert versions["candidates"][0]["instructions"] == "Candidate instructions"
+    assert guidance_fingerprint(cfg) == before
+    # Another candidate never overwrites the prior evidence/artifact.
+    second = save_guidance_candidate(cfg, _compiled(), {"instructions": "Another candidate"})
+    assert second != manifest and manifest.exists()
+
+
+def test_failed_candidate_save_cannot_publish_or_change_active_guidance(cfg):
+    from fundmgr.engine.optimizer import save_guidance_candidate, guidance_versions
+    _write_guidance(cfg, "Keep me")
+    def fail(path):
+        raise OSError("disk full")
+    with pytest.raises(OSError, match="disk full"):
+        save_guidance_candidate(cfg, SimpleNamespace(save=fail), {"instructions": "Bad"})
+    assert load_guidance(cfg) == "Keep me"
+    assert guidance_versions(cfg)["candidates"] == []
+
+
+def test_optimization_stages_candidate_without_replacing_incumbent(cfg, monkeypatch):
+    import sys
+    from fundmgr.engine import optimizer
+    captured = {}
+    class Example(dict):
+        def with_inputs(self, *fields):
+            return self
+    class Compiler:
+        def __init__(self, **kwargs):
+            captured["metric"] = kwargs["metric"]
+        def compile(self, program, **kwargs):
+            return _compiled()
+    monkeypatch.setitem(sys.modules, "dspy", SimpleNamespace(
+        Example=Example, ChainOfThought=lambda signature: object(), configure=lambda **kw: None))
+    monkeypatch.setitem(sys.modules, "dspy.teleprompt", SimpleNamespace(MIPROv2=Compiler))
+    monkeypatch.setitem(sys.modules, "fundmgr.engine.dspy_program", SimpleNamespace(
+        WeeklyDecision=object(), build_lm=lambda *a, **kw: object()))
+    monkeypatch.setattr(optimizer, "build_pooled_trainset", lambda cfg: [
+        {**_V2_FIELDS, "source": "fund", "ticker_alphas": {"AAA": 1.0}} for _ in range(3)
+    ])
+    _write_guidance(cfg, "Keep me")
+    store = SimpleNamespace(get_evaluated_outcomes=lambda: [object()])
+    assert optimizer.run_optimization(cfg, store, min_outcomes=1, min_examples=2)
+    assert captured["metric"] is optimizer.decision_metric
+    assert load_guidance(cfg) == "Keep me"
+    assert len(optimizer.guidance_versions(cfg)["candidates"]) == 1

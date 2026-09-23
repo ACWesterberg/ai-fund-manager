@@ -11,6 +11,9 @@ PRICE_DATE = date(2026, 9, 23)
 PRICE_VALID_UNTIL = date(2026, 10, 23)
 PRICE_SOURCE = 'https://developers.openai.com/api/docs/models/gpt-5.6-sol'
 BATCH_SOURCE = 'https://developers.openai.com/api/docs/guides/batch'
+# Verified against tiktoken 0.14.0's GPT-5 prefix mapping. Older supported
+# releases may contain the vocabulary without recognizing this model alias.
+VERIFIED_ENCODINGS = {'gpt-5.6-sol': 'o200k_base'}
 PRICES = {'gpt-5.6-sol': (4.0, 20.0)}  # USD / million tokens, standard tier
 FRAMING_ALLOWANCE = 32  # Chat/schema server serialization is not public/exact.
 CANDIDATE_ALLOWANCE = 16000  # 4000 Unicode characters, at most four UTF-8 bytes each.
@@ -18,8 +21,14 @@ CANDIDATE_ALLOWANCE = 16000  # 4000 Unicode characters, at most four UTF-8 bytes
 
 def encoding_for(model):
     import tiktoken
-    # Never silently substitute an unrelated tokenizer for unknown models.
-    return tiktoken.encoding_for_model(model)
+    try:
+        return tiktoken.encoding_for_model(model)
+    except KeyError:
+        # Narrow compatibility fallback only; unknown models still fail closed.
+        encoding = VERIFIED_ENCODINGS.get(model)
+        if encoding is None:
+            raise
+        return tiktoken.get_encoding(encoding)
 
 
 def count_input(encoding, system, user, schema):

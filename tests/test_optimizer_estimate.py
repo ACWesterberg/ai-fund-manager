@@ -83,13 +83,12 @@ def test_schema_and_model_tokenizer_count_real_unicode_and_literal_special_token
     import os
     import tempfile
     from pathlib import Path
-    import tiktoken
     cache = Path(os.environ.get('TIKTOKEN_CACHE_DIR', os.environ.get('DATA_GYM_CACHE_DIR',
                  str(Path(tempfile.gettempdir()) / 'data-gym-cache'))))
     vocabulary = 'https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken'
     if not (cache / hashlib.sha1(vocabulary.encode()).hexdigest()).exists():
         pytest.skip('Public tokenizer vocabulary not cached; tests do not download it')
-    encoding = tiktoken.encoding_for_model('gpt-5.6-sol')
+    encoding = oe.encoding_for('gpt-5.6-sol')
     assert len(encoding.encode('Hello world', disallowed_special=())) == 2
     from fundmgr.engine.bounded_optimizer import Proposal
     count = oe.count_input(encoding, 'ÅÄÖ <|endoftext|>', 'Prices 123.45', Proposal)
@@ -123,3 +122,30 @@ def test_dry_run_displays_estimate_without_changing_limits_or_calling_model(plan
     assert 'not remaining resume cost' in result.output
     assert cfg.optimizer.max_total_tokens == 200000
     assert not list((tmp_path / 'compiled').rglob('*.json'))
+
+
+def test_verified_model_falls_back_when_older_tokenizer_lacks_alias(monkeypatch):
+    import tiktoken
+    calls = []
+    def missing(model):
+        raise KeyError(model)
+    def encoding(name):
+        calls.append(name)
+        return SimpleNamespace(name=name)
+    monkeypatch.setattr(tiktoken, 'encoding_for_model', missing)
+    monkeypatch.setattr(tiktoken, 'get_encoding', encoding)
+    assert oe.encoding_for('gpt-5.6-sol').name == 'o200k_base'
+    assert calls == ['o200k_base']
+    with pytest.raises(KeyError):
+        oe.encoding_for('unknown-model')
+    assert calls == ['o200k_base']
+
+
+def test_tokenizer_native_mapping_takes_precedence(monkeypatch):
+    import tiktoken
+    native = SimpleNamespace(name='native-encoding')
+    monkeypatch.setattr(tiktoken, 'encoding_for_model', lambda model: native)
+    def forbidden(name):
+        pytest.fail('Fallback used despite a native model mapping')
+    monkeypatch.setattr(tiktoken, 'get_encoding', forbidden)
+    assert oe.encoding_for('gpt-5.6-sol') is native

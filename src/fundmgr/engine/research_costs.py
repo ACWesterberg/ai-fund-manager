@@ -70,6 +70,11 @@ def usage_report(root: Path):
             totals["requests_with_usage"] += 1
             for field in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens", "reasoning_tokens"):
                 value = usage.get(field)
+                # Older checkpoints retained raw OpenAI counters but omitted
+                # cache writes in normalization. Recover without rewriting them.
+                if (value is None and field == "cache_write_input_tokens"
+                        and ident['llm']['provider'] == 'openai'):
+                    value = ((usage.get('raw') or {}).get('prompt_tokens_details') or {}).get('cache_write_tokens')
                 if value is not None:
                     if not isinstance(value, int) or value < 0:
                         raise ValueError(f"Invalid provider usage in {path}")

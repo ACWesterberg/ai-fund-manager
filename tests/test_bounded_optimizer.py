@@ -811,3 +811,24 @@ def test_retry_output_override_rejects_pending_and_unrequested_changes(search, f
         bo.run_search(cfg, plan, path, resume=True, retry_failed=True, retry_output_tokens=8192)
     with pytest.raises(ValueError, match='forbidden during collection'):
         bo.run_search(cfg, plan, path, resume=True, retry_failed=True, retry_output_tokens=8192, collect_only=True)
+
+
+def test_openai_cache_writes_reported_and_recovered_from_old_checkpoints(search):
+    from fundmgr.engine.client import _report_usage
+    from fundmgr.engine.research_costs import usage_report
+    cfg, plan, path, _, _ = search
+    raw = {'prompt_tokens': 38669, 'completion_tokens': 2048,
+           'prompt_tokens_details': {'cached_tokens': 4270, 'cache_write_tokens': 34396}}
+    usages = []
+    _report_usage(SimpleNamespace(usage=SimpleNamespace(**raw)), 'openai', usages.append)
+    assert usages[0]['cache_write_input_tokens'] == 34396
+    assert usages[0]['input_tokens'] == 38669  # writes are a subset, never added twice
+    bo.run_search(cfg, plan, path)
+    state = bo._load(path)
+    state['attempts'][0]['usage'] = {**usages[0], 'cache_write_input_tokens': None}
+    bo._save(path, state)
+    before = path.read_bytes()
+    report = usage_report(cfg.optimizer.compiled_dir / 'searches')
+    assert sum(m['cache_write_input_tokens'] for m in report['by_model'].values()) == 34396
+    assert sum(m['input_tokens'] for m in report['by_model'].values()) == 39269
+    assert path.read_bytes() == before

@@ -44,7 +44,7 @@ def _report_usage(response, provider, callback):
         inputs, outputs = raw.get("prompt_tokens"), raw.get("completion_tokens")
         cached = (raw.get("prompt_tokens_details") or {}).get("cached_tokens")
         reasoning = (raw.get("completion_tokens_details") or {}).get("reasoning_tokens")
-        cache_write = None
+        cache_write = (raw.get("prompt_tokens_details") or {}).get("cache_write_tokens")
     else:
         # Anthropic's input_tokens excludes cache reads and writes.
         cache_write, cached = raw.get("cache_creation_input_tokens"), raw.get("cache_read_input_tokens")

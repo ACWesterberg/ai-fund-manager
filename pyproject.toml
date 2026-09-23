@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     # LLM providers
     "openai>=1.30",
+    "tiktoken>=0.13",  # local optimizer token estimates
     "anthropic>=0.25",
     # Data validation
     "pydantic>=2.0",

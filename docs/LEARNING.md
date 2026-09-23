@@ -479,3 +479,39 @@ Batch can also run `--context-mode compare`; it creates no proposal or candidate
 That diagnostic remains a paid bounded comparison and does not automatically
 activate compact context. `optimizer-usage` includes saved per-item provider usage
 for both normal and batch calls, including available usage on invalid responses.
+
+### Token counts and an advisory dollar estimate
+
+`fund optimize --context-mode full --execution batch --dry-run` now reports a
+whole-plan token and USD estimate separately from the byte-based admission
+reservation. Install the updated normal dependencies to obtain `tiktoken` (for an
+existing environment, `uv pip install --python .venv/bin/python -e .`). Its first
+use may download a public tokenizer vocabulary; prompt text is tokenized locally,
+without a model request or upload of fund data.
+
+The initial verified price snapshot supports OpenAI `gpt-5.6-sol`: $4/M input,
+$20/M output, checked 2026-09-23 against the official model page. Batch evaluations
+receive the 50% batch discount; the proposal remains standard-priced. The
+proposal's configured model is priced separately, never assumed identical to the
+evaluation model. Long-context multipliers apply per request above 272,000 tokens.
+Prices expire for display after 2026-10-23 and require source review; unknown
+models, missing tokenizers and unsupported providers give an explicit unavailable
+result, never a guessed or partial dollar total. There is no local Claude-tokenizer
+substitution and no automatic external token-counting request.
+
+The count uses the model's tiktoken encoding on actual system/user text, the textual
+schema hint, and the strict response schema, plus a 32-token estimated protocol
+allowance per call. This is not the provider's exact billed count. A fresh plan
+cannot know the candidate instruction yet: the range adds up to 16,000 input
+tokens per candidate evaluation (the 4,000-character instruction limit in UTF-8).
+A saved proposal uses its actual instruction text instead. The low dollar scenario
+uses known inputs with zero output; the high scenario uses that candidate allowance
+and the full configured output allowance, including reasoning. Actual serialized
+schema/framing can differ; the displayed range is **not a billing cap**.
+
+The report covers the whole plan, including on resume, before local/provider cache
+savings. It is not remaining spend or a bill. It excludes retries, taxes, regional
+surcharges and cache-write premiums. It never changes call/token reservations,
+automatically raises limits, or starts a paid run. Inspect the estimate first;
+only explicitly adjust `--max-total-tokens` once the cost is acceptable. The actual
+provider counts remain available through `fund optimizer-usage` after execution.

@@ -1754,6 +1754,9 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
         click.echo(f"Reservation split: {cost['proposal_reservation']:,} proposal (no universe); "
                    f"{cost['evaluation_reservation']:,} historical evaluations.")
         click.echo("Reservations use text bytes + schema/protocol allowance + output cap; this is not a dollar estimate.")
+        from fundmgr.engine.optimizer_estimate import estimate, describe
+        for line in describe(estimate(plan, saved if resume else None)):
+            click.echo(line)
         click.echo(f"Checkpoint: {path}")
         click.echo(f"Candidate directory: {candidate_directory(cfg)}")
         if dry_run:

@@ -135,6 +135,12 @@
 0 4 * * 0 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund optimize >> data/logs/optimize_buffett_claude.log 2>&1
 
 
+# Collect already-submitted batches and notify via existing Telegram settings.
+# Never submits or retries paid requests. Quiet until complete/needs attention.
+*/15 * * * * cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config.yaml .venv/bin/fund optimizer-watch >> data/logs/optimizer_watch.log 2>&1
+# Add equivalent lines with other FUND_CONFIG values for other OpenAI funds.
+
+
 # ═══ BACKUPS — SQLite DBs → Google Drive (rclone) ════════════════════════════
 # See deploy/BACKUP.md for one-time rclone setup.
 

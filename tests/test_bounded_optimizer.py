@@ -653,3 +653,100 @@ def test_batch_context_comparison_honors_reuse_setting(search, fake_batch, reuse
     assert len(state['results']) == 6 and len(state['attempts']) == expected_requests
     assert len(state['comparisons']) == 3
     assert not calls and not guidance_versions(cfg)['candidates']
+
+
+def test_watcher_collects_once_notifies_once_and_ignores_smaller_current_budget(search, fake_batch, monkeypatch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    from fundmgr.engine import optimizer_watch as watcher
+    cfg, plan, _, calls, _ = search
+    client, submitted, _ = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    notifications = []
+    monkeypatch.setattr(watcher, 'send_telegram', lambda message, **kwargs: notifications.append(message) or True)
+    assert watcher.watch(cfg)['pending'] == 1
+    assert not notifications
+    cfg.optimizer.max_total_tokens = 1  # Collection does not reserve new paid requests.
+    cfg.optimizer.max_calls = 1
+    submitted[0].status = 'completed'
+    result = watcher.watch(cfg)
+    assert result['complete'] == result['notified'] == 1
+    assert 'candidate saved' in notifications[0]
+    assert watcher.watch(cfg)['notified'] == 0
+    assert len(notifications) == 1 and len(calls) == 1
+    assert client.batches.create.call_count == 1
+
+
+def test_watcher_retries_delivery_without_recollecting_or_paying(search, fake_batch, monkeypatch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    from fundmgr.engine import optimizer_watch as watcher
+    cfg, plan, _, calls, _ = search
+    client, submitted, _ = fake_batch
+    plan['execution'] = 'batch'
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, bo.checkpoint_path(cfg, plan))
+    submitted[0].status = 'completed'
+    sender = MagicMock(side_effect=[False, True])
+    monkeypatch.setattr(watcher, 'send_telegram', sender)
+    assert watcher.watch(cfg)['notification_failed'] == 1
+    assert watcher.watch(cfg)['notified'] == 1
+    assert watcher.watch(cfg)['notified'] == 0
+    assert sender.call_count == 2 and client.batches.retrieve.call_count == 1
+    assert len(calls) == 1
+
+
+def test_watcher_failed_batch_never_retries_paid_work(search, fake_batch, monkeypatch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    from fundmgr.engine import optimizer_watch as watcher
+    cfg, plan, _, calls, _ = search
+    client, submitted, _ = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    submitted[0].status = 'failed'
+    submitted[0].output_file_id = None
+    sender = MagicMock(return_value=True)
+    monkeypatch.setattr(watcher, 'send_telegram', sender)
+    assert watcher.watch(cfg)['attention'] == 1
+    assert watcher.watch(cfg)['attention'] == 1
+    assert sender.call_count == 1 and client.batches.create.call_count == 1
+    assert len(calls) == 1 and not guidance_versions(cfg)['candidates']
+
+
+def test_collection_only_cannot_start_new_search_or_missing_proposal(search, fake_batch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    cfg, plan, _, calls, _ = search
+    client, _, _ = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(ValueError, match='existing batch'):
+        bo.run_search(cfg, plan, path, resume=True, collect_only=True)
+    assert not calls
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    state = bo._load(path)
+    state['results'].pop('proposal')
+    bo._save(path, state)
+    with pytest.raises(bo.SearchStopped, match='cannot generate'):
+        bo.run_search(cfg, plan, path, resume=True, collect_only=True, retry_failed=True)
+    assert len(calls) == 1 and client.batches.create.call_count == 1
+
+
+def test_watcher_busy_fund_is_quiet(search, fake_batch, monkeypatch):
+    import fcntl
+    from fundmgr.engine.optimizer_batch import BatchPending
+    from fundmgr.engine import optimizer_watch as watcher
+    cfg, plan, _, _, _ = search
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    sender = MagicMock(return_value=True)
+    monkeypatch.setattr(watcher, 'send_telegram', sender)
+    with (path.parent / 'fund.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert watcher.watch(cfg)['pending'] == 1
+    sender.assert_not_called()

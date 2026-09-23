@@ -36,6 +36,10 @@ class SearchStopped(RuntimeError):
     pass
 
 
+class SearchBusy(SearchStopped):
+    pass
+
+
 def _save(path: Path, state: dict):
     payload = {**state, "checksum": digest(state)}
     tmp = None
@@ -160,7 +164,7 @@ def _cache_lock(path, enabled):
         yield
 
 
-def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False, batch_id=None):
+def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False, batch_id=None, collect_only=False):
     import fcntl
     from fundmgr.engine.optimizer import decision_metric, save_guidance_candidate, guidance_versions
 
@@ -170,6 +174,8 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
         raise ValueError("Batch execution currently supports OpenAI funds only")
     if batch_id and not batch_mode:
         raise ValueError("--batch-id requires a batch checkpoint")
+    if collect_only and (not resume or not path.exists() or not batch_mode):
+        raise ValueError("Collection requires an existing batch checkpoint and resume")
     if cfg.optimizer.max_calls < 1 or cfg.optimizer.max_total_tokens < 1:
         raise ValueError("Call and token budgets must be positive")
     if plan["identity"] != identity(cfg):
@@ -180,7 +186,7 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
             fcntl.flock(fund_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise SearchStopped("This fund optimization is already running") from exc
+            raise SearchBusy("This fund optimization is already running") from exc
         if path.exists():
             state = _load(path)
             if state["plan"] != plan:
@@ -247,6 +253,8 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                     return None
                 if batch_mode and schema is DecisionRun:
                     raise SearchStopped("Batch evaluation unresolved; no direct fallback call is allowed")
+                if collect_only:
+                    raise SearchStopped("Collection cannot generate a missing proposal or start model calls")
                 prior = [a for a in state["attempts"] if a["key"] == key]
                 if prior and not retry_failed:
                     raise SearchStopped("Failed or interrupted request requires --retry-failed; it may already have been billed")
@@ -287,7 +295,8 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
             for key, system, user in jobs:
                 request(key, system, user, DecisionRun, plan["identity"]["llm"]["model_id"], collect=True)
             try:
-                process_batch(cfg, plan, path, state, pending, retry_failed=retry_failed, adopt_id=batch_id)
+                process_batch(cfg, plan, path, state, pending, retry_failed=retry_failed, adopt_id=batch_id,
+                              collect_only=collect_only)
             except (BatchPending, SearchStopped, ValueError):
                 raise
             except Exception as exc:

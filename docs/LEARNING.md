@@ -515,3 +515,30 @@ surcharges and cache-write premiums. It never changes call/token reservations,
 automatically raises limits, or starts a paid run. Inspect the estimate first;
 only explicitly adjust `--max-total-tokens` once the cost is acceptable. The actual
 provider counts remain available through `fund optimizer-usage` after execution.
+
+### Automatic batch collection and Telegram notification
+
+`fund optimizer-watch` checks saved batch searches for the selected `FUND_CONFIG`.
+It collects existing remote results, finishes scoring, and sends a Telegram message
+when complete or when manual intervention is required. It does not create a search,
+generate a proposal, submit a batch, retry failed model requests, or activate a
+candidate. Pending batches and busy fund locks do not trigger notifications.
+Collection also works if the current configured token reservation is below the
+amount previously reserved by an explicitly authorized run; no new reservation is
+made. Changed model/mandate/guidance settings still block scoring for review.
+
+The existing `.env` values `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are used.
+Successful delivery receipts live in `config/compiled/searches/<fund>/notifications/`.
+Failed Telegram delivery is retried at the next check without repeating model work.
+Receipts suppress repeated notifications under normal operation; a crash between
+Telegram accepting a message and receipt persistence can cause a duplicate.
+Transient provider connection failures are logged and checked again next time.
+Terminal batch failures produce an attention notice, never automatic paid retries.
+
+After deploying the code, run `.venv/bin/fund optimizer-watch` once to collect/check
+existing batches. On the Pi, add the `optimizer-watch` entry from
+`deploy/cron.example` to the existing crontab with `crontab -e` (do not overwrite
+other scheduled tasks). It runs every 15 minutes. The repository example does not
+install or modify the Pi's live crontab automatically. Add a corresponding entry
+for each other OpenAI fund you want watched. Results need to be retrieved before
+the provider's output files expire.

@@ -34,7 +34,7 @@ def body_for(descriptor):
     return body
 
 
-def process_batch(cfg, plan, path, state, pending, *, retry_failed=False, adopt_id=None):
+def process_batch(cfg, plan, path, state, pending, *, retry_failed=False, adopt_id=None, collect_only=False):
     from fundmgr.engine.bounded_optimizer import _save, SearchStopped
     batches = state.setdefault('batches', [])
     batch = batches[-1] if batches and not batches[-1].get('collected') else None
@@ -43,6 +43,8 @@ def process_batch(cfg, plan, path, state, pending, *, retry_failed=False, adopt_
             raise ValueError('--batch-id requires an unresolved saved submission')
         if not pending:
             return
+        if collect_only:
+            raise SearchStopped("Collection cannot submit or retry batch requests; manual resume required")
         grouped = {}
         for job in pending:
             group_key = job['cache_key'] if cfg.optimizer.reuse_evaluations else job['key']

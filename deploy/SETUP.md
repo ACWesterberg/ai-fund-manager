@@ -463,3 +463,14 @@ The poller and direct webhook are independent of GitHub's test job; use protecte
 
 The installed `FinanceData` source on the Pi still follows its configured branch;
 CI's pin does not change that operational policy.
+
+### Batch completion notifications
+
+Add the `fund optimizer-watch` line from `deploy/cron.example` to the Pi's existing
+crontab (`crontab -e`) to check the Nordic fund every 15 minutes. The command uses
+`.env` Telegram settings and sends a completion or attention notice; pending checks
+stay quiet. It only collects already-submitted batches and never starts a paid
+search, retries failed evaluations, or activates guidance. Changing the example
+file alone does not install the live schedule. Run the command once manually to
+check an existing batch; repeat the cron line with another `FUND_CONFIG` to watch
+another OpenAI fund.

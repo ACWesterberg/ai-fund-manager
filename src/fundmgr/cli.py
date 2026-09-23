@@ -1781,6 +1781,16 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
 
 
 
+@cli.command("optimizer-watch")
+def optimizer_watch():
+    """Collect existing batches and notify via Telegram; never submit paid requests."""
+    import logging
+    from fundmgr.engine.optimizer_watch import watch
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    result = watch(load_config())
+    click.echo("Batch check: " + ", ".join(f"{key}={value}" for key, value in result.items()))
+
+
 @cli.command("optimizer-usage")
 def optimizer_usage():
     """Report saved provider usage across funds sharing the compiled directory."""

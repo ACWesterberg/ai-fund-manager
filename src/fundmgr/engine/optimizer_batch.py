@@ -76,7 +76,8 @@ def process_batch(cfg, plan, path, state, pending, *, retry_failed=False, adopt_
             job['attempt_index'] = len(state['attempts'])
             state['attempts'].append({'key': job['key'], 'model': job['descriptor']['llm']['model_id'],
                                      'reserved_tokens': job['reserved_tokens'], 'status': 'in_flight',
-                                     'usage': None, 'transport': 'openai_batch'})
+                                     'usage': None, 'transport': 'openai_batch',
+                                     'max_output_tokens': job['descriptor']['llm']['max_tokens']})
         batches.append(batch)
         _save(path, state)  # A crash after this point must never cause automatic resubmission.
         try:
@@ -137,8 +138,14 @@ def process_batch(cfg, plan, path, state, pending, *, retry_failed=False, adopt_
             if record.get('error') or response.get('status_code') != 200:
                 raise LLMError(f'Batch request failed: {record.get("error") or response.get("status_code") or remote.status}')
             choice = body['choices'][0]
-            if choice['finish_reason'] != 'stop' or choice['message'].get('refusal'):
-                raise LLMError('Batch completion refused or truncated')
+            attempt['finish_reason'] = choice['finish_reason']
+            attempt['refused'] = bool(choice['message'].get('refusal'))
+            if choice['finish_reason'] == 'length':
+                raise LLMError('Batch completion exceeded output token limit (reasoning and answer share this limit)')
+            if choice['message'].get('refusal'):
+                raise LLMError('Batch completion refused')
+            if choice['finish_reason'] != 'stop':
+                raise LLMError(f"Unexpected batch finish reason: {choice['finish_reason']}")
             raw = choice['message']['content']
             parsed = DecisionRun.model_validate_json(raw).model_dump()
         except (ValueError, KeyError, IndexError, TypeError, LLMError) as exc:

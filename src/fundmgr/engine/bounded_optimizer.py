@@ -164,12 +164,37 @@ def _cache_lock(path, enabled):
         yield
 
 
-def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False, batch_id=None, collect_only=False):
+def retry_output_limits(state, output_tokens):
+    """Explicit per-failure override; never change completed or in-flight work."""
+    if state['plan'].get('execution') != 'batch':
+        raise ValueError('Retry output overrides currently require a batch checkpoint')
+    if any(not batch.get('collected') for batch in state.get('batches', [])):
+        raise ValueError('Collect the existing batch before changing retry output limits')
+    failed = {a['key'] for a in state['attempts'] if a['status'] == 'failed'
+              and a['key'] != 'proposal' and a['key'] not in state['results']}
+    for batch in state.get('batches', []):
+        for job in batch['jobs']:
+            if state['attempts'][job['attempt_index']]['status'] == 'failed':
+                failed.update(key for key in job.get('keys', [job['key']]) if key not in state['results'])
+    if not failed:
+        raise ValueError('No failed evaluations need an output override')
+    overrides = dict(state.get('output_overrides', {}))
+    for key in failed:
+        previous = overrides.get(key, state['plan']['identity']['output_tokens'])
+        if output_tokens < previous or output_tokens < 1:
+            raise ValueError('Retry output limit cannot decrease the previous allowance')
+        overrides[key] = output_tokens
+    return overrides
+
+
+def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False, batch_id=None, collect_only=False, retry_output_tokens=None):
     import fcntl
     from fundmgr.engine.optimizer import decision_metric, save_guidance_candidate, guidance_versions
 
     from fundmgr.engine.optimizer_batch import BatchPending
     batch_mode = plan.get("execution") == "batch"
+    if retry_output_tokens is not None and (not resume or not retry_failed or collect_only):
+        raise ValueError("Retry output override requires --resume and --retry-failed; forbidden during collection")
     if batch_mode and cfg.llm.provider != "openai":
         raise ValueError("Batch execution currently supports OpenAI funds only")
     if batch_id and not batch_mode:
@@ -211,6 +236,9 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
             state = {"version": VERSION, "plan": plan, "status": "running", "attempts": [], "results": {},
                      "evidence_gate": gate, "forced_search": force_search}
             _save(path, state)
+        if retry_output_tokens is not None:
+            state["output_overrides"] = retry_output_limits(state, retry_output_tokens)
+            _save(path, state)
         logger.info("Optimization checkpoint: %s", path)
         # A saved candidate survives a crash between publication and checkpoint completion.
         for candidate in guidance_versions(cfg)["candidates"]:
@@ -226,7 +254,7 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                 return schema.model_validate(state["results"][key]["parsed"])
             task_cfg = copy.deepcopy(cfg)
             task_cfg.llm.model_id = model
-            task_cfg.llm.max_tokens = plan["identity"]["output_tokens"]
+            task_cfg.llm.max_tokens = state.get("output_overrides", {}).get(key, plan["identity"]["output_tokens"])
             task_cfg.llm.reasoning_effort = plan["identity"]["reasoning_effort"]
             task_cfg.llm.n_samples = 1
             descriptor = {"transport_version": 1, "llm": asdict(task_cfg.llm),
@@ -249,7 +277,7 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                 if collect:
                     pending.append({"key": key, "descriptor": descriptor, "cache_key": cache_key,
                                     "cache_path": str(cache_path),
-                                    "reserved_tokens": reservation(system, user, schema, plan["identity"]["output_tokens"])})
+                                    "reserved_tokens": reservation(system, user, schema, task_cfg.llm.max_tokens)})
                     return None
                 if batch_mode and schema is DecisionRun:
                     raise SearchStopped("Batch evaluation unresolved; no direct fallback call is allowed")
@@ -347,6 +375,8 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
                     "search_method": VERSION, "search_scores": scores,
                     "context_mode": plan.get("context_mode", "full"),
                     "execution": plan.get("execution", "direct"),
+                    "retry_output_overrides": state.get("output_overrides", {}),
+                    "evaluation_limits_changed": bool(state.get("output_overrides")),
                     "context_version": plan.get("context_version"),
                     "task_model": cfg.llm.model_id, "prompt_model": plan["identity"]["prompt_model"],
                     "training_runs": plan["training_runs"],

@@ -542,3 +542,24 @@ other scheduled tasks). It runs every 15 minutes. The repository example does no
 install or modify the Pi's live crontab automatically. Add a corresponding entry
 for each other OpenAI fund you want watched. Results need to be retrieved before
 the provider's output files expire.
+
+### Retrying a reasoning-truncated evaluation
+
+Reasoning and the visible decision share the output limit. A response can use all
+2,048 tokens on reasoning and finish with `length` before producing any JSON.
+Batch errors now distinguish truncation from refusal and record the finish reason.
+For a collected batch with failed evaluations, explicitly resume with
+`--retry-failed --retry-output-tokens 8192`, increasing cumulative `--max-calls`
+and `--max-total-tokens` enough for the additional attempt. Do not change the
+original `--max-output-tokens`: that is part of the frozen plan identity.
+
+The retry-only option persists a per-failed-request allowance, changes the cache
+key, and reserves the larger output budget. Saved successes and the original plan
+stay intact. It cannot alter in-flight batches, generate a missing proposal, or
+run from the scheduled collector. The watcher can collect an explicitly submitted
+retry without receiving the option again. Original failed attempts remain counted.
+
+Candidate metadata records changed evaluation limits: these results are diagnostic
+search evidence, not an equal-settings comparison. Full forward evaluation is
+still required. The original whole-plan dollar estimate is suppressed once retry
+output overrides apply, since it does not describe the new limits or retry spend.

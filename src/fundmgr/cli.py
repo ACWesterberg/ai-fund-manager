@@ -1681,7 +1681,9 @@ def export_dspy(output: str, score_first: bool):
 @click.option("--execution", type=click.Choice(["direct", "batch"]), default=None,
               help="Batch uses OpenAI asynchronous evaluations; proposal stays direct")
 @click.option("--batch-id", default=None, help="Recover an uncertain submission ID with --resume")
-def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search, context_mode, execution, batch_id):
+@click.option("--retry-output-tokens", type=click.IntRange(min=1), default=None,
+              help="Explicit larger output allowance for failed batch evaluations only; requires --resume --retry-failed")
+def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search, context_mode, execution, batch_id, retry_output_tokens):
     """Bounded instruction-only search. Save a winner as an inactive candidate."""
     import logging
     from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory
@@ -1693,6 +1695,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
                        ("max_output_tokens", max_output_tokens)):
         if value is not None:
             setattr(cfg.optimizer, key, value)
+    if retry_output_tokens is not None and (resume is None or not retry_failed):
+        raise click.ClickException("--retry-output-tokens requires --resume and --retry-failed")
     if batch_id and resume is None:
         raise click.ClickException("--batch-id requires --resume")
     if retry_failed and resume is None:
@@ -1701,6 +1705,12 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
         if resume:
             saved = _load(resume)
             plan = saved["plan"]
+            if retry_output_tokens is not None or saved.get("output_overrides"):
+                from fundmgr.engine.bounded_optimizer import retry_output_limits
+                overrides = (retry_output_limits(saved, retry_output_tokens) if retry_output_tokens is not None
+                             else saved["output_overrides"])
+                click.echo(f"Retry output allowances: {overrides}; successful responses remain frozen.")
+                click.echo("Evaluation limits will differ; this is diagnostic search evidence, not an equal-settings comparison.")
             if execution is not None and execution != plan.get("execution", "direct"):
                 raise ValueError("Resume execution must match the saved plan")
             if context_mode is not None and context_mode != plan.get("context_mode", "full"):
@@ -1749,14 +1759,18 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
         cost = plan_cost(plan)
         label = "Context comparison" if plan.get("context_mode") == "compare" else "Instruction-only search"
         click.echo(f"{label}: {cost['planned_calls']} planned calls; hard cap {cfg.optimizer.max_calls}")
-        click.echo(f"Output cap: {cfg.optimizer.max_output_tokens} tokens/call; reasoning: {cfg.optimizer.reasoning_effort}")
+        click.echo(f"Frozen plan output cap: {cfg.optimizer.max_output_tokens} tokens/call; reasoning: {cfg.optimizer.reasoning_effort}")
         click.echo(f"Worst-case token reservation: {cost['reserved_token_estimate']:,}; budget {cfg.optimizer.max_total_tokens:,}")
         click.echo(f"Reservation split: {cost['proposal_reservation']:,} proposal (no universe); "
                    f"{cost['evaluation_reservation']:,} historical evaluations.")
         click.echo("Reservations use text bytes + schema/protocol allowance + output cap; this is not a dollar estimate.")
-        from fundmgr.engine.optimizer_estimate import estimate, describe
-        for line in describe(estimate(plan, saved if resume else None)):
-            click.echo(line)
+        if retry_output_tokens is not None or (resume and saved.get("output_overrides")):
+            click.echo("Whole-plan cost estimate omitted: retry-specific output limits differ from the frozen plan.")
+            click.echo("Existing reservations remain spent; retries must fit cumulative call/token limits.")
+        else:
+            from fundmgr.engine.optimizer_estimate import estimate, describe
+            for line in describe(estimate(plan, saved if resume else None)):
+                click.echo(line)
         click.echo(f"Checkpoint: {path}")
         click.echo(f"Candidate directory: {candidate_directory(cfg)}")
         if dry_run:
@@ -1764,7 +1778,7 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
                 click.echo("Plan exceeds configured budget; a new search would make no calls.")
             click.echo("Dry run: no paid calls. Existing MIPRO runs cannot be resumed by this search.")
             return
-        if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search, batch_id=batch_id):
+        if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search, batch_id=batch_id, retry_output_tokens=retry_output_tokens):
             click.echo("Inactive candidate saved. Active guidance unchanged; forward evaluation required.")
         elif plan.get("context_mode") == "compare":
             comparisons = _load(path)["comparisons"]

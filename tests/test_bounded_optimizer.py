@@ -750,3 +750,64 @@ def test_watcher_busy_fund_is_quiet(search, fake_batch, monkeypatch):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert watcher.watch(cfg)['pending'] == 1
     sender.assert_not_called()
+
+
+def test_larger_retry_output_preserves_successes_and_watcher_collects(search, fake_batch, monkeypatch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    from fundmgr.engine import optimizer_watch as watcher
+    cfg, plan, _, calls, _ = search
+    client, submitted, payloads = fake_batch
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    original = client.files.content.side_effect
+    def truncated(file_id):
+        rows = [json.loads(line) for line in original(file_id).text.splitlines()]
+        rows[0]['response']['body']['choices'][0]['finish_reason'] = 'length'
+        return SimpleNamespace(text='\n'.join(json.dumps(row) for row in rows))
+    client.files.content.side_effect = truncated
+    submitted[0].status = 'completed'
+    with pytest.raises(bo.SearchStopped):
+        bo.run_search(cfg, plan, path, resume=True)
+    before = bo._load(path)
+    assert 'output token limit' in before['attempts'][-1]['error']
+    assert before['attempts'][-1]['finish_reason'] == 'length'
+    with pytest.raises(bo.SearchStopped, match='Budget exhausted'):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True, retry_output_tokens=8192)
+    assert client.batches.create.call_count == 1
+    cfg.optimizer.max_calls = 8
+    client.files.content.side_effect = original
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True, retry_output_tokens=8192)
+    assert len(payloads[1]) == 1
+    body = payloads[1][0]['body']
+    assert body.get('max_tokens', body.get('max_completion_tokens')) == 8192
+    state = bo._load(path)
+    assert state['results'] == before['results']
+    assert state['plan'] == before['plan']
+    assert state['attempts'][-1]['max_output_tokens'] == 8192
+    assert state['attempts'][-1]['reserved_tokens'] == before['attempts'][-1]['reserved_tokens'] + 6144
+    submitted[1].status = 'completed'
+    monkeypatch.setattr(watcher, 'send_telegram', lambda *a, **kw: True)
+    assert watcher.watch(cfg)['complete'] == 1
+    candidate = guidance_versions(cfg)['candidates'][0]
+    assert candidate['evaluation_limits_changed']
+    assert len(candidate['retry_output_overrides']) == 1
+    assert len(calls) == 1 and client.batches.create.call_count == 2
+
+
+def test_retry_output_override_rejects_pending_and_unrequested_changes(search, fake_batch):
+    from fundmgr.engine.optimizer_batch import BatchPending
+    cfg, plan, _, calls, _ = search
+    plan['execution'] = 'batch'
+    path = bo.checkpoint_path(cfg, plan)
+    with pytest.raises(ValueError, match='requires --resume'):
+        bo.run_search(cfg, plan, path, retry_output_tokens=8192)
+    assert not calls
+    with pytest.raises(BatchPending):
+        bo.run_search(cfg, plan, path)
+    with pytest.raises(ValueError, match='Collect the existing batch'):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True, retry_output_tokens=8192)
+    with pytest.raises(ValueError, match='forbidden during collection'):
+        bo.run_search(cfg, plan, path, resume=True, retry_failed=True, retry_output_tokens=8192, collect_only=True)

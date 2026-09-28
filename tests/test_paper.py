@@ -935,6 +935,66 @@ def test_live_record_fill_seed_and_trim(client):
     assert store.get_positions()[0].shares == pytest.approx(33)
 
 
+def test_live_fill_holds_back_a_duplicate_until_confirmed(client):
+    _import_live(client, "Fill Dup")
+    fill = {"ticker": "AAPL", "side": "buy", "shares": "20", "price_sek": "2000",
+            "fee_sek": "0", "trade_date": "2026-09-21"}
+    client.post("/live/fill-dup/fill", data=fill, follow_redirects=False)
+
+    # the same fill again is refused, and handed back pre-filled for confirmation
+    r = client.post("/live/fill-dup/fill", data=fill, follow_redirects=False)
+    assert r.status_code == 303 and "ok=0" in r.headers["location"]
+    _, store = paper.open_portfolio("fill-dup")
+    assert store.count_transactions() == 1
+    page = client.get(r.headers["location"]).text
+    assert "Looks like a duplicate" in page
+    assert 'name="allow_duplicate"' in page
+    assert 'value="20"' in page and 'value="2026-09-21"' in page
+
+    # confirming records it as a second, separate fill
+    r = client.post("/live/fill-dup/fill", data={**fill, "allow_duplicate": "1"},
+                    follow_redirects=False)
+    assert "ok=1" in r.headers["location"]
+    _, store = paper.open_portfolio("fill-dup")
+    assert store.count_transactions() == 2
+    assert store.get_positions()[0].shares == pytest.approx(40)
+
+
+def test_live_pages_show_when_a_fill_was_last_recorded(client):
+    _import_live(client, "Fill Seen")
+    assert "none yet" in client.get("/live/").text
+    assert "No fills recorded yet" in client.get("/live/fill-seen").text
+
+    client.post("/live/fill-seen/fill",
+                data={"ticker": "AAPL", "side": "buy", "shares": "41", "price_sek": "2000",
+                      "fee_sek": "0", "trade_date": "2026-09-21"}, follow_redirects=False)
+    home = client.get("/live/").text
+    assert "2026-09-21" in home and "BUY 41 × AAPL" in home
+    assert 'href="/live/fill-seen/transactions"' in home
+    dash = client.get("/live/fill-seen").text
+    assert "Last recorded" in dash and "2026-09-21" in dash
+    assert "All 1 trade" in dash
+    trades = client.get("/live/fill-seen/transactions").text
+    assert "last on" in trades and "2026-09-21" in trades
+
+
+def test_paper_fill_refuses_a_duplicate_unless_allowed(paper_dir, mock_market):
+    from click.testing import CliRunner
+    from fundmgr.cli import cli
+
+    paper.create_portfolio("Dup Cli", 100_000, "record", kind="live", execute_buys=False,
+                           holdings_override=[{"ticker": "NVDA", "weight_pct": 100}])
+    args = ["paper-fill", "dup-cli", "NVDA", "5", "1500", "10", "--date", "2026-09-21"]
+    assert CliRunner().invoke(cli, args).exit_code == 0
+    r = CliRunner().invoke(cli, args)
+    assert r.exit_code != 0 and "--allow-duplicate" in r.output
+    _, store = paper.open_portfolio("dup-cli")
+    assert store.count_transactions() == 1
+    assert CliRunner().invoke(cli, args + ["--allow-duplicate"]).exit_code == 0
+    _, store = paper.open_portfolio("dup-cli")
+    assert store.count_transactions() == 2
+
+
 def test_live_fill_rejects_bad_input(client):
     _import_live(client, "Fill Val")
     r = client.post("/live/fill-val/fill",

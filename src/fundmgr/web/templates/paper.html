@@ -40,6 +40,7 @@
           <th class="num">NAV (SEK)</th>
           <th class="num">P/L</th>
           <th class="num">Positions</th>
+          <th>Last fill</th>
           <th class="num">Learnings</th>
           <th></th>
         </tr>
@@ -58,6 +59,12 @@
             {{ "%+.2f"|format(p.pnl_pct) }}%
           </td>
           <td class="num">{{ p.n_positions }}</td>
+          <td style="font-size:11.5px">
+            {% if p.last_fill %}
+            <a href="/paper/{{ p.slug }}/transactions" class="text-emerald-400 hover:text-emerald-300" title="All trades in this portfolio">{{ p.last_fill.day }}</a>
+            <div class="text-slate-600">{{ p.last_fill.side }} {{ "%g"|format(p.last_fill.shares) }} × {{ p.last_fill.ticker }}</div>
+            {% else %}<span class="text-slate-600">none yet</span>{% endif %}
+          </td>
           <td class="num">{{ p.n_learnings }}</td>
           <td class="num">
             <form method="post" action="/paper/{{ p.slug }}/delete" class="inline"

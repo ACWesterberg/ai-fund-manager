@@ -616,6 +616,16 @@ def _print_feature_table(features, cfg):
         click.echo(f"  {f.ticker:<16} {f.last_price:>10.2f} {r1:>6} {r5:>6} {r20:>7} {rsi:>5} {vol:>6} {senti}{stale_flag}")
 
 
+def _refuse_duplicate_fill(store, ticker: str, side: str, shares: float, price: float,
+                           ts: datetime) -> None:
+    from fundmgr.paper import duplicate_fill_note
+
+    note = duplicate_fill_note(store.find_similar_fills(ticker, side, shares, price, ts),
+                               override="re-run with --allow-duplicate")
+    if note:
+        raise click.ClickException(note)
+
+
 @cli.command()
 @click.argument("ticker")
 @click.argument("shares", type=float)
@@ -624,7 +634,11 @@ def _print_feature_table(features, cfg):
 @click.option("--side", type=click.Choice(["buy", "sell"]), default="buy", show_default=True)
 @click.option("--date", "trade_date", default=None, metavar="YYYY-MM-DD",
               help="Trade date (defaults to today). Use when recording a past fill.")
-def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_date: str | None):
+@click.option("--allow-duplicate", is_flag=True,
+              help="Record even if an identical fill (ticker, side, shares, price) "
+                   "is already recorded within a week of this date.")
+def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_date: str | None,
+         allow_duplicate: bool):
     """Record an actual fill from the broker.
 
     \b
@@ -648,6 +662,8 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         ts = datetime.utcnow()
 
     ticker = ticker.upper()
+    if not allow_duplicate:
+        _refuse_duplicate_fill(store, ticker, side, shares, price, ts)
     txn = Transaction(
         ticker=ticker,
         side=side,
@@ -2522,8 +2538,11 @@ def paper_import(json_file: str, name: str | None, capital: float | None,
 @click.option("--side", type=click.Choice(["buy", "sell"]), default="buy", show_default=True)
 @click.option("--date", "trade_date", default=None, metavar="YYYY-MM-DD",
               help="Trade date (defaults to today). Use when recording a past fill.")
+@click.option("--allow-duplicate", is_flag=True,
+              help="Record even if an identical fill (ticker, side, shares, price) "
+                   "is already recorded within a week of this date.")
 def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
-               side: str, trade_date: str | None):
+               side: str, trade_date: str | None, allow_duplicate: bool):
     """Record a real broker fill into a mirror portfolio (price in SEK, like 'fund fill').
 
     \b
@@ -2551,6 +2570,8 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
     ticker, snap_note = paper.snap_ticker_to_plan(store, ticker)
     if snap_note:
         click.echo(f"  {snap_note}")
+    if not allow_duplicate:
+        _refuse_duplicate_fill(store, ticker, side, shares, price, ts)
     currency = meta["currency_map"].get(ticker, "SEK")
     try:
         store.apply_fill(Transaction(

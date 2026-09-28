@@ -13,8 +13,25 @@ from fundmgr.config import AppConfig
 from fundmgr.engine.optimizer import build_trainset, guidance_versions
 from fundmgr.engine.prompt import PROMPT_LEARNING_LIMIT, select_prompt_learnings
 from fundmgr.engine.review_common import follow_up, instruction, votes_str
-from fundmgr.state.models import DecisionOutcome
+from fundmgr.state.models import DecisionOutcome, Transaction
 from fundmgr.state.store import Store
+
+
+def transaction_rows(txns: list[Transaction]) -> list[dict]:
+    return [
+        {
+            "date": t.timestamp.strftime("%Y-%m-%d %H:%M"),
+            "day": t.timestamp.strftime("%Y-%m-%d"),
+            "ticker": t.ticker,
+            "side": t.side.upper(),
+            "shares": t.shares,
+            "price": t.price_sek,
+            "gross": round(t.gross_sek, 0),
+            "fee": t.fee_sek,
+            "source": t.source,
+        }
+        for t in txns
+    ]
 
 
 def learnings_context(cfg: AppConfig, store: Store) -> dict:

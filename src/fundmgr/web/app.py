@@ -336,23 +336,11 @@ async def history(request: Request):
 @app.get("/transactions", response_class=HTMLResponse)
 async def transactions(request: Request):
     cfg, store = _get_deps()
-    txns = store.get_transactions(limit=50)
-    txn_data = [
-        {
-            "date": t.timestamp.strftime("%Y-%m-%d %H:%M"),
-            "ticker": t.ticker,
-            "side": t.side.upper(),
-            "shares": t.shares,
-            "price": t.price_sek,
-            "gross": round(t.gross_sek, 0),
-            "fee": t.fee_sek,
-            "source": t.source,
-        }
-        for t in txns
-    ]
+    from fundmgr.web.views import transaction_rows
     return _render("transactions.html", {
         "request": request,
-        "transactions": txn_data,
+        "transactions": transaction_rows(store.get_transactions(limit=500)),
+        "n_fills": store.count_transactions(),
         "total_fees": store.total_fees_paid(),
         "active_page": "transactions",
     })

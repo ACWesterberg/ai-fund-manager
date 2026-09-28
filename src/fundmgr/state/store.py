@@ -4,7 +4,7 @@ import json
 import math
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fundmgr.state.models import DecisionOutcome, Learning, NavPoint, Position, RecommendationLog, Transaction
@@ -424,25 +424,50 @@ class Store:
 
     # ── Transactions ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _txn_from_row(r: sqlite3.Row) -> Transaction:
+        return Transaction(
+            id=r["id"],
+            timestamp=datetime.fromisoformat(r["timestamp"]),
+            ticker=r["ticker"],
+            side=r["side"],
+            shares=r["shares"],
+            price_sek=r["price_sek"],
+            fee_sek=r["fee_sek"],
+            source=r["source"],
+            currency=(r["currency"] if "currency" in r.keys() and r["currency"] else "SEK"),
+        )
+
     def get_transactions(self, limit: int = 100) -> list[Transaction]:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM transactions ORDER BY timestamp DESC LIMIT ?", (limit,)
             ).fetchall()
-        return [
-            Transaction(
-                id=r["id"],
-                timestamp=datetime.fromisoformat(r["timestamp"]),
-                ticker=r["ticker"],
-                side=r["side"],
-                shares=r["shares"],
-                price_sek=r["price_sek"],
-                fee_sek=r["fee_sek"],
-                source=r["source"],
-                currency=(r["currency"] if "currency" in r.keys() and r["currency"] else "SEK"),
-            )
-            for r in rows
-        ]
+        return [self._txn_from_row(r) for r in rows]
+
+    def count_transactions(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+
+    def find_similar_fills(self, ticker: str, side: str, shares: float, price_sek: float,
+                           around: datetime, window_days: int = 7) -> list[Transaction]:
+        """Recorded transactions that look like the same broker fill entered twice.
+
+        Same ticker, side, share count and price (to the öre) within
+        `window_days` of `around`. The window matters: a fill first recorded
+        without a date is stamped with the day it was typed in, so re-entering
+        it later with its real trade date would never match on the exact day.
+        Fee is ignored — OCR and hand entry disagree on it more than on price."""
+        lo = (around - timedelta(days=window_days)).strftime("%Y-%m-%d")
+        hi = (around + timedelta(days=window_days)).strftime("%Y-%m-%d")
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM transactions WHERE ticker = ? AND side = ? "
+                "AND ABS(shares - ?) < 1e-6 AND ABS(price_sek - ?) < 0.005 "
+                "AND substr(timestamp, 1, 10) BETWEEN ? AND ? ORDER BY timestamp DESC",
+                (ticker, side, shares, price_sek, lo, hi),
+            ).fetchall()
+        return [self._txn_from_row(r) for r in rows]
 
     def undo_last_fill(self) -> Transaction | None:
         """

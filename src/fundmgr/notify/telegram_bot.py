@@ -4,7 +4,7 @@ Telegram bot — notifications and fill entry for the AI Fund Manager.
 Commands:
   /run           — trigger weekly decision run
   /run_full      — trigger run with news + FinBERT sentiment
-  /fill TICKER SHARES PRICE FEE [buy|sell]  — record a fill manually
+  /fill TICKER SHARES PRICE FEE [buy|sell] [again]  — record a fill manually
   /status        — portfolio snapshot
   /report        — performance report
   /stops         — check stop-loss thresholds
@@ -161,13 +161,19 @@ def _tail(text: str, lines: int = 12) -> str:
 
 def _run_cli(*args: str, timeout: int = 300) -> str:
     """Run a fund CLI command and return its stdout as a string."""
+    return _run_cli_ok(*args, timeout=timeout)[1]
+
+
+def _run_cli_ok(*args: str, timeout: int = 300) -> tuple[bool, str]:
+    """Like `_run_cli`, but also says whether the command succeeded — so a
+    confirmation can't claim a fill was recorded when the CLI refused it."""
     cmd = [str(FUND_BIN), *args]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=ROOT)
         output = result.stdout.strip()
         if result.returncode != 0 and result.stderr:
             output += f"\n\nError: {result.stderr.strip()[:500]}"
-        return output or "(no output)"
+        return result.returncode == 0, output or "(no output)"
     except subprocess.TimeoutExpired as e:
         # Surface where it stalled — TimeoutExpired carries whatever the command
         # printed before it was killed, which names the step that hung.
@@ -182,9 +188,23 @@ def _run_cli(*args: str, timeout: int = 300) -> str:
             "Raise the limit with FUND_RUN_TIMEOUT (seconds) in .env if the run "
             "legitimately needs longer."
         )
-        return msg
+        return False, msg
     except Exception as e:
-        return f"❌ Failed to run command: {e}"
+        return False, f"❌ Failed to run command: {e}"
+
+
+_DUP_HINT = "\n\nAlready recorded? Nothing was added. If it really is a second fill, repeat the command with 'again' at the end."
+
+
+def _fill_args(args: list[str]) -> tuple[list[str], list[str]]:
+    """Split /fill-style args into (TICKER SHARES PRICE FEE [side]) and CLI flags.
+
+    A trailing 'again' records a fill the CLI would otherwise refuse as a
+    duplicate of one already recorded."""
+    again = any(a.lower() == "again" for a in args[4:])
+    rest = [a for a in args[4:] if a.lower() != "again"]
+    side = rest[0] if rest else "buy"
+    return [*args[:4]], ["--side", side] + (["--allow-duplicate"] if again else [])
 
 
 # Background CLI runs, kept referenced so the event loop can't garbage-collect
@@ -298,9 +318,10 @@ async def cmd_fill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
             "Or just send a screenshot of your Montrose confirmation."
         )
         return
-    ticker, shares, price, fee = args[0], args[1], args[2], args[3]
-    side = args[4] if len(args) > 4 else "buy"
-    output = _run_cli("fill", ticker, shares, price, fee, "--side", side, timeout=30)
+    pos, flags = _fill_args(args)
+    ok, output = _run_cli_ok("fill", *pos, *flags, timeout=30)
+    if not ok and "duplicate" in output:
+        output += _DUP_HINT
     await _send(update, output)
 
 
@@ -459,9 +480,10 @@ async def cmd_pfill(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> N
             parse_mode="HTML",
         )
         return
-    ticker, shares, price, fee = args[0], args[1], args[2], args[3]
-    side = args[4] if len(args) > 4 else "buy"
-    output = _run_cli("paper-fill", slug, ticker, shares, price, fee, "--side", side, timeout=30)
+    pos, flags = _fill_args(args)
+    ok, output = _run_cli_ok("paper-fill", slug, *pos, *flags, timeout=30)
+    if not ok and "duplicate" in output:
+        output += _DUP_HINT
     # Lead with the book so a stale /ptarget can't slip a fill into the wrong sleeve.
     await _send(update, f"📋 {name} ({slug})\n{output}")
 
@@ -619,7 +641,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "🤖 AI Fund Manager Bot\n\n"
         "/run — weekly decision run (fast, no news)\n"
         "/run_full — full run with FinBERT sentiment\n"
-        "/fill TICKER SHARES PRICE FEE [side] — record a fill\n"
+        "/fill TICKER SHARES PRICE FEE [side] [again] — record a fill\n"
         "         e.g. /fill VOLV-B.ST 12 291.50 2.91\n"
         "/status — current portfolio snapshot\n"
         "/report — performance vs OMXSPI\n"
@@ -634,7 +656,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/plist — list paper/mirror portfolios\n"
         "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
         "/prun [SLUG] — re-decide a sleeve against what it holds now\n"
-        "/pfill TICKER SHARES PRICE FEE [side] — fill into the active book\n"
+        "/pfill TICKER SHARES PRICE FEE [side] [again] — fill into the active book\n"
         "/pretag OLD [NEW] — fix a mis-tagged holding (e.g. ENR → ENR.DE)\n"
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
         "/pstatus — snapshot of the active book\n"
@@ -903,9 +925,17 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         cli_args = ["fill", ticker, str(shares), str(price), str(fee), "--side", side]
     if trade_date:
         cli_args += ["--date", trade_date]
-    output = _run_cli(*cli_args, timeout=30)
+    ok, output = _run_cli_ok(*cli_args, timeout=30)
     dest = f" → {_book_name(slug) or slug}" if slug else " → main fund"
-    await query.edit_message_text(f"✅ Fill recorded{dest}!\n\n{output}")
+    if ok:
+        await query.edit_message_text(f"✅ Fill recorded{dest}!\n\n{output}")
+    else:
+        hint = ""
+        if "duplicate" in output:
+            cmd = "/pfill" if slug else "/fill"
+            hint = (f"\n\nIf it really is a second fill: {cmd} {ticker} {shares} "
+                    f"{price} {fee} {side} again")
+        await query.edit_message_text(f"❌ Fill NOT recorded{dest}.\n\n{output}{hint}")
 
 
 async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:

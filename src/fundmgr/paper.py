@@ -1093,6 +1093,24 @@ def plan_tickers(store: Store) -> set[str]:
     return out
 
 
+def describe_fill(t: Transaction) -> str:
+    """One line naming a recorded fill, e.g. '2026-09-21 BUY 41 × AAPL @ 2,000.00'."""
+    return (f"{t.timestamp:%Y-%m-%d} {t.side.upper()} {t.shares:g} × {t.ticker} "
+            f"@ {t.price_sek:,.2f}")
+
+
+def duplicate_fill_note(matches: list[Transaction],
+                        override: str = "confirm it to record anyway") -> str | None:
+    """Why a fill is refused as a probable duplicate, or None when it isn't one.
+
+    `override` names how the caller's interface records it regardless."""
+    if not matches:
+        return None
+    seen = "; ".join(describe_fill(t) for t in matches[:3])
+    return (f"Looks like a duplicate — already recorded: {seen}. "
+            f"If this really is a second, separate fill, {override}.")
+
+
 def snap_ticker_to_plan(store: Store, ticker: str) -> tuple[str, str | None]:
     """Resolve a user-entered fill ticker to this book's plan symbol.
 

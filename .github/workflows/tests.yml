@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ai-fund-manager
+      - name: Check out the tested data dependency
+        uses: actions/checkout@v4
+        with:
+          repository: ACWesterberg/FinanceData
+          ref: fad47b24ca7bbf4a387ad0058cbf473f88f62ad6
+          token: ${{ secrets.FINANCEDATA_READ_TOKEN }}
+          path: FinanceData
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - name: Install locked dependencies
+        working-directory: ai-fund-manager
+        run: uv sync --frozen --extra dev
+      - name: Run regression suite
+        working-directory: ai-fund-manager
+        run: uv run --no-sync pytest -q --disable-warnings
+      - name: Check deploy scripts
+        working-directory: ai-fund-manager
+        run: bash deploy/test-branch-check.sh

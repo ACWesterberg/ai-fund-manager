@@ -45,17 +45,40 @@ check_financedata_branch() {
 }
 
 mkdir -p "$(dirname "$LOG_FILE")"
+# Serialize webhook, polling and SSH deployments.
+exec 9>"$REPO_DIR/data/deploy.lock"
+flock -n 9 || { log "Another deployment is running"; exit 0; }
+SUCCESS_FILE="$REPO_DIR/data/deployed-revision"
 log "=== Deploy started (branch: $BRANCH) ==="
 
 cd "$REPO_DIR"
 
+# Wait before changing the source or dependencies used by an active run.
+log "Checking for active fund run…"
+WAIT=0
+while pgrep -f "fund run" > /dev/null 2>&1; do
+    if [ $WAIT -eq 0 ]; then log "  Fund run in progress — waiting for it to finish…"; fi
+    WAIT=$((WAIT + 5))
+    if [ $WAIT -gt 1800 ]; then
+        log "  ✗ Fund run still active — aborting deployment; retry later"
+        exit 1
+    fi
+    sleep 5
+done
+[ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
+
 # Ensure we're on the right branch
 git fetch origin "$BRANCH" --quiet
+TARGET=$(git rev-parse "origin/$BRANCH")
+if [ -n "${EXPECTED_REVISION:-}" ] && [ "$TARGET" != "$EXPECTED_REVISION" ]; then
+    log "Branch advanced beyond the tested revision — aborting; run checks again"
+    exit 1
+fi
 BEFORE=$(git rev-parse HEAD)
 git reset --hard "origin/$BRANCH" --quiet
 AFTER=$(git rev-parse HEAD)
 
-if [ "$BEFORE" = "$AFTER" ]; then
+if [ -f "$SUCCESS_FILE" ] && [ "$(cat "$SUCCESS_FILE")" = "$AFTER" ]; then
     log "Already up to date ($AFTER). Nothing to do."
     exit 0
 fi
@@ -67,9 +90,9 @@ git log --oneline "$BEFORE..$AFTER" | while read -r line; do log "  $line"; done
 log "Updating dependencies…"
 UV=$(command -v uv || echo "$HOME/.local/bin/uv")
 # Shared financedata package: pull its latest source and (re)install it first.
-# `uv pip install -e .` does not resolve [tool.uv.sources] path deps, so without
-# this the project's `financedata` requirement would fail to resolve (or run
-# stale). Git-pull is non-fatal so a FinanceData hiccup can't block the deploy —
+# Resolve both editable projects explicitly, honoring FINANCEDATA_DIR rather
+# than the default sibling path in tool.uv.sources. Git-pull is non-fatal so a
+# FinanceData hiccup cannot block the deploy —
 # but it is never silent, because a data layer running unnoticed off the wrong
 # branch shows up as wrong numbers, not as a failed deploy.
 FINANCEDATA_DIR="${FINANCEDATA_DIR:-$REPO_DIR/../FinanceData}"
@@ -86,35 +109,20 @@ if [ -d "$FINANCEDATA_DIR" ]; then
     else
         log "  ⚠ $FINANCEDATA_DIR is not a git checkout — installing it as-is, with no way to tell how old it is"
     fi
-    "$UV" pip install -e "$FINANCEDATA_DIR" --quiet
 else
-    log "  ⚠ $FINANCEDATA_DIR not found — financedata import will fail until it's present"
+    log "  ✗ $FINANCEDATA_DIR not found — cannot deploy"
+    exit 1
 fi
-"$UV" pip install -e . --quiet
+"$UV" pip install --no-sources -e "$FINANCEDATA_DIR" -e . --quiet
 
 # Refresh universe CSVs from FinanceData when the sibling repo is present.
 if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ]; then
-    if FINANCEDATA_DIR="$FINANCEDATA_DIR" "$UV" run python "$REPO_DIR/scripts/sync_universe_from_financedata.py" 2>&1 | tee -a "$LOG_FILE"; then
+    if FINANCEDATA_DIR="$FINANCEDATA_DIR" "$REPO_DIR/.venv/bin/python" "$REPO_DIR/scripts/sync_universe_from_financedata.py" 2>&1 | tee -a "$LOG_FILE"; then
         log "Universe synced from FinanceData"
     else
         log "  ⚠ Universe sync skipped or failed — using committed CSVs"
     fi
 fi
-
-# Restart services (requires sudoers entry — see SETUP.md)
-# Wait if a fund run is currently in progress (avoid killing mid-run)
-log "Checking for active fund run…"
-WAIT=0
-while pgrep -f "fund run" > /dev/null 2>&1; do
-    if [ $WAIT -eq 0 ]; then log "  Fund run in progress — waiting for it to finish…"; fi
-    WAIT=$((WAIT + 5))
-    if [ $WAIT -gt 1800 ]; then
-        log "  ⚠ Waited 30 min — proceeding anyway"
-        break
-    fi
-    sleep 5
-done
-[ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
 
 log "Restarting services…"
 sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
@@ -131,4 +139,6 @@ for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
     fi
 done
 
+printf '%s\n' "$AFTER" > "$SUCCESS_FILE.tmp"
+mv "$SUCCESS_FILE.tmp" "$SUCCESS_FILE"
 log "=== Deploy complete ==="

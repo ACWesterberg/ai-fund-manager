@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from fundmgr import regions, styles
 from fundmgr.config import AppConfig, UniverseTicker
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.data.prices import TickerFeatures
@@ -89,12 +90,58 @@ def _sector_weights_block(
     return "\n".join(lines)
 
 
+def _region_targets_block(
+    cfg: AppConfig,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+) -> str:
+    """The geographic mix this run is being built to, or "" when none is set.
+
+    Rendered with the risk limits rather than as a section of its own, because
+    half of it *is* a risk limit — the ceiling is enforced by the same pass that
+    enforces the sector cap — and because the other half only makes sense read
+    against it.
+    """
+    if not cfg.risk.region_targets:
+        return ""
+    region_by_ticker = regions.regions_of(features)
+    return regions.prompt_block(
+        cfg.risk.region_targets,
+        cfg.risk.region_tolerance_pct,
+        regions.exposure(snap, region_by_ticker),
+        regions.candidate_counts(region_by_ticker),
+    )
+
+
+def _style_targets_block(
+    cfg: AppConfig,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+    closing: bool = True,
+) -> str:
+    """The risk/quality mix this run is being built to, or "" when none is set."""
+    if not cfg.risk.style_targets:
+        return ""
+    style_by_ticker = styles.styles_of(features)
+    return styles.prompt_block(
+        cfg.risk.style_targets,
+        cfg.risk.style_tolerance_pct,
+        styles.exposure(snap, style_by_ticker),
+        styles.candidate_counts(style_by_ticker),
+        closing=closing,
+    )
+
+
 def _risk_limits_block(
     cfg: AppConfig,
     snap: PortfolioSnapshot,
     features: dict[str, TickerFeatures],
 ) -> str:
     sector_block = _sector_weights_block(snap, features, cfg.risk.max_sector_pct)
+    region_block = _region_targets_block(cfg, snap, features)
+    # Both dials close with the same which-bound-binds paragraph; the second one
+    # rendered drops it rather than repeating the rule back to back.
+    style_block = _style_targets_block(cfg, snap, features, closing=not region_block)
     lines = [
         "## Risk Limits (hard constraints)",
         f"  Max single-name weight: {cfg.risk.max_position_pct}%",
@@ -111,6 +158,10 @@ def _risk_limits_block(
     ]
     if sector_block:
         lines.append(sector_block)
+    if region_block:
+        lines.append(region_block)
+    if style_block:
+        lines.append(style_block)
     lines.append("Guardrails enforce these mechanically — size your recommendations within them.")
     return "\n".join(lines)
 
@@ -185,8 +236,6 @@ def learnings_count(learnings_block: str) -> int:
     )
 
 
-_CANDIDATE_LIMIT = 75  # non-held tickers shown to LLM per run
-
 
 def _signal_score(f: TickerFeatures) -> float:
     """
@@ -231,12 +280,15 @@ def _signal_score(f: TickerFeatures) -> float:
 def _features_block(
     features: dict[str, TickerFeatures],
     current_tickers: set[str],
+    show_region: bool = False,
+    show_style: bool = False,
 ) -> str:
     held = {t: f for t, f in features.items() if t in current_tickers}
     rest = {t: f for t, f in features.items() if t not in current_tickers}
 
-    # Rank non-held candidates by signal, take top N
-    top_candidates = sorted(rest.values(), key=_signal_score, reverse=True)[:_CANDIDATE_LIMIT]
+    # The upstream screener owns selection, including pinned/region/style slots.
+    # Rendering must not silently apply a second, incompatible selection.
+    top_candidates = sorted(rest.values(), key=lambda f: (-_signal_score(f), f.ticker))
 
     total_universe = len(features)
     shown = len(held) + len(top_candidates)
@@ -249,14 +301,27 @@ def _features_block(
     )
 
     for f in held.values():
-        lines.append("★ " + f.to_prompt_block())
+        lines.append("★ " + f.to_prompt_block(show_region=show_region, show_style=show_style))
         lines.append("")
 
     for f in top_candidates:
-        lines.append("  " + f.to_prompt_block())
+        lines.append("  " + f.to_prompt_block(show_region=show_region, show_style=show_style))
         lines.append("")
 
     return "\n".join(lines)
+
+
+def assemble_system_prompt(mandate: str, guidance: str = "") -> str:
+    """Shared assembly for live decisions and frozen prompt comparisons."""
+    section = (
+        "\n\n---\n## Decision Guidance (optimized from your realized outcomes)\n" + guidance
+        if guidance else ""
+    )
+    return (
+        mandate + section + "\n\n---\n"
+        "Return ONLY a valid JSON object matching the DecisionRun schema. "
+        "No markdown, no explanation outside the JSON."
+    )
 
 
 def build_prompt(
@@ -295,19 +360,7 @@ def build_prompt(
     # Optimized decision guidance (from `fund optimize`, once compiled)
     from fundmgr.engine.optimizer import load_guidance
     guidance = load_guidance(cfg)
-    guidance_section = (
-        "\n\n---\n## Decision Guidance (optimized from your realized outcomes)\n" + guidance
-        if guidance else ""
-    )
-
-    # Add structured output instruction to mandate
-    system = (
-        mandate
-        + guidance_section
-        + "\n\n---\n"
-        + "Return ONLY a valid JSON object matching the DecisionRun schema. "
-        + "No markdown, no explanation outside the JSON."
-    )
+    system = assemble_system_prompt(mandate, guidance)
 
     # Benchmark return since first NAV entry
     nav_history = store.get_nav_history()
@@ -324,10 +377,18 @@ def build_prompt(
     portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops())
     risk_limits     = _risk_limits_block(cfg, snap, features)
     learnings_block = _learnings_block(learnings)
-    universe        = _features_block(features, current_tickers)
+    # Bucket tags cost tokens on every candidate, so each is only rendered when
+    # that mix is actually being managed — otherwise the weekly run's prompt is
+    # unchanged, and so is the regime its outcomes are scored under.
+    universe        = _features_block(
+        features, current_tickers,
+        show_region=bool(cfg.risk.region_targets),
+        show_style=bool(cfg.risk.style_targets),
+    )
 
     fields = {
         "mandate":         mandate,
+        "guidance":        guidance,
         "macro":           macro_block,
         "portfolio_state": portfolio_state,
         "risk_limits":     risk_limits,
@@ -390,6 +451,10 @@ def snapshot_to_dict(
     user: str,
     fields: dict[str, str] | None = None,
     cfg: "AppConfig | None" = None,
+    *,
+    features: dict[str, TickerFeatures] | None = None,
+    universe_tickers: set[str] | None = None,
+    fx_rates: dict[str, float] | None = None,
 ) -> str:
     """Serialise full prompt context for the recommendation log.
 
@@ -431,4 +496,10 @@ def snapshot_to_dict(
             "learnings_hash": learnings_fingerprint(learnings_block),
             "learnings_n":    learnings_count(learnings_block),
         }
+    if cfg is not None and features is not None and fields is not None:
+        from fundmgr.engine.experiments import capture_case
+        out["evaluation_case"] = capture_case(
+            cfg, snap, features, universe_tickers or set(features), fields,
+            system, user, fx_rates or {},
+        )
     return json.dumps(out)

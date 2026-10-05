@@ -53,7 +53,7 @@ def format_action_list(
     if buys:
         lines.append("  ── BUYS " + "─" * 50)
         for a in sorted(buys, key=lambda x: x.sek_estimate, reverse=True):
-            n_shares = shares_for_action(a, snap, features)
+            n_shares = shares_for_action(a, snap, features, cfg)
             feat = features.get(a.ticker)
             price_str = f"@ ~{feat.last_price:.2f}" if feat else ""
             shares_str = f"{n_shares} shares" if n_shares is not None else "? shares"
@@ -72,7 +72,7 @@ def format_action_list(
     if sells:
         lines.append("  ── SELLS " + "─" * 49)
         for a in sorted(sells, key=lambda x: x.sek_estimate, reverse=True):
-            n_shares = shares_for_action(a, snap, features)
+            n_shares = shares_for_action(a, snap, features, cfg)
             feat = features.get(a.ticker)
             price_str = f"@ ~{feat.last_price:.2f}" if feat else ""
             shares_str = f"{n_shares} shares" if n_shares is not None else "? shares"

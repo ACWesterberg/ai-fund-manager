@@ -256,12 +256,17 @@ async def test_full_flow_resolves_ticker():
 
 @pytesseract_installed
 @pytest.mark.asyncio
-async def test_full_flow_unknown_isin_no_pending():
-    """
-    When ISIN is not in universe, handler sends a manual /fill suggestion
-    and does NOT store a pending fill (since ticker is unknown).
-    """
-    from fundmgr.notify.telegram_bot import _pending_fills, photo_handler
+async def test_full_flow_unknown_isin_requests_ticker_then_confirmation(monkeypatch):
+    """Keep extracted details until the user supplies a ticker and confirms."""
+    from fundmgr.notify import telegram_bot
+
+    pending_fills = {}
+    monkeypatch.setattr(telegram_bot, "_pending_fills", pending_fills)
+    monkeypatch.setattr(telegram_bot, "_get_isin_map", lambda: {})
+    monkeypatch.setattr(telegram_bot, "_name_to_ticker", lambda name: (None, ""))
+    execute = MagicMock()
+    monkeypatch.setattr(telegram_bot, "_run_cli", execute)
+    photo_handler = telegram_bot.photo_handler
 
     buf = _make_broker_image("ISIN: XX9999999999\nAntal: 5\nKurs: 100.00 SEK\nCourtage: 1.00 SEK")
 
@@ -289,12 +294,23 @@ async def test_full_flow_unknown_isin_no_pending():
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}):
             await photo_handler(mock_update, mock_context)
 
-    # No pending fill should be stored for unknown ticker
-    assert 88888 not in _pending_fills
+    pending = pending_fills[88888]
+    assert pending["ticker"] is None
+    assert pending["shares"] == unknown_json["shares"]
+    assert pending["price"] == pytest.approx(unknown_json["price_sek"])
+    assert pending["fee"] == pytest.approx(unknown_json["fee_sek"])
+    details = dict(pending)
+    prompt = mock_message.reply_text.call_args.args[0]
+    assert "Reply with the ticker" in prompt
+    execute.assert_not_called()
 
-    # Reply should mention "not in universe" or manual /fill
-    all_text = " ".join(
-        (c.args[0] if c.args else c.kwargs.get("text", ""))
-        for c in mock_message.reply_text.call_args_list
-    )
-    assert "not in universe" in all_text or "/fill" in all_text
+    # Supplying the ticker retains the extracted fill and presents confirmation;
+    # merely identifying the security must not book a trade.
+    mock_message.text = " seye.st "
+    await telegram_bot.text_handler(mock_update, mock_context)
+    assert pending_fills[88888] == {**details, "ticker": "SEYE.ST"}
+    confirmation = mock_message.reply_text.call_args
+    assert "SEYE.ST" in confirmation.args[0]
+    buttons = confirmation.kwargs["reply_markup"].inline_keyboard[0]
+    assert [button.callback_data for button in buttons] == ["fill_confirm", "fill_cancel"]
+    execute.assert_not_called()

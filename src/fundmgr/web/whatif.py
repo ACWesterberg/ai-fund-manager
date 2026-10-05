@@ -17,9 +17,10 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 
+from fundmgr import regions, styles
 from fundmgr.engine.whatif import (
-    MAX_RUNS, MODEL_OPTIONS, generate_whatif, list_profiles, list_results,
-    promote_to_sleeve,
+    MAX_RUNS, MAX_STYLE_BRIEF, MODEL_OPTIONS, generate_whatif, list_profiles,
+    list_results, promote_to_sleeve,
 )
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -51,6 +52,16 @@ class GenerateRequest(BaseModel):
     # plan. Off by default — it costs output tokens and only pays off for a run
     # that might be promoted to a live sleeve.
     monitoring_plan: bool = False
+    # Geographic mix, {region code: % of NAV}. Empty = no regional constraint;
+    # an explicit 0 excludes a region. Validated against fundmgr.regions below.
+    region_targets: dict[str, float] = Field(default_factory=dict)
+    region_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
+    # Risk/quality mix, same shape. Blank = unconstrained, 0 = excluded.
+    style_targets: dict[str, float] = Field(default_factory=dict)
+    style_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
+    # Free text for the tilt no bucket captures. Steers selection inside the
+    # mandate; relaxes nothing.
+    style_brief: str = Field(default="", max_length=MAX_STYLE_BRIEF)
 
 
 def _run_job(job_id: str, req: GenerateRequest) -> None:
@@ -66,6 +77,11 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             deploy_full=req.deploy_full,
             refresh_prices=req.refresh_prices,
             monitoring_plan=req.monitoring_plan,
+            region_targets=req.region_targets,
+            region_tolerance_pct=req.region_tolerance_pct,
+            style_targets=req.style_targets,
+            style_tolerance_pct=req.style_tolerance_pct,
+            style_brief=req.style_brief,
         )
         with _job_lock:
             if _job and _job["id"] == job_id:
@@ -85,6 +101,11 @@ def whatif_page(request: Request):
         request=request,
         profiles=list_profiles(),
         model_options=MODEL_OPTIONS,
+        region_options=regions.options(),
+        region_tolerance_pct=regions.DEFAULT_TOLERANCE_PCT,
+        style_options=styles.options(),
+        style_tolerance_pct=styles.DEFAULT_TOLERANCE_PCT,
+        max_style_brief=MAX_STYLE_BRIEF,
         max_runs=MAX_RUNS,
         results=list_results(limit=20),
         active_job_id=active_job_id,
@@ -103,6 +124,18 @@ def api_generate(req: GenerateRequest):
         valid_models = {(m["provider"], m["model_id"]) for m in MODEL_OPTIONS}
         if (req.provider, req.model_id) not in valid_models:
             raise HTTPException(status_code=400, detail="Unknown provider/model combination")
+    # Named here rather than left to clean_targets' silent drop: a mistyped
+    # bucket would otherwise come back as a run that quietly ignored the mix.
+    for label, submitted, dial in (("region", req.region_targets, regions),
+                                   ("style", req.style_targets, styles)):
+        unknown = sorted(set(submitted) - set(dial.SCHEME.codes))
+        if unknown:
+            raise HTTPException(status_code=400,
+                                detail=f"Unknown {label}(s): {', '.join(unknown)}")
+        try:
+            dial.clean_targets(submitted)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
 
     with _job_lock:
         if _job and _job["status"] == "running":

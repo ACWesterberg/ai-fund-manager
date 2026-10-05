@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from fundmgr import paper, watchplan
+from fundmgr import paper, regions, styles, watchplan
 from fundmgr.engine import sleeve_review
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
@@ -71,6 +71,15 @@ class ReviewRequest(BaseModel):
     # Per-sleeve risk caps. Empty = keep whatever the sleeve already stores;
     # the engine cleans and validates before any of it reaches a guardrail.
     risk: dict = Field(default_factory=dict)
+    # Geographic mix for this book, {region code: % of NAV}. Unlike `risk` this
+    # is always sent through as given, empty included: the form renders the
+    # stored mix, so submitting it cleared is how a mix is removed.
+    region_targets: dict[str, float] = Field(default_factory=dict)
+    region_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
+    # Risk/quality mix and its free-text brief, sent through the same way.
+    style_targets: dict[str, float] = Field(default_factory=dict)
+    style_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
+    style_brief: str = Field(default="", max_length=1000)
 
 
 def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
@@ -86,6 +95,15 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
             include_macro=req.include_macro,
             refresh_prices=req.refresh_prices,
             risk=req.risk or None,
+            region_mix={
+                "targets": req.region_targets,
+                "tolerance_pct": req.region_tolerance_pct,
+            },
+            style_mix={
+                "targets": req.style_targets,
+                "tolerance_pct": req.style_tolerance_pct,
+                "brief": req.style_brief,
+            },
         )
         with _review_lock:
             if _review_job and _review_job["id"] == job_id:
@@ -125,18 +143,21 @@ def _live_prices_sek(slug: str, store, meta: dict, tickers: list[str]) -> dict[s
 
 
 def _portfolio_summaries(kind: str) -> list[dict]:
+    from fundmgr.web.views import transaction_rows
     out = []
     for meta in paper.list_portfolios(kind=kind):
         _, store = paper.open_portfolio(meta["slug"])
         navs = store.get_nav_history()
         nav = navs[-1].portfolio_nav_sek if navs else meta["capital_sek"]
         pnl_pct = (nav / meta["capital_sek"] - 1) * 100 if meta["capital_sek"] else 0.0
+        last = store.get_transactions(limit=1)
         out.append({
             **meta,
             "nav": round(nav),
             "pnl_pct": round(pnl_pct, 2),
             "n_positions": len(store.get_positions()),
             "n_learnings": len(store.get_active_learnings()),
+            "last_fill": transaction_rows(last)[0] if last else None,
         })
     return out
 
@@ -631,6 +652,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         fee_sek: str = Form("0"),
         side: str = Form("buy"),
         trade_date: str = Form(""),
+        allow_duplicate: str = Form(""),
     ):
         """Record a real broker fill into the sleeve (buy or sell, price in SEK).
 
@@ -639,10 +661,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         from datetime import datetime as _dt, timezone as _tz
         from fundmgr.state.models import NavPoint, Transaction
 
-        def _back(msg: str, ok: int) -> RedirectResponse:
+        def _back(msg: str, ok: int, refill: dict | None = None) -> RedirectResponse:
             from urllib.parse import urlencode
             return RedirectResponse(
-                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}),
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok, **(refill or {})}),
                 status_code=303)
 
         try:
@@ -670,11 +692,23 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 return _back(f"Bad date '{trade_date}' — use YYYY-MM-DD.", 0)
 
         tkr, snap_note = paper.snap_ticker_to_plan(store, tkr)
+        if not allow_duplicate:
+            dup = paper.duplicate_fill_note(
+                store.find_similar_fills(tkr, side, n_shares, price, ts))
+            if dup:
+                # Hand the entry back so confirming it is one tick, not a retype.
+                return _back(dup, 0, {
+                    "dup": 1, "f_ticker": tkr, "f_side": side, "f_shares": f"{n_shares:g}",
+                    "f_price": f"{price:g}", "f_fee": f"{fee:g}", "f_date": trade_date.strip(),
+                })
         currency = meta["currency_map"].get(tkr, "SEK")
-        store.apply_fill(Transaction(
-            ticker=tkr, side=side, shares=n_shares, price_sek=price, fee_sek=fee,
-            source="fill", currency=currency, timestamp=ts,
-        ))
+        try:
+            store.apply_fill(Transaction(
+                ticker=tkr, side=side, shares=n_shares, price_sek=price, fee_sek=fee,
+                source="fill", currency=currency, timestamp=ts,
+            ))
+        except ValueError as exc:
+            return _back(str(exc), 0)
         _price_cache.pop(slug, None)
         try:
             bench_rows = store.get_benchmark()
@@ -944,6 +978,16 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             valid = {(m["provider"], m["model_id"]) for m in sleeve_review.MODEL_OPTIONS}
             if (req.provider, req.model_id) not in valid:
                 raise HTTPException(status_code=400, detail="Unknown provider/model combination")
+        for label, submitted, dial in (("region", req.region_targets, regions),
+                                       ("style", req.style_targets, styles)):
+            unknown = sorted(set(submitted) - set(dial.SCHEME.codes))
+            if unknown:
+                raise HTTPException(status_code=400,
+                                    detail=f"Unknown {label}(s): {', '.join(unknown)}")
+            try:
+                dial.clean_targets(submitted)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from None
 
         with _review_lock:
             if _review_job and _review_job["status"] == "running":
@@ -1036,10 +1080,18 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         pnl_sek = round(nav - meta["capital_sek"], 0)
         pnl_pct = round((nav / meta["capital_sek"] - 1) * 100, 2) if meta["capital_sek"] else 0.0
 
+        from fundmgr.web.views import transaction_rows
         flash = None
         msg = request.query_params.get("msg")
         if msg:
             flash = {"msg": msg, "ok": request.query_params.get("ok") == "1"}
+
+        # A refused duplicate comes back with its entry so it can be confirmed.
+        qp = request.query_params
+        fill_refill = None
+        if real and qp.get("dup") == "1":
+            fill_refill = {k: qp.get(f"f_{k}", "")
+                           for k in ("ticker", "side", "shares", "price", "fee", "date")}
 
         last_run = None
         last_rec = store.get_last_recommendation()
@@ -1112,6 +1164,15 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "config": defaults["config"],
                 "country": defaults["country"],
                 "risk": defaults["risk"],
+                "regions": regions.options(),
+                "region_targets": (defaults["regions"].get("targets") or {}),
+                "region_tolerance_pct": defaults["regions"].get(
+                    "tolerance_pct", regions.DEFAULT_TOLERANCE_PCT),
+                "styles": styles.options(),
+                "style_targets": (defaults["styles"].get("targets") or {}),
+                "style_tolerance_pct": defaults["styles"].get(
+                    "tolerance_pct", styles.DEFAULT_TOLERANCE_PCT),
+                "style_brief": defaults["styles"].get("brief", ""),
                 # The profile's own caps, so the form can show what an empty
                 # override field will actually run under.
                 "profile_risk": _profile_risk(defaults["config"]),
@@ -1135,6 +1196,9 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "adds": _add_status(store) if real else None,
             "review": review,
             "flash": flash,
+            "recent_fills": transaction_rows(store.get_transactions(limit=5)),
+            "n_fills": store.count_transactions(),
+            "fill_refill": fill_refill,
             **_base_ctx(meta),
         })
 
@@ -1262,27 +1326,15 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
 
     @router.get("/{slug}/transactions", response_class=HTMLResponse)
     def transactions(request: Request, slug: str):
+        from fundmgr.web.views import transaction_rows
         try:
             meta, store = paper.open_portfolio(slug)
         except KeyError:
             return _not_found()
-        txns = store.get_transactions(limit=100)
-        txn_data = [
-            {
-                "date": t.timestamp.strftime("%Y-%m-%d %H:%M"),
-                "ticker": t.ticker,
-                "side": t.side.upper(),
-                "shares": t.shares,
-                "price": t.price_sek,
-                "gross": round(t.gross_sek, 0),
-                "fee": t.fee_sek,
-                "source": t.source,
-            }
-            for t in txns
-        ]
         return _render("transactions.html", {
             "request": request,
-            "transactions": txn_data,
+            "transactions": transaction_rows(store.get_transactions(limit=500)),
+            "n_fills": store.count_transactions(),
             "total_fees": store.total_fees_paid(),
             "active_page": "transactions",
             **_base_ctx(meta),

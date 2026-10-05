@@ -179,3 +179,22 @@ def test_score_by_regime_ignores_unscored_runs(store):
         prompt_snapshot="{}", llm_response="{}", guardrail_log="{}", actions_json="[]",
     ))
     assert store.score_by_regime("learnings_hash") == []
+
+
+def test_find_similar_fills_matches_the_same_fill_within_a_week(store):
+    from datetime import timedelta
+
+    store.initialise(100_000)
+    day = datetime(2026, 9, 21, 12)
+    store.apply_fill(Transaction(ticker="AAPL", side="buy", shares=41, price_sek=2000.0,
+                                 fee_sek=0.0, source="fill", timestamp=day))
+
+    # typed in later with its real trade date a few days off — still the same fill
+    assert len(store.find_similar_fills("AAPL", "buy", 41, 2000.0, day + timedelta(days=3))) == 1
+    assert store.find_similar_fills("AAPL", "buy", 41, 2000.0, day + timedelta(days=8)) == []
+    # anything that differs in substance is a different fill
+    assert store.find_similar_fills("AAPL", "sell", 41, 2000.0, day) == []
+    assert store.find_similar_fills("AAPL", "buy", 40, 2000.0, day) == []
+    assert store.find_similar_fills("AAPL", "buy", 41, 2000.5, day) == []
+    assert store.find_similar_fills("MSFT", "buy", 41, 2000.0, day) == []
+    assert store.count_transactions() == 1

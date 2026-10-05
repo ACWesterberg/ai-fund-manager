@@ -1,17 +1,9 @@
 """
-MIPROv2 optimization of the weekly decision instructions (DeepSwing-style).
-
-Builds run-level training examples from the fielded prompt snapshots that
-`build_prompt` already persists (snapshot v2; v1 rows are reconstructed from the
-flat strings), scored against the realized per-ticker alphas in
-`decision_outcomes`. MIPROv2 searches instruction space for the WeeklyDecision
-signature in `dspy_program.py`: a heavy prompt model writes candidate
-instructions, the configured decision model evaluates them against history, and
-the winner is saved to a git-backed guidance artifact that `build_prompt`
-appends to the mandate on every subsequent run.
-
-dspy is an optional dependency (`uv sync --extra optimize`). Everything except
-run_optimization() works without it.
+Learning-driven, bounded instruction optimization from historical decision runs.
+The current search proposes one alternative and evaluates it against incumbent
+instructions on a small shared validation set. It has durable request budgets,
+checkpoints and fail-fast provider errors; no DSPy bootstrapping or few-shot search.
+Only complete winners become inactive candidates for independent evaluation.
 """
 from __future__ import annotations
 
@@ -35,14 +27,10 @@ logger = logging.getLogger(__name__)
 # should already saturate: at k=25 a ±2pp mean alpha lands near the extremes.
 _ALPHA_METRIC_SCALE = 25.0
 
-# Weight given to "was the reasoning right" against "did the price agree".
-# Half and half: the thesis term is the less noisy of the two per observation,
-# but alpha is the thing the fund is ultimately judged on, and a metric that
-# ignored it would optimize for being persuasive rather than for making money.
-THESIS_METRIC_WEIGHT = 0.5
-# Chosen so a run whose every resolved thesis went the predicted way lands near
-# the same extreme as a strongly positive alpha run, rather than dominating it.
-_THESIS_METRIC_SCALE = 1.5
+# This remains a directional-alpha search surrogate, not a portfolio-return
+# evaluator. Historical thesis verdicts describe a different decision's claim;
+# they must never reward or penalize a candidate's new reasoning.
+METRIC_VERSION = "directional_alpha_v2"
 
 INPUT_FIELDS = ("mandate", "macro", "portfolio_state", "risk_limits", "universe", "learnings")
 
@@ -73,11 +61,10 @@ def load_guidance(cfg: AppConfig) -> str:
 
 
 def guidance_versions(cfg: AppConfig) -> dict:
-    """Current + archived optimized guidance for this fund, for the web view.
+    """Active guidance, archived versions and inactive candidates for this fund.
 
-    Returns {"current": {...}|None, "history": [{...}, ...]} where each entry is
-    the guidance JSON (instructions + metadata: created_at, models, run counts).
-    History is newest-first, parsed from the timestamped archive files.
+    Returns current (or None), history and candidates. Each entry contains its
+    instructions and metadata; historical/candidate lists are newest first.
     """
     def _read(path: Path) -> dict | None:
         try:
@@ -100,7 +87,13 @@ def guidance_versions(cfg: AppConfig) -> dict:
             if entry:
                 history.append(entry)
 
-    return {"current": current, "history": history}
+    candidates = []
+    for p in sorted(candidate_directory(cfg).glob("*/guidance.json"), reverse=True):
+        entry = _read(p)
+        if entry:
+            entry["_path"] = str(p)
+            candidates.append(entry)
+    return {"current": current, "history": history, "candidates": candidates}
 
 
 def guidance_fingerprint(cfg: AppConfig) -> str | None:
@@ -129,59 +122,33 @@ def _sided(side: str, value: float) -> float:
 
 
 def decision_metric(example, prediction, trace=None) -> float:
-    """
-    Reward a predicted DecisionRun by the alpha it captured and by whether the
-    reasoning available on those names turned out to be right.
+    """Directional-alpha search score, independent of historical thesis labels.
 
-    `ticker_alphas` is realized return-vs-benchmark in percentage points over
-    the ~28-day window. A predicted buy earns that alpha, a sell earns its
-    inverse (exiting before underperformance is good), a hold or an omitted
-    ticker earns nothing.
-
-    `ticker_theses` is the verdict on each name's stated thesis, judged on
-    company news rather than on the price. It is blended in because a 28-day
-    single-name return is a very noisy verdict on a decision — at the fund's
-    tracking error, separating a better instruction set from a worse one on
-    alpha alone takes far more runs than the optimizer will ever have. Whether
-    the thesis held is a much less noisy per-observation signal, so mixing it
-    in buys discrimination the alpha term cannot supply on its own.
-
-    Names whose thesis was unresolved contribute nothing to the thesis term,
-    and an example with no resolved verdicts scores on alpha exactly as before
-    — so this degrades cleanly while verdicts are still sparse.
+    This interim surrogate scores known ticker/side choices, not allocation,
+    costs or feasibility. Compiled candidates require separate evaluation
+    through the live decision pipeline before they can become active guidance.
     """
     alphas: dict[str, float] = dict(getattr(example, "ticker_alphas", None) or {})
     if not alphas:
         return 0.5
 
-    verdicts: dict[str, str] = dict(getattr(example, "ticker_theses", None) or {})
-    resolved = {t: v for t, v in verdicts.items() if v in ("held", "broke")}
-
     decision = getattr(prediction, "decision", None)
     actions = getattr(decision, "actions", None) or []
-
     realized = 0.0
-    thesis_earned = 0.0
+    seen: set[str] = set()
     for action in actions:
         ticker = str(getattr(action, "ticker", "")).upper()
         side = str(getattr(action, "side", "")).lower()
-
+        # Duplicate actions must not multiply an observed outcome's reward.
+        if ticker in seen:
+            return 0.0
+        seen.add(ticker)
         alpha = alphas.get(ticker)
         if alpha is not None:
             realized += _sided(side, alpha)
 
-        verdict = resolved.get(ticker)
-        if verdict is not None:
-            thesis_earned += _sided(side, 1.0 if verdict == "held" else -1.0)
-
-    alpha_signal = (realized / len(alphas) / 100.0) * _ALPHA_METRIC_SCALE
-
-    if not resolved:
-        return 0.5 + 0.5 * math.tanh(alpha_signal)
-
-    thesis_signal = (thesis_earned / len(resolved)) * _THESIS_METRIC_SCALE
-    blended = (1 - THESIS_METRIC_WEIGHT) * alpha_signal + THESIS_METRIC_WEIGHT * thesis_signal
-    return 0.5 + 0.5 * math.tanh(blended)
+    signal = (realized / len(alphas) / 100.0) * _ALPHA_METRIC_SCALE
+    return 0.5 + 0.5 * math.tanh(signal)
 
 
 # ── Trainset ─────────────────────────────────────────────────────────────────
@@ -190,7 +157,7 @@ def build_trainset(store: "Store", source: str = "") -> list[dict]:
     """
     One example per run that has (a) at least one evaluated outcome and (b) a
     recoverable fielded context. Inputs match WeeklyDecision's fields; the
-    per-ticker alphas and thesis verdicts ride along for the metric.
+    per-ticker alphas feed the search metric; thesis verdicts remain diagnostic metadata.
 
     `source` labels which fund an example came from, for pooled trainsets.
     """
@@ -341,103 +308,65 @@ def run_optimization(
     store: "Store",
     min_outcomes: int | None = None,
     min_examples: int | None = None,
+    *, resume: Path | None = None,
+    retry_failed: bool = False,
 ) -> bool:
-    """
-    Run MIPROv2 over the run-level trainset and persist the winning instructions
-    as the guidance artifact. Returns True if a new artifact was saved.
-    """
-    try:
-        import dspy
-        from dspy.teleprompt import MIPROv2
-    except ImportError:
-        logger.error("dspy is not installed — run: uv sync --extra optimize")
-        return False
-
-    from fundmgr.engine.dspy_program import WeeklyDecision, build_lm
-
-    min_outcomes = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
-    min_examples = min_examples if min_examples is not None else cfg.optimizer.min_examples
-
-    evaluated = store.get_evaluated_outcomes()
-    if len(evaluated) < min_outcomes:
-        logger.info("Optimizer: only %d evaluated outcomes, need %d — skipping", len(evaluated), min_outcomes)
-        return False
-
-    raw = build_pooled_trainset(cfg)
-    if len(raw) < min_examples:
-        logger.info("Optimizer: only %d usable run examples, need %d — skipping", len(raw), min_examples)
-        return False
-
-    trainset = [dspy.Example(**ex).with_inputs(*INPUT_FIELDS) for ex in raw]
-    split = max(1, int(len(trainset) * 0.8))
-    train, val = trainset[:split], trainset[split:] or trainset[-1:]
-
-    prompt_model_id = cfg.optimizer.prompt_model_id or _default_prompt_model(cfg.llm.provider)
-    # Two roles: the task model runs candidate programs against history (many
-    # calls → the configured decision-tier model); the prompt model writes the
-    # candidate instructions (few calls → the heaviest reasoner).
-    task_lm = build_lm(cfg)
-    prompt_lm = build_lm(cfg, model_id=prompt_model_id)
-
-    program = dspy.ChainOfThought(WeeklyDecision)
-
-    logger.info(
-        "Optimizer: MIPROv2 with %d train / %d val runs (task=%s, prompt=%s)",
-        len(train), len(val), cfg.llm.model_id, prompt_model_id,
+    """Run a bounded instruction-only search; stage only a complete winner."""
+    from fundmgr.engine.bounded_optimizer import (
+        make_plan, checkpoint_path, run_search, _load,
     )
-
-    try:
-        dspy.configure(lm=task_lm)
-        optimizer = MIPROv2(
-            metric=decision_metric,
-            prompt_model=prompt_lm,
-            task_model=task_lm,
-            auto="light",
-            num_threads=1,
-        )
-        compiled = optimizer.compile(
-            program,
-            trainset=train,
-            valset=val,
-            requires_permission_to_run=False,
-        )
-    except Exception as exc:
-        logger.error("Optimizer: MIPROv2 failed: %s", exc, exc_info=True)
+    if resume is not None:
+        plan = _load(resume)["plan"]
+        return run_search(cfg, plan, resume, resume=True, retry_failed=retry_failed)
+    threshold = cfg.optimizer.min_outcomes if min_outcomes is None else min_outcomes
+    examples_threshold = cfg.optimizer.min_examples if min_examples is None else min_examples
+    evaluated = store.get_evaluated_outcomes()
+    if len(evaluated) < threshold:
+        logger.info("Optimizer: only %d evaluated outcomes, need %d — skipping", len(evaluated), threshold)
         return False
-
-    instructions = _compiled_instructions(compiled)
-    if not instructions:
-        logger.error("Optimizer: compiled program carries no instructions — nothing saved")
+    raw = build_pooled_trainset(cfg)
+    if len(raw) < examples_threshold:
+        logger.info("Optimizer: only %d usable run examples, need %d — skipping", len(raw), examples_threshold)
         return False
+    plan = make_plan(cfg, raw)
+    return run_search(cfg, plan, checkpoint_path(cfg, plan))
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-    out_path = compiled_program_path(cfg)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    if out_path.exists():
-        out_path.rename(out_path.with_name(f"{out_path.stem}_{stamp}.json"))
-    compiled.save(str(out_path))
+def candidate_directory(cfg: AppConfig) -> Path:
+    """Separate from active/history globs: compilation is not promotion."""
+    return cfg.optimizer.compiled_dir / "candidates" / cfg.db_path.stem
 
-    g_path = guidance_path(cfg)
-    if g_path.exists():
-        g_path.rename(g_path.with_name(f"{g_path.stem}_{stamp}.json"))
-    g_path.write_text(json.dumps({
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "n_train_runs": len(train),
-        "n_val_runs": len(val),
-        "n_outcomes": len(evaluated),
-        "pooled_from": sorted({e.get("source", "") for e in raw} - {""}),
-        "n_resolved_theses": sum(
-            1 for e in raw for v in (e.get("ticker_theses") or {}).values()
-            if v in ("held", "broke")
-        ),
-        "task_model": cfg.llm.model_id,
-        "prompt_model": prompt_model_id,
-        "instructions": instructions,
-    }, indent=2))
 
-    logger.info("Optimizer: saved compiled program to %s and guidance to %s", out_path, g_path)
-    return True
+def save_guidance_candidate(cfg: AppConfig, compiled, metadata: dict) -> Path:
+    """Persist an immutable candidate, publishing its manifest only after save.
+
+    No active artifact is changed. A later evaluation/promotion workflow must
+    compare this candidate with its recorded incumbent on unseen inputs.
+    """
+    from uuid import uuid4
+
+    now = datetime.now(timezone.utc)
+    directory = candidate_directory(cfg) / (now.strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid4().hex[:12])
+    directory.mkdir(parents=True, exist_ok=False)
+    compiled.save(str(directory / "program.json"))
+    manifest = directory / "guidance.json"
+    payload = {
+        **metadata,
+        "created_at": now.isoformat(),
+        "status": "pending_evaluation",
+        "metric_version": METRIC_VERSION,
+        "candidate_id": directory.name,
+        "fund_id": cfg.db_path.stem,
+        "horizon_days": cfg.evaluation_horizon_days,
+        "provider": cfg.llm.provider,
+        "mandate": cfg.mandate_path.read_text().strip(),
+        "incumbent_guidance_hash": guidance_fingerprint(cfg),
+        "config_hash": cfg.config_hash(),
+    }
+    temporary = directory / "guidance.tmp"
+    temporary.write_text(json.dumps(payload, indent=2))
+    temporary.replace(manifest)
+    return manifest
 
 
 def _compiled_instructions(compiled) -> str:

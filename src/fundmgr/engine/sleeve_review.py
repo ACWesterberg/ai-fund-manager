@@ -45,9 +45,9 @@ value is still exactly what the decision left, since an edit you made afterwards
 is yours to keep.
 
 Funding model: the sleeve's NAV is fixed — no new capital. A buy has to be paid
-for out of the book, so guardrails see a snapshot with the run's own sells
-already settled (`_fund_from_sells`). That is what makes "sell A, add B" pass
-the cash floor in a fully-deployed sleeve instead of being rejected outright.
+for out of the book. Shared guardrails reserve accepted sales and purchases
+in confidence order against the original snapshot. Only accepted sales can
+fund later buys; `_fund_from_sells` reports that funding without changing it.
 """
 from __future__ import annotations
 
@@ -58,6 +58,7 @@ import uuid
 from datetime import datetime, timedelta
 from functools import lru_cache
 
+from fundmgr import regions, styles
 from fundmgr.config import AppConfig, UniverseTicker, get_enabled_tickers
 from fundmgr.data.fundamentals import apply_to_features
 from fundmgr.data.news import (
@@ -87,6 +88,8 @@ DEFAULT_MAX_CANDIDATES = 750
 META_CONFIG = "paper_review_config"
 META_COUNTRY = "paper_review_country"
 META_RISK = "paper_review_risk"
+META_REGIONS = "paper_review_regions"
+META_STYLES = "paper_review_styles"
 
 # Risk caps a sleeve may carry its own value for. Everything else — sector caps,
 # minimum trade size, staleness — stays the source profile's, because those are
@@ -147,6 +150,8 @@ def review_defaults(store: Store) -> dict:
         "config": config_name,
         "country": store.get_meta(META_COUNTRY) or "",
         "risk": stored_risk(store),
+        "regions": stored_regions(store),
+        "styles": stored_styles(store),
     }
 
 
@@ -176,6 +181,59 @@ def stored_risk(store: Store) -> dict:
     """This sleeve's own risk caps, as far as it sets any."""
     try:
         return clean_risk(json.loads(store.get_meta(META_RISK) or "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+def clean_regions(raw: dict | None) -> dict:
+    """A stored or submitted geographic mix, validated.
+
+    Same boundary role as clean_risk: a mix that cannot be parsed falls back to
+    "no mix" rather than reaching the guardrails as a half-read dict. A sum past
+    100% is the one case worth raising on, since it describes a book that cannot
+    exist and silently dropping part of it would build a different one.
+    """
+    targets = regions.clean_targets((raw or {}).get("targets"))
+    if not targets:
+        return {}
+    return {
+        "targets": targets,
+        "tolerance_pct": regions.clean_tolerance((raw or {}).get("tolerance_pct")),
+    }
+
+
+def stored_regions(store: Store) -> dict:
+    """This sleeve's own geographic mix, as far as it sets one."""
+    try:
+        return clean_regions(json.loads(store.get_meta(META_REGIONS) or "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+def clean_styles(raw: dict | None) -> dict:
+    """A stored or submitted risk/quality mix, plus its free-text brief.
+
+    The brief survives an empty target set: "lean towards founder-led
+    businesses" is a real instruction on its own, and dropping it because no
+    bucket was filled in would silently discard the more specific of the two.
+    """
+    from fundmgr.engine.whatif import MAX_STYLE_BRIEF
+
+    targets = styles.clean_targets((raw or {}).get("targets"))
+    brief = str((raw or {}).get("brief") or "").strip()[:MAX_STYLE_BRIEF]
+    if not targets and not brief:
+        return {}
+    return {
+        "targets": targets,
+        "tolerance_pct": styles.clean_tolerance((raw or {}).get("tolerance_pct")),
+        "brief": brief,
+    }
+
+
+def stored_styles(store: Store) -> dict:
+    """This sleeve's own risk/quality mix, as far as it sets one."""
+    try:
+        return clean_styles(json.loads(store.get_meta(META_STYLES) or "{}"))
     except (ValueError, TypeError):
         return {}
 
@@ -821,18 +879,10 @@ def _share_counts(actions, snap: PortfolioSnapshot, features: dict,
 # ── Funding ───────────────────────────────────────────────────────────────────
 
 def _fund_from_sells(snap: PortfolioSnapshot, decision, cfg: AppConfig) -> PortfolioSnapshot:
-    """Settle the run's own sells before the guardrails price its buys.
+    """Report the cash available after accepted sales, including their fees.
 
-    Guardrails check a buy against cash on hand and reject anything that would
-    breach the cash floor. A fully-deployed sleeve holds almost no cash, so
-    without this every add-on is rejected no matter how well funded the paired
-    sell leaves it. Applying the sells first — shares down, proceeds to cash,
-    NAV unchanged — models settlement and lets "sell A, add B" through, while
-    an unfunded buy still fails the same floor it always did.
-
-    Sells themselves are unaffected: guardrails check them for universe
-    membership and minimum trade size only, neither of which reads the
-    snapshot.
+    This snapshot is for reporting only. Guardrails must receive the original
+    book because they already project accepted trades themselves.
     """
     by_ticker = {p.ticker: p for p in snap.positions}
     positions = [copy.copy(p) for p in snap.positions]
@@ -976,6 +1026,8 @@ def review_sleeve(
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     refresh_prices: bool = True,
     risk: dict | None = None,
+    region_mix: dict | None = None,
+    style_mix: dict | None = None,
     dry_run: bool = False,
 ) -> dict:
     """Re-decide one sleeve against its current book and a scoped universe.
@@ -987,6 +1039,19 @@ def review_sleeve(
 
     `risk` overrides the profile's caps for this run (see OVERRIDABLE_RISK) and,
     like the scope, is remembered on the sleeve for the next one.
+
+    `region_mix` is {"targets": {region code: % of NAV}, "tolerance_pct": n} —
+    the geographic allocation this book is held to (see fundmgr.regions). It is
+    remembered the same way, so a sleeve promoted from a 30%-Nordics what-if
+    keeps being reviewed against that mix rather than drifting back to whatever
+    the screener's ranking favours. Ceilings bind; a region left short is
+    reported in the result.
+
+    `style_mix` is the same over risk/quality character — {"targets": {style
+    code: % of NAV}, "tolerance_pct": n, "brief": "free text"} — and is
+    remembered the same way. A style is read off fundamentals rather than the
+    universe row, so a name without them is `unclassified`: counted against no
+    target, blocked by none, and reported as such.
     """
     from fundmgr import paper
 
@@ -998,10 +1063,22 @@ def review_sleeve(
     config_name = config_name or defaults["config"]
     country = (country if country is not None else defaults["country"]) or None
     risk = defaults["risk"] if risk is None else clean_risk(risk)
+    region_mix = defaults["regions"] if region_mix is None else clean_regions(region_mix)
+    region_targets = region_mix.get("targets") or {}
+    region_tolerance = region_mix.get("tolerance_pct", regions.DEFAULT_TOLERANCE_PCT)
+    style_mix = defaults["styles"] if style_mix is None else clean_styles(style_mix)
+    style_targets = style_mix.get("targets") or {}
+    style_tolerance = style_mix.get("tolerance_pct", styles.DEFAULT_TOLERANCE_PCT)
+    style_brief = style_mix.get("brief") or ""
 
     cfg = load_profile_config(config_name)
     cfg, risk_applied = apply_risk_overrides(cfg, risk)
     cfg = copy.copy(cfg)
+    cfg.risk = copy.copy(cfg.risk)
+    cfg.risk.region_targets = region_targets
+    cfg.risk.region_tolerance_pct = region_tolerance
+    cfg.risk.style_targets = style_targets
+    cfg.risk.style_tolerance_pct = style_tolerance
     cfg.llm = copy.copy(cfg.llm)
     if provider and model_id:
         cfg.llm.provider = provider
@@ -1062,6 +1139,10 @@ def review_sleeve(
         features, held_tickers,
         top_n=cfg.screener.top_n,
         pinned_tickers=set(cfg.screener.pinned_tickers) & set(features),
+        region_quotas=regions.candidate_quotas(region_targets, cfg.screener.top_n),
+        excluded_regions=regions.excluded(region_targets),
+        style_quotas=styles.candidate_quotas(style_targets, cfg.screener.top_n),
+        excluded_styles=styles.excluded(style_targets),
     )
 
     macro_block = ""
@@ -1085,16 +1166,17 @@ def review_sleeve(
         task_override=_task_block(run_id, scope_label, snap, cfg),
         heading=f"Live Sleeve Review — {meta['name']}",
     )
+    if style_brief:
+        from fundmgr.engine.whatif import _STYLE_BRIEF_HEADER
+        user_msg += _STYLE_BRIEF_HEADER + style_brief
 
     decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, cfg)
 
-    # Guardrails price the buys against a book where this run's sells have
-    # settled — see _fund_from_sells. Held and planned names join the scoped
-    # universe so an existing position is never rejected as "not in universe".
-    funded = _fund_from_sells(snap, decision, cfg)
+    # The shared guardrails settle accepted trades against the original book.
+    # Pre-settling proposed sells here would count their proceeds twice.
     universe_tickers = {t.yahoo_ticker for t in universe} | must_have
-    guardrails = apply_guardrails(decision, funded, features, universe_tickers, cfg)
-    unfunded = _drop_unfunded_buys(guardrails, snap, cfg)
+    guardrails = apply_guardrails(decision, snap, features, universe_tickers, cfg)
+    funded = _fund_from_sells(snap, _SellsOnly(guardrails.approved_actions), cfg)
 
     approved = {(a.ticker, a.side) for a in guardrails.approved_actions}
     sizing = _share_counts(guardrails.approved_actions, snap, features, meta, store)
@@ -1140,17 +1222,6 @@ def review_sleeve(
             "add_on": a.side == "buy" and a.ticker not in held_tickers and a.ticker not in targets,
             "approved": (a.ticker, a.side) in approved,
         })
-    # Both post-verdict passes drop actions the per-action checks approved, so
-    # say which one did it rather than leaving a silently un-approved row.
-    for row in actions:
-        if row["status"] == "APPROVED" and not row["approved"]:
-            row["status"] = "DROPPED"
-            row["reason"] = (
-                "Unfunded once the turnover cap dropped the sells paying for it"
-                if row["ticker"] in unfunded and row["side"] == "buy"
-                else "Dropped by turnover cap (lower confidence than kept trades)"
-            )
-
     buys = [r for r in actions if r["side"] == "buy" and r["approved"]]
     sells = [r for r in actions if r["side"] == "sell" and r["approved"]]
     # A swap costs turnover twice, so the cap truncates paired trades before it
@@ -1164,9 +1235,25 @@ def review_sleeve(
         "proposed_sek": round(wanted),
         "kept_sek": round(kept),
         "dropped": sum(1 for r in actions
-                       if r["status"] == "DROPPED" and "turnover cap" in r["reason"]),
+                       if not r["approved"] and "turnover cap" in r["reason"]),
     }
     ages = sorted(f.data_age_trading_days for f in screened.values())
+
+    # Projected against `snap`, not `funded`: the mix describes the book this
+    # review would leave behind, and the funding pass is an accounting step on
+    # the way there rather than a state the sleeve is ever in.
+    region_by_ticker = regions.regions_of(features)
+    region_rows = regions.mix_rows(
+        region_targets, region_tolerance,
+        regions.projected_exposure(snap, guardrails.approved_actions, region_by_ticker),
+        regions.candidate_counts(regions.regions_of(screened)),
+    )
+    style_by_ticker = styles.styles_of(features)
+    style_rows = styles.mix_rows(
+        style_targets, style_tolerance,
+        styles.projected_exposure(snap, guardrails.approved_actions, style_by_ticker),
+        styles.candidate_counts(styles.styles_of(screened)),
+    )
 
     result = {
         "id": run_id,
@@ -1205,6 +1292,21 @@ def review_sleeve(
             "max_position_pct": cfg.risk.max_position_pct,
             "max_positions": cfg.risk.max_positions,
             "min_cash_pct": cfg.risk.min_cash_pct,
+        },
+        "regions": {
+            "targets": region_targets,
+            "tolerance_pct": region_tolerance,
+            "rows": region_rows,
+            "shortfalls": regions.shortfalls(region_rows),
+        },
+        "styles": {
+            "targets": style_targets,
+            "tolerance_pct": style_tolerance,
+            "rows": style_rows,
+            "shortfalls": styles.shortfalls(style_rows),
+            "unclassified_candidates": styles.candidate_counts(
+                styles.styles_of(screened)).get(styles.UNCLASSIFIED, 0),
+            "brief": style_brief,
         },
         "turnover": turnover,
         "buy_count": len(buys),
@@ -1280,6 +1382,8 @@ def review_sleeve(
         store.set_meta(META_CONFIG, config_name)
         store.set_meta(META_COUNTRY, (country or "").upper())
         store.set_meta(META_RISK, json.dumps(risk))
+        store.set_meta(META_REGIONS, json.dumps(region_mix))
+        store.set_meta(META_STYLES, json.dumps(style_mix))
 
     return result
 

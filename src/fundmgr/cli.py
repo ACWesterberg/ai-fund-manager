@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from fundmgr import regions, styles
 from fundmgr.config import load_config, get_enabled_tickers
 from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
@@ -23,12 +24,17 @@ from fundmgr.data.universe_selection import (
 )
 from fundmgr.engine.client import LLMError, call_llm_consensus
 from fundmgr.reporting.dashboard import format_text_report, generate_html_report
-from fundmgr.engine.evaluator import evaluate_pending_outcomes, generate_learnings, generate_qualitative_learnings
+from fundmgr.engine.evaluator import (
+    consolidate_qualitative_learnings,
+    evaluate_pending_outcomes,
+    generate_learnings,
+    generate_qualitative_learnings,
+)
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.engine.thesis_check import verify_theses
 from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.levels import (
-    alertable_hits, merged_levels, record_sent_alerts, settled_sells,
+    alertable_hits, deferred_note, merged_levels, record_sent_alerts, settled_sells,
 )
 from fundmgr.reporting.actions import format_action_list
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
@@ -235,11 +241,21 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"      ⚠ Stale data (>{cfg.risk.stale_after_days}d): {', '.join(stale)}")
 
     pinned = set(cfg.screener.pinned_tickers)
+    # A mandate that sets risk.region_targets or risk.style_targets needs the
+    # candidate list built to that mix too, not just the guardrails holding it:
+    # a cap the screener never fed would reject its way towards the target
+    # instead of reaching it.
     screened_features, screened_out = screen(
         features,
         held_tickers,
         top_n=cfg.screener.top_n,
         pinned_tickers=pinned,
+        region_quotas=regions.candidate_quotas(
+            cfg.risk.region_targets, cfg.screener.top_n),
+        excluded_regions=regions.excluded(cfg.risk.region_targets),
+        style_quotas=styles.candidate_quotas(
+            cfg.risk.style_targets, cfg.screener.top_n),
+        excluded_styles=styles.excluded(cfg.risk.style_targets),
     )
     if screened_out > 0:
         click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
@@ -324,6 +340,20 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"\n      Cold start detected (cash {snap.cash_pct:.0f}%): "
                    f"turnover cap → {cfg.risk.cold_start_turnover_pct:.0f}%")
 
+    # Archive FX for all shown candidates, including alternatives we do not buy.
+    # Missing rates remain missing; offline comparisons must not invent parity.
+    if cfg.fx_to_sek:
+        for currency in sorted({f.currency for f in screened_features.values()} - {"SEK"}):
+            try:
+                rate = rate_to_sek(currency, store)
+            except Exception as exc:
+                click.echo(f"      Evaluation FX unavailable for {currency}: {exc}", err=True)
+                rate = None
+            if rate is not None:
+                fx_cache[currency] = rate
+            else:
+                fx_cache.pop(currency, None)
+
     system_msg, user_msg, prompt_fields = build_prompt(effective_cfg, snap, screened_features, store, run_id, macro_block=macro_block)
 
     # ── Call LLM (with optional consensus sampling) ───────────────────────────
@@ -363,7 +393,11 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         rec = RecommendationLog(
             run_id=run_id,
             timestamp=datetime.utcnow(),
-            prompt_snapshot=snapshot_to_dict(snap, system_msg, user_msg, prompt_fields, effective_cfg),
+            prompt_snapshot=snapshot_to_dict(
+                snap, system_msg, user_msg, prompt_fields, effective_cfg,
+                features=screened_features, universe_tickers=universe_tickers,
+                fx_rates=fx_cache,
+            ),
             llm_response=raw_response,
             guardrail_log=json.dumps(guardrail_result.to_log()),
             actions_json=json.dumps([a.model_dump() for a in guardrail_result.approved_actions]),
@@ -531,13 +565,29 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             feat = features.get(p.ticker)
             if feat:
                 p.current_price_sek = feat.last_price
-        fill_log = execute_paper_fills(
+        fill_log, _skipped = execute_paper_fills(
             [a.model_dump() for a in guardrail_result.approved_actions],
             store,
             cfg,
         )
         for line in fill_log:
             click.echo(line)
+
+    if not dry_run:
+        # Shadow research is isolated from fills and uses the saved pre-trade book.
+        from fundmgr.engine.forward import record_forward, collect_forward
+        try:
+            shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers)
+            if shadow_path:
+                click.echo(f"\n  Forward comparison recorded: {shadow_path}")
+        except Exception as exc:
+            click.echo(f"  Forward comparison unavailable: {exc}", err=True)
+        try:
+            for result in collect_forward(cfg):
+                click.echo(f"  Shadow {result['case']}: {result['status']}"
+                           + (f" — {result['error']}" if result.get("error") else ""))
+        except Exception as exc:
+            click.echo(f"  Shadow collection unavailable: {exc}", err=True)
 
 
 def _print_feature_table(features, cfg):
@@ -566,6 +616,16 @@ def _print_feature_table(features, cfg):
         click.echo(f"  {f.ticker:<16} {f.last_price:>10.2f} {r1:>6} {r5:>6} {r20:>7} {rsi:>5} {vol:>6} {senti}{stale_flag}")
 
 
+def _refuse_duplicate_fill(store, ticker: str, side: str, shares: float, price: float,
+                           ts: datetime) -> None:
+    from fundmgr.paper import duplicate_fill_note
+
+    note = duplicate_fill_note(store.find_similar_fills(ticker, side, shares, price, ts),
+                               override="re-run with --allow-duplicate")
+    if note:
+        raise click.ClickException(note)
+
+
 @cli.command()
 @click.argument("ticker")
 @click.argument("shares", type=float)
@@ -574,7 +634,11 @@ def _print_feature_table(features, cfg):
 @click.option("--side", type=click.Choice(["buy", "sell"]), default="buy", show_default=True)
 @click.option("--date", "trade_date", default=None, metavar="YYYY-MM-DD",
               help="Trade date (defaults to today). Use when recording a past fill.")
-def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_date: str | None):
+@click.option("--allow-duplicate", is_flag=True,
+              help="Record even if an identical fill (ticker, side, shares, price) "
+                   "is already recorded within a week of this date.")
+def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_date: str | None,
+         allow_duplicate: bool):
     """Record an actual fill from the broker.
 
     \b
@@ -598,6 +662,8 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         ts = datetime.utcnow()
 
     ticker = ticker.upper()
+    if not allow_duplicate:
+        _refuse_duplicate_fill(store, ticker, side, shares, price, ts)
     txn = Transaction(
         ticker=ticker,
         side=side,
@@ -608,7 +674,10 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
         timestamp=ts,
     )
 
-    store.apply_fill(txn)
+    try:
+        store.apply_fill(txn)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     gross = shares * price
     direction = "Bought" if side == "buy" else "Sold"
@@ -931,11 +1000,12 @@ def check_stops(quiet: bool):
     # ── Auto-execute stops/profits for simulation fund ────────────────────────
     auto_sold: list[str] = []
     deferred: list[str] = []
+    skip_reasons: dict[str, str] = {}
     triggered = stops_hit + profits_hit
     if triggered and cfg.auto_fill:
         from fundmgr.engine.auto_fill import execute_paper_fills
         sell_actions = [
-            {"ticker": t, "side": "sell", "target_weight_pct": 0, "sek_estimate": price}
+            {"ticker": t, "side": "sell", "target_weight_pct": 0}
             for t, _chg, _pct, price in triggered
         ]
         # notify_skips=False: check-stops runs every 15 min, so a closed-market
@@ -948,8 +1018,14 @@ def check_stops(quiet: bool):
         # anyway told Telegram "AUTO-SOLD" about a position still held, and —
         # because an auto-sold ticker bypasses the once-a-day alert limit —
         # repeated that same message every 15 minutes until the close.
+        #
+        # The book answers *whether* a sell settled; only the filler knows
+        # *why* one didn't, which is why it reports a reason per ticker. The
+        # first version of this described every deferral as a closed market,
+        # and said so about a Norwegian name at 15:00 with Oslo open for
+        # another 80 minutes.
         held_before = {p.ticker: p.shares for p in store.get_positions()}
-        fill_log = execute_paper_fills(sell_actions, store, cfg, notify_skips=False)
+        fill_log, skip_reasons = execute_paper_fills(sell_actions, store, cfg, notify_skips=False)
         for line in fill_log:
             click.echo(f"  {line}")
         held_after = {p.ticker: p.shares for p in store.get_positions()}
@@ -957,8 +1033,8 @@ def check_stops(quiet: bool):
         for ticker in auto_sold:
             store.clear_position_stop(ticker)
         if deferred and not quiet:
-            click.echo(f"  ⏸ Not sold this cycle (venue closed or no price): "
-                       f"{', '.join(deferred)} — the level stands and retries next cycle.")
+            for ticker in deferred:
+                click.echo(f"  ⏸ {ticker} — {deferred_note(skip_reasons.get(ticker))}.")
 
     # ── Stop-loss review (advisory) for non-auto-fill (real-money) funds ───────
     # On a stop hit, run a focused N-sample reassessment so a recent "add" thesis
@@ -1034,7 +1110,7 @@ def check_stops(quiet: bool):
             if ticker in auto_sold:
                 note = " — <b>AUTO-SOLD</b>"
             elif ticker in deferred:
-                note = " — market closed, sells on the next open"
+                note = f" — {deferred_note(skip_reasons.get(ticker))}"
             else:
                 note = " — review &amp; sell"
             lines.append(f"🚨 <b>{ticker}</b> {chg:+.1f}% — STOP HIT (stop -{stop_pct:.0f}%)  live {price:.2f}{note}")
@@ -1042,7 +1118,7 @@ def check_stops(quiet: bool):
             if ticker in auto_sold:
                 note = " — <b>AUTO-SOLD</b>"
             elif ticker in deferred:
-                note = " — market closed, sells on the next open"
+                note = f" — {deferred_note(skip_reasons.get(ticker))}"
             elif ticker in reviewed_targets:
                 note = ""  # the review below carries the call — don't pre-empt it
             else:
@@ -1543,6 +1619,7 @@ def reconcile(holdings_path: str | None, cash_actual: float | None,
 @cli.command()
 def universe():
     """List the enabled tickers in the universe."""
+    cfg = load_config()
     tickers = get_enabled_tickers(cfg.universe_path)
     click.echo(f"\n─── Universe ({len(tickers)} enabled tickers) ───────────────────────────────")
     click.echo(f"  {'Name':<30} {'Ticker':<15} {'Country':<8} {'Sector'}")
@@ -1606,52 +1683,161 @@ def export_dspy(output: str, score_first: bool):
 
 
 @cli.command()
-@click.option("--min-outcomes", type=int, default=None,
-              help="Override the evaluated-outcome threshold from config")
-@click.option("--dry-run", is_flag=True, help="Report trainset stats without running MIPRO")
-def optimize(min_outcomes: int | None, dry_run: bool):
-    """Optimize the decision prompt from evaluated outcomes (DSPy MIPROv2).
-
-    Builds one training example per past run whose 28-day per-ticker outcomes
-    vs the benchmark are known, searches instruction space for the
-    WeeklyDecision signature with an alpha-weighted metric, and saves the
-    winning instructions as guidance injected into every future 'fund run'.
-    """
+@click.option("--min-outcomes", type=int, default=None, help="Override the evaluated-outcome threshold")
+@click.option("--dry-run", is_flag=True, help="Inspect data and worst-case request reservations without paid calls")
+@click.option("--max-calls", type=click.IntRange(min=1), default=None)
+@click.option("--max-total-tokens", type=click.IntRange(min=1), default=None,
+              help="Cumulative conservative token reservations, not billed usage or a dollar cap")
+@click.option("--max-output-tokens", type=click.IntRange(min=1), default=None)
+@click.option("--resume", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option("--retry-failed", is_flag=True, help="Explicitly retry an uncertain/failed request; may bill again")
+@click.option("--force-search", is_flag=True, help="Bypass the new-evidence gate; retain all call/token limits")
+@click.option("--context-mode", type=click.Choice(["full", "compact", "compare"]), default=None,
+              help="Default full; compact is experimental; compare checks full versus compact without proposing guidance")
+@click.option("--execution", type=click.Choice(["direct", "batch"]), default=None,
+              help="Batch uses OpenAI asynchronous evaluations; proposal stays direct")
+@click.option("--batch-id", default=None, help="Recover an uncertain submission ID with --resume")
+@click.option("--retry-output-tokens", type=click.IntRange(min=1), default=None,
+              help="Explicit larger output allowance for failed batch evaluations only; requires --resume --retry-failed")
+def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_tokens, resume, retry_failed, force_search, context_mode, execution, batch_id, retry_output_tokens):
+    """Bounded instruction-only search. Save a winner as an inactive candidate."""
     import logging
+    from fundmgr.engine.optimizer import build_pooled_trainset, candidate_directory
+    from fundmgr.engine.bounded_optimizer import make_plan, plan_cost, checkpoint_path, _load, identity, run_search
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-
+    from fundmgr.engine.optimizer_batch import BatchPending
     cfg, store = _get_store()
-    from fundmgr.engine.optimizer import build_pooled_trainset, guidance_path, run_optimization
+    for key, value in (("max_calls", max_calls), ("max_total_tokens", max_total_tokens),
+                       ("max_output_tokens", max_output_tokens)):
+        if value is not None:
+            setattr(cfg.optimizer, key, value)
+    if retry_output_tokens is not None and (resume is None or not retry_failed):
+        raise click.ClickException("--retry-output-tokens requires --resume and --retry-failed")
+    if batch_id and resume is None:
+        raise click.ClickException("--batch-id requires --resume")
+    if retry_failed and resume is None:
+        raise click.ClickException("--retry-failed requires --resume")
+    try:
+        if resume:
+            saved = _load(resume)
+            plan = saved["plan"]
+            if retry_output_tokens is not None or saved.get("output_overrides"):
+                from fundmgr.engine.bounded_optimizer import retry_output_limits
+                overrides = (retry_output_limits(saved, retry_output_tokens) if retry_output_tokens is not None
+                             else saved["output_overrides"])
+                click.echo(f"Retry output allowances: {overrides}; successful responses remain frozen.")
+                click.echo("Evaluation limits will differ; this is diagnostic search evidence, not an equal-settings comparison.")
+            if execution is not None and execution != plan.get("execution", "direct"):
+                raise ValueError("Resume execution must match the saved plan")
+            if context_mode is not None and context_mode != plan.get("context_mode", "full"):
+                raise ValueError("Resume context mode must match the saved plan")
+            if plan["identity"] != identity(cfg):
+                raise ValueError("Checkpoint settings changed; keep model/output/reasoning settings identical")
+            path = resume
+            click.echo(f"Saved requests: {len(saved['attempts'])}; reserved tokens: "
+                       f"{sum(a['reserved_tokens'] for a in saved['attempts'])}")
+        else:
+            outcomes = store.get_evaluated_outcomes()
+            examples = build_pooled_trainset(cfg)
+            threshold = cfg.optimizer.min_outcomes if min_outcomes is None else min_outcomes
+            click.echo(f"Evaluated outcomes: {len(outcomes)} (need {threshold})")
+            click.echo(f"Usable run examples: {len(examples)} (need {cfg.optimizer.min_examples})")
+            if len(outcomes) < threshold or len(examples) < cfg.optimizer.min_examples:
+                click.echo("Minimum data not met; no model calls made.")
+                return
+            plan = make_plan(cfg, examples)
+            if context_mode in ("compact", "compare"):
+                from fundmgr.engine.context_compaction import prepare
+                plan = prepare(plan, context_mode)
+            if execution == "batch":
+                plan["execution"] = "batch"
+            path = checkpoint_path(cfg, plan)
+        if plan.get("execution") == "batch" and cfg.llm.provider != "openai":
+            raise ValueError("Batch execution currently supports OpenAI funds only")
+        click.echo(f"Execution: {plan.get('execution', 'direct')}; batch pricing does not reduce token reservations.")
+        from fundmgr.engine.context_compaction import profile
+        sizes = profile(plan)
+        click.echo("Validation context bytes (one copy per case; not token counts):")
+        for field, size in sorted(sizes["field_bytes"].items(), key=lambda item: -item[1]):
+            click.echo(f"  {field}: {size:,}")
+        click.echo(f"Universe breakdown: {sizes['universe_feature_bytes']:,} metric-row bytes; "
+                   f"{sizes['universe_other_bytes']:,} other bytes (names, news, warnings, etc.).")
+        click.echo(f"User context: {sizes['full_bytes']:,} full -> {sizes['compact_bytes']:,} compact bytes; "
+                   f"saved {sizes['saved_bytes']:,}. Every original character is recoverable.")
+        click.echo(f"Context mode: {plan.get('context_mode', 'full')}; compact decision equivalence is unproven.")
+        if not resume and not path.exists() and plan.get("context_mode") != "compare":
+            from fundmgr.engine.research_costs import evidence_gate
+            gate = evidence_gate(cfg, plan)
+            click.echo(f"New own-fund decision dates: {len(gate['new_periods'])}; required after first search: {gate['required']}")
+            if not gate["eligible"] and not force_search:
+                click.echo("Search skipped: insufficient new evidence. No paid calls.")
+                return
+        cost = plan_cost(plan)
+        label = "Context comparison" if plan.get("context_mode") == "compare" else "Instruction-only search"
+        click.echo(f"{label}: {cost['planned_calls']} planned calls; hard cap {cfg.optimizer.max_calls}")
+        click.echo(f"Frozen plan output cap: {cfg.optimizer.max_output_tokens} tokens/call; reasoning: {cfg.optimizer.reasoning_effort}")
+        click.echo(f"Worst-case token reservation: {cost['reserved_token_estimate']:,}; budget {cfg.optimizer.max_total_tokens:,}")
+        click.echo(f"Reservation split: {cost['proposal_reservation']:,} proposal (no universe); "
+                   f"{cost['evaluation_reservation']:,} historical evaluations.")
+        click.echo("Reservations use text bytes + schema/protocol allowance + output cap; this is not a dollar estimate.")
+        if retry_output_tokens is not None or (resume and saved.get("output_overrides")):
+            click.echo("Whole-plan cost estimate omitted: retry-specific output limits differ from the frozen plan.")
+            click.echo("Existing reservations remain spent; retries must fit cumulative call/token limits.")
+        else:
+            from fundmgr.engine.optimizer_estimate import estimate, describe
+            for line in describe(estimate(plan, saved if resume else None)):
+                click.echo(line)
+        click.echo(f"Checkpoint: {path}")
+        click.echo(f"Candidate directory: {candidate_directory(cfg)}")
+        if dry_run:
+            if cost["planned_calls"] > cfg.optimizer.max_calls or cost["reserved_token_estimate"] > cfg.optimizer.max_total_tokens:
+                click.echo("Plan exceeds configured budget; a new search would make no calls.")
+            click.echo("Dry run: no paid calls. Existing MIPRO runs cannot be resumed by this search.")
+            return
+        if run_search(cfg, plan, path, resume=resume is not None, retry_failed=retry_failed, force_search=force_search, batch_id=batch_id, retry_output_tokens=retry_output_tokens):
+            click.echo("Inactive candidate saved. Active guidance unchanged; forward evaluation required.")
+        elif plan.get("context_mode") == "compare":
+            comparisons = _load(path)["comparisons"]
+            changed = sum(c["actions_changed"] or c["cash_target_changed"] for c in comparisons)
+            click.echo(f"Context comparison complete: {changed}/{len(comparisons)} cases changed actions or cash targets.")
+            click.echo(f"Review paired decisions and frozen risk limits in {path}")
+            click.echo("No guidance candidate created. This small comparison does not establish risk or performance equivalence.")
+        else:
+            click.echo("No improved candidate saved. Active guidance unchanged.")
+    except BatchPending as exc:
+        click.echo(str(exc))
+    except (OSError, ValueError, RuntimeError, KeyError, LLMError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    threshold = min_outcomes if min_outcomes is not None else cfg.optimizer.min_outcomes
-    evaluated = store.get_evaluated_outcomes()
-    examples = build_pooled_trainset(cfg)
-    resolved = sum(
-        1 for e in examples for v in (e.get("ticker_theses") or {}).values()
-        if v in ("held", "broke")
-    )
 
-    click.echo("\n─── Prompt Optimizer ───────────────────────────────")
-    click.echo(f"  Evaluated outcomes:   {len(evaluated)} (need {threshold})")
-    click.echo(f"  Usable run examples:  {len(examples)} (need {cfg.optimizer.min_examples})")
-    if cfg.optimizer.pool_configs:
-        by_source: dict[str, int] = {}
-        for e in examples:
-            by_source[e.get("source") or "?"] = by_source.get(e.get("source") or "?", 0) + 1
-        click.echo("    pooled from:        " + ", ".join(
-            f"{src} ({n})" for src, n in sorted(by_source.items())
-        ))
-    click.echo(f"  Resolved theses:      {resolved} (metric signal beyond raw alpha)")
-    click.echo(f"  Guidance artifact:    {guidance_path(cfg)}")
 
-    if dry_run:
-        click.echo("  (dry run — MIPRO not executed)")
-        return
+@cli.command("optimizer-watch")
+def optimizer_watch():
+    """Collect existing batches and notify via Telegram; never submit paid requests."""
+    import logging
+    from fundmgr.engine.optimizer_watch import watch
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    result = watch(load_config())
+    click.echo("Batch check: " + ", ".join(f"{key}={value}" for key, value in result.items()))
 
-    if run_optimization(cfg, store, min_outcomes=min_outcomes):
-        click.echo("\n  ✓ New guidance saved — it will be injected into the next 'fund run'.")
-    else:
-        click.echo("\n  No new guidance produced (threshold not met or optimization failed).")
+
+@cli.command("optimizer-usage")
+def optimizer_usage():
+    """Report saved provider usage across funds sharing the compiled directory."""
+    from fundmgr.engine.research_costs import usage_report
+    cfg = load_config()
+    try:
+        report = usage_report(cfg.optimizer.compiled_dir / "searches")
+    except (OSError, ValueError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Searches: {report['searches']}; request attempts: {report['attempts']}; local cache hits: {report['local_cache_hits']}")
+    for model, totals in sorted(report["by_model"].items()):
+        click.echo(f"{model}: {totals['input_tokens']:,} input; {totals['output_tokens']:,} output tokens")
+        click.echo(f"  Reported subsets: {totals['cached_input_tokens']:,} cached input; "
+                   f"{totals['cache_write_input_tokens']:,} cache writes; {totals['reasoning_tokens']:,} reasoning")
+    click.echo(f"Attempts without complete provider usage: {report['unknown_usage_attempts']}")
+    click.echo("Subset totals include only reported counters. Missing usage is unknown, not free.")
+    click.echo("This covers saved optimizer calls only, not account billing or earlier MIPRO runs. No dollar estimate.")
 
 
 @cli.command("repair-outcomes")
@@ -1781,6 +1967,43 @@ def prune_learnings_cmd(category: str | None, before: str | None, dry_run: bool,
         click.echo(f"\n  Retired {total_retired} across {len(books)} book(s).")
 
 
+@cli.command("consolidate-learnings")
+@click.option("--dry-run", is_flag=True, help="Show proposed merges, write nothing.")
+@click.option("--all-books", is_flag=True,
+              help="Every configured fund and paper book, not just this one.")
+def consolidate_learnings_cmd(dry_run: bool, all_books: bool):
+    """Merge active qualitative lessons that express the same actionable rule.
+
+    Uses each fund's learning model as a conservative semantic judge. Evidence
+    run IDs are combined and every predecessor links to the replacement; no
+    rows are deleted. A dry run still calls the learning model.
+    """
+    if all_books:
+        books = _all_learning_books_with_configs()
+    else:
+        cfg, store = _get_store()
+        books = [(cfg.display_name, cfg, store)]
+
+    click.echo("\n─── Consolidate active qualitative learnings ───────────────")
+    total = 0
+    for label, cfg, store in books:
+        proposals = consolidate_qualitative_learnings(store, cfg, apply=not dry_run)
+        if not proposals:
+            if all_books:
+                click.echo(f"\n  {label}: no safe merges proposed.")
+            continue
+        click.echo(f"\n  {label}:")
+        for replacement, old_ids in proposals:
+            action = "would merge" if dry_run else "merged"
+            click.echo(f"    {action} IDs {', '.join(map(str, old_ids))}")
+            click.echo(f"      → {replacement.body}")
+            click.echo(f"        evidence: {len(replacement.run_ids)} independent run(s)")
+            total += 1
+
+    suffix = " proposed, nothing written" if dry_run else " completed"
+    click.echo(f"\n  {total} consolidation(s){suffix}.")
+
+
 def _current_learning_book() -> tuple[str, Store]:
     cfg, store = _get_store()
     return cfg.display_name, store
@@ -1793,10 +2016,15 @@ def _all_learning_books() -> list[tuple[str, Store]]:
     that only reached the fund selected by FUND_CONFIG would silently leave the
     other funds' lessons live in their prompts.
     """
+    return [(label, store) for label, _cfg, store in _all_learning_books_with_configs()]
+
+
+def _all_learning_books_with_configs() -> list[tuple[str, object, Store]]:
+    """Every learning book together with the model config used to coach it."""
     from fundmgr import paper
     from fundmgr.config import CONFIG_DIR, load_config
 
-    books: list[tuple[str, Store]] = []
+    books: list[tuple[str, object, Store]] = []
     seen: set[Path] = set()
 
     for path in sorted(CONFIG_DIR.glob("config*.yaml")):
@@ -1808,15 +2036,17 @@ def _all_learning_books() -> list[tuple[str, Store]]:
         if cfg.db_path in seen or not cfg.db_path.exists():
             continue
         seen.add(cfg.db_path)
-        books.append((f"{cfg.display_name} [{path.name}]", Store(cfg.db_path)))
+        books.append((f"{cfg.display_name} [{path.name}]", cfg, Store(cfg.db_path)))
 
     for meta in paper.list_portfolios():
         try:
-            _, store = paper.open_portfolio(meta["slug"])
+            paper_meta, store = paper.open_portfolio(meta["slug"])
         except Exception as exc:
             click.echo(f"  ⚠ skipping paper book {meta['slug']}: {exc}")
             continue
-        books.append((f"{meta['name']} [paper/{meta['slug']}]", store))
+        from fundmgr.config import AppConfig
+        cfg = AppConfig(benchmark=paper_meta["benchmark"])
+        books.append((f"{meta['name']} [paper/{meta['slug']}]", cfg, store))
 
     return books
 
@@ -2308,8 +2538,11 @@ def paper_import(json_file: str, name: str | None, capital: float | None,
 @click.option("--side", type=click.Choice(["buy", "sell"]), default="buy", show_default=True)
 @click.option("--date", "trade_date", default=None, metavar="YYYY-MM-DD",
               help="Trade date (defaults to today). Use when recording a past fill.")
+@click.option("--allow-duplicate", is_flag=True,
+              help="Record even if an identical fill (ticker, side, shares, price) "
+                   "is already recorded within a week of this date.")
 def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
-               side: str, trade_date: str | None):
+               side: str, trade_date: str | None, allow_duplicate: bool):
     """Record a real broker fill into a mirror portfolio (price in SEK, like 'fund fill').
 
     \b
@@ -2337,12 +2570,17 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
     ticker, snap_note = paper.snap_ticker_to_plan(store, ticker)
     if snap_note:
         click.echo(f"  {snap_note}")
+    if not allow_duplicate:
+        _refuse_duplicate_fill(store, ticker, side, shares, price, ts)
     currency = meta["currency_map"].get(ticker, "SEK")
-    store.apply_fill(Transaction(
-        ticker=ticker, side=side, shares=shares,
-        price_sek=price, fee_sek=fee, source="fill",
-        currency=currency, timestamp=ts,
-    ))
+    try:
+        store.apply_fill(Transaction(
+            ticker=ticker, side=side, shares=shares,
+            price_sek=price, fee_sek=fee, source="fill",
+            currency=currency, timestamp=ts,
+        ))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     gross = shares * price
     direction = "Bought" if side == "buy" else "Sold"
@@ -2857,9 +3095,6 @@ def _print_review(result: dict, slug: str, dry_run: bool) -> None:
 
 
 
-if __name__ == "__main__":
-    cli()
-
 
 @cli.command("paper-metric")
 @click.argument("slug")
@@ -3165,3 +3400,104 @@ def paper_edgar(slug, ticker, quarters, apply_):
     tail = f" ({older} older quarter(s) skipped — the series holds {MAX_SNAPSHOTS})" if older else ""
     click.echo(f"\n✓ Recorded {written} figure(s) across {len(periods)} quarter(s)"
                f"{tail}, {periods[0]} to {periods[-1]}.")
+
+
+@cli.command("compare-guidance")
+@click.option("--run-id", required=True, help="Saved weekly run with frozen evaluation context")
+@click.option("--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), required=True)
+def compare_guidance_cmd(run_id: str, candidate: Path, output: Path):
+    """Record incumbent/candidate decisions on identical inputs.
+
+    Makes two sets of model calls at the frozen sample count. No orders, fills,
+    or guidance changes. Historical replays are labelled diagnostic only.
+    """
+    from fundmgr.engine.experiments import compare_guidance, write_report
+
+    if output.exists() or not output.parent.is_dir():
+        raise click.ClickException("Output must be a new file in an existing directory")
+    _, store = _get_store()
+    rec = store.get_recommendation_by_run_id(run_id)
+    if rec is None:
+        raise click.ClickException(f"Unknown run: {run_id}")
+    try:
+        payload = compare_guidance(json.loads(rec.prompt_snapshot), json.loads(candidate.read_text()))
+        write_report(output, payload)
+    except (ValueError, OSError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Comparison saved: {output} ({payload['mode']})")
+    for name, arm in payload["arms"].items():
+        click.echo(f"  {name}: {arm['status']}" + (f" — {arm['error']}" if arm.get("error") else ""))
+    if any(arm["status"] != "ready" for arm in payload["arms"].values()):
+        raise click.ClickException("Comparison recorded but not scoreable; inspect the arm errors")
+    click.echo("Score later with score-guidance; this command does not activate the candidate.")
+
+
+@cli.command("score-guidance")
+@click.argument("comparison", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--outcomes", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--output", type=click.Path(dir_okay=False, path_type=Path), required=True)
+def score_guidance_cmd(comparison: Path, outcomes: Path, output: Path):
+    """Score a recorded pair using supplied daily valuations. No model calls."""
+    from fundmgr.engine.experiments import Outcomes, score_comparison, write_report
+
+    if output.exists() or not output.parent.is_dir():
+        raise click.ClickException("Output must be a new file in an existing directory")
+    try:
+        result = score_comparison(json.loads(comparison.read_text()),
+                                  Outcomes.model_validate_json(outcomes.read_text()))
+        write_report(output, result)
+    except (ValueError, OSError, KeyError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    for name, metrics in result["scores"].items():
+        click.echo(f"  {name}: net {metrics['net_return_pct']:+.2f}%, "
+                   f"benchmark-relative {metrics['excess_return_pp']:+.2f}pp, "
+                   f"daily drawdown {metrics['max_daily_drawdown_pct']:.2f}%")
+    click.echo(f"Candidate advantage: {result['candidate_advantage_pp']:+.2f}pp")
+    click.echo(f"Score saved: {output}. {result['limitation']}")
+
+
+@cli.command("collect-guidance")
+def collect_guidance_cmd():
+    """Fetch and score matured forward comparisons. No model calls or fills."""
+    from fundmgr.engine.forward import collect_forward
+
+    cfg = load_config()
+    results = collect_forward(cfg)
+    if not results:
+        click.echo("No registered forward comparisons for this fund.")
+    for result in results:
+        click.echo(f"{result['case']}: {result['status']}"
+                   + (f" — {result['error']}" if result.get("error") else ""))
+    if any(result["status"] == "pending" for result in results):
+        raise click.ClickException("Some comparisons remain pending; inspect missing evidence before retrying")
+
+
+@cli.command("evaluate-guidance")
+@click.option("--root", "roots", multiple=True, type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Full fund shadow directory; repeat for multiple funds. Defaults to selected fund.")
+@click.option("--min-periods", default=8, type=click.IntRange(min=2), show_default=True)
+@click.option("--output", required=True, type=click.Path(dir_okay=False, path_type=Path))
+def evaluate_guidance_cmd(roots, min_periods, output):
+    """Audit and aggregate forward evidence offline. Never promotes guidance."""
+    from fundmgr.engine.aggregate import aggregate_evidence
+    from fundmgr.engine.forward import experiment_root
+    from fundmgr.engine.experiments import write_report
+
+    if output.exists() or not output.parent.is_dir():
+        raise click.ClickException("Output must be a new file in an existing directory")
+    try:
+        report = aggregate_evidence(list(roots) or [experiment_root(load_config())], min_periods)
+        write_report(output, report)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    for group in report["groups"]:
+        click.echo(f"{group['identity']['fund_id']} {group['group'][:12]}: {group['status']} "
+                   f"({group['scored_selected_periods']}/{group['matured_selected_periods']} matured non-overlapping periods scored)")
+    click.echo(f"Evidence report saved: {output}. Descriptive only; no promotion.")
+    if report["counts"].get("invalid"):
+        raise click.ClickException("Report includes invalid artifacts; inspect case errors")
+
+
+if __name__ == "__main__":
+    cli()

@@ -46,6 +46,7 @@
           <th class="num">NAV (SEK)</th>
           <th class="num">P/L</th>
           <th class="num">Positions</th>
+          <th>Last fill</th>
           <th></th>
         </tr>
       </thead>
@@ -63,6 +64,12 @@
             {{ "%+.2f"|format(p.pnl_pct) }}%
           </td>
           <td class="num">{{ p.n_positions }}</td>
+          <td style="font-size:11.5px">
+            {% if p.last_fill %}
+            <a href="/live/{{ p.slug }}/transactions" class="text-sky-400 hover:text-sky-300" title="All trades in this sleeve">{{ p.last_fill.day }}</a>
+            <div class="text-slate-600">{{ p.last_fill.side }} {{ "%g"|format(p.last_fill.shares) }} × {{ p.last_fill.ticker }}</div>
+            {% else %}<span class="text-slate-600">none yet</span>{% endif %}
+          </td>
           <td class="num">
             <form method="post" action="/live/{{ p.slug }}/delete" class="inline"
                   onsubmit="return confirm('Archive live sleeve “{{ p.name }}”? Its database file is kept on disk but it disappears from the site. (Your broker positions are untouched.)');">

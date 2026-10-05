@@ -21,3 +21,8 @@ build/
 
 # OS
 .DS_Store
+
+# Local optimizer recovery records include full historical prompt context.
+config/compiled/searches/
+
+config/compiled/request_cache/

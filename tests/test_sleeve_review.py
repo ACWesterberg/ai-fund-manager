@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from fundmgr import paper
+from fundmgr import paper, regions, styles
 from fundmgr.engine import sleeve_review, whatif
 from fundmgr.engine.schema import Action, DecisionRun
 from fundmgr.state.models import Position, Transaction
@@ -155,6 +155,23 @@ def _stub_llm(monkeypatch, actions: list[Action], capture: dict | None = None):
         return decision, decision.model_dump_json(), None, {
             "requested": 1, "succeeded": 1, "failed": 0, "errors": []}
     monkeypatch.setattr(sleeve_review, "call_llm_consensus", _fake)
+
+
+def _await_job(client: TestClient, url: str, timeout_s: float = 30.0) -> dict:
+    """Poll a threaded review job until it settles.
+
+    The bare 200-iteration spin this replaces never yielded, so it raced the
+    worker rather than waiting for it. Locally the job landed with ~100 polls to
+    spare; on CI's faster runner all 200 were spent while the review was still
+    going, and three tests failed with status 'running' and no error to show.
+    Sleeping hands the GIL over and bounds the wait in wall-clock time instead.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        job = client.get(url).json()
+        if job["status"] != "running" or time.monotonic() >= deadline:
+            return job
+        time.sleep(0.02)
 
 
 # ── Scope ─────────────────────────────────────────────────────────────────────
@@ -928,10 +945,7 @@ def test_review_job_runs_and_reports_its_result(client, sleeve, monkeypatch):
     assert start.status_code == 200
     job_id = start.json()["job_id"]
 
-    for _ in range(200):  # the worker is a thread; give it a moment
-        job = client.get(f"/live/{sleeve}/review/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
+    job = _await_job(client, f"/live/{sleeve}/review/jobs/{job_id}")
     assert job["status"] == "done", job.get("error")
     assert job["result"]["add_on_count"] == 1
     assert job["result"]["scope"]["country"] == "SE"
@@ -957,10 +971,7 @@ def test_web_review_accepts_risk_overrides(client, sleeve, monkeypatch):
     assert start.status_code == 200
     job_id = start.json()["job_id"]
 
-    for _ in range(200):
-        job = client.get(f"/live/{sleeve}/review/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
+    job = _await_job(client, f"/live/{sleeve}/review/jobs/{job_id}")
     assert job["status"] == "done", job.get("error")
     assert job["result"]["risk"]["max_turnover_pct"] == 45
 
@@ -1075,7 +1086,7 @@ def test_a_rejected_buy_installs_nothing(env, sleeve, monkeypatch):
     not leave a criterion behind for a position that was never opened."""
     from fundmgr import watchplan
 
-    _stub_llm(monkeypatch, [_new_name(sek_estimate=500)])      # below min_trade_sek
+    _stub_llm(monkeypatch, [_new_name(target_weight_pct=0.5, sek_estimate=500)])      # below min_trade_sek
     result = sleeve_review.review_sleeve(sleeve, include_macro=False)
 
     assert next(a for a in result["actions"] if a["ticker"] == "BETA.ST")["approved"] is False
@@ -1163,7 +1174,7 @@ def test_a_buy_reports_shares_to_buy(env, sleeve, monkeypatch):
     beta = next(a for a in result["actions"] if a["ticker"] == "BETA.ST")
     last_close = _price_rows()[-1]["close"]                 # 125.9, not the live 100
     assert beta["price_sek"] == pytest.approx(last_close, abs=0.01)
-    assert beta["shares"] == math.floor(5_000 / last_close)
+    assert beta["shares"] == math.floor(result["nav_sek"] * 0.20 / last_close)
 
 
 def test_share_counts_are_stored_with_the_decision(env, sleeve, monkeypatch):
@@ -1533,3 +1544,359 @@ def test_another_books_review_is_not_reattached(client, sleeve):
 
 def test_unknown_review_job_is_404(client, sleeve):
     assert client.get(f"/live/{sleeve}/review/jobs/nope").status_code == 404
+
+
+# ── Regional mix ──────────────────────────────────────────────────────────────
+#
+# A sleeve is the one book where a mix has to *persist*: it is reviewed again
+# and again, and a target that had to be retyped each time would quietly lapse
+# back to whatever the screener's ranking favours.
+
+def _hold_alfa() -> Action:
+    return Action(ticker="ALFA.ST", side="hold", target_weight_pct=50,
+                  sek_estimate=0, confidence=0.6, thesis="hold")
+
+
+def test_a_sleeve_has_no_mix_until_one_is_set(env, sleeve):
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.review_defaults(store)["regions"] == {}
+
+
+def test_the_mix_reaches_the_prompt_and_is_remembered(env, sleeve, monkeypatch):
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        sleeve, include_macro=False,
+        region_mix={"targets": {"nordics": 60}, "tolerance_pct": 5},
+    )
+
+    assert "Regional allocation target" in capture["user"]
+    assert "55–65%" in capture["user"]
+    assert result["regions"]["targets"] == {"nordics": 60.0}
+
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.review_defaults(store)["regions"] == {
+        "targets": {"nordics": 60.0}, "tolerance_pct": 5.0,
+    }
+
+
+def test_a_remembered_mix_applies_to_the_next_review(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        sleeve, include_macro=False, region_mix={"targets": {"nordics": 60}})
+
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False)   # nothing passed
+
+    assert result["regions"]["targets"] == {"nordics": 60.0}
+    assert "Regional allocation target" in capture["user"]
+
+
+def test_submitting_an_empty_mix_clears_the_stored_one(env, sleeve, monkeypatch):
+    """The form renders what is stored, so submitting it cleared must clear it."""
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        sleeve, include_macro=False, region_mix={"targets": {"nordics": 60}})
+
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        sleeve, include_macro=False, region_mix={"targets": {}})
+
+    assert result["regions"]["targets"] == {}
+    assert "Regional allocation target" not in capture["user"]
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.review_defaults(store)["regions"] == {}
+
+
+def test_the_ceiling_counts_what_the_sleeve_already_holds(env, sleeve, monkeypatch):
+    """The sleeve is already 10% Nordic, so a second 10% Nordic name breaches a
+    12% cap the first one cleared — the book, not just the trade, is measured."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=10, sek_estimate=10_000,
+               confidence=0.9, thesis="add-on"),
+    ])
+    result = sleeve_review.review_sleeve(
+        sleeve, include_macro=False,
+        region_mix={"targets": {"nordics": 12}, "tolerance_pct": 0},
+    )
+    row = next(r for r in result["actions"] if r["ticker"] == "BETA.ST")
+    assert row["status"] == "REJECTED"
+    assert "Nordics would reach 20.0%" in row["reason"]
+
+
+def test_a_buy_inside_the_regional_band_still_goes_through(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=10, sek_estimate=10_000,
+               confidence=0.9, thesis="add-on"),
+    ])
+    result = sleeve_review.review_sleeve(
+        sleeve, include_macro=False,
+        region_mix={"targets": {"nordics": 25}, "tolerance_pct": 0},
+    )
+    row = next(r for r in result["actions"] if r["ticker"] == "BETA.ST")
+    assert row["approved"] is True
+
+
+def test_a_mix_the_scope_cannot_reach_is_reported_not_raised(env, sleeve, monkeypatch):
+    """A Norway-scoped review cannot buy Germany; say so rather than failing."""
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    result = sleeve_review.review_sleeve(
+        sleeve, country="NO", include_macro=False,
+        region_mix={"targets": {"europe": 30}},
+    )
+    rows = {r["code"]: r for r in result["regions"]["rows"]}
+    assert rows["europe"]["status"] == "short"
+    assert rows["europe"]["candidates"] == 0
+    assert any("Europe" in line for line in result["regions"]["shortfalls"])
+
+
+def test_an_impossible_mix_is_refused_before_the_model_is_called(env, sleeve, monkeypatch):
+    def _never(*a, **k):
+        raise AssertionError("the model must not be called for an impossible mix")
+
+    monkeypatch.setattr(sleeve_review, "call_llm_consensus", _never)
+    with pytest.raises(ValueError, match="cannot exceed 100"):
+        sleeve_review.review_sleeve(
+            sleeve, include_macro=False,
+            region_mix={"targets": {"nordics": 60, "europe": 60}},
+        )
+
+
+def test_the_mix_does_not_leak_into_the_source_profile(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        sleeve, include_macro=False, region_mix={"targets": {"nordics": 60}})
+    assert whatif.load_profile_config("config_test.yaml").risk.region_targets == {}
+
+
+# ── Regional mix over the web ─────────────────────────────────────────────────
+
+def test_review_form_offers_every_region(client, sleeve):
+    html = client.get(f"/live/{sleeve}").text
+    assert "Regional mix for this sleeve" in html
+    for code in ("nordics", "north_america", "uk_ireland", "europe", "asia_pacific"):
+        assert f'data-region="{code}"' in html
+
+
+def test_review_form_prefills_the_stored_mix(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        sleeve, include_macro=False, region_mix={"targets": {"nordics": 60}})
+
+    import re
+    html = client.get(f"/live/{sleeve}").text
+    tag = re.search(r'<input id="rv-rg-nordics".*?>', html, re.S)
+    assert tag and 'value="60.0"' in tag.group(0)
+
+
+def test_review_rejects_an_unknown_region(client, sleeve):
+    r = client.post(f"/live/{sleeve}/review",
+                    json={"config": "config_test.yaml", "region_targets": {"atlantis": 30}})
+    assert r.status_code == 400
+    assert "atlantis" in r.json()["detail"]
+
+
+def test_review_rejects_a_mix_over_one_hundred_percent(client, sleeve):
+    r = client.post(f"/live/{sleeve}/review",
+                    json={"config": "config_test.yaml",
+                          "region_targets": {"nordics": 60, "europe": 60}})
+    assert r.status_code == 400
+    assert "100%" in r.json()["detail"]
+
+
+def test_web_review_accepts_a_regional_mix(client, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    start = client.post(f"/live/{sleeve}/review",
+                        json={"config": "config_test.yaml", "include_macro": False,
+                              "region_targets": {"nordics": 60},
+                              "region_tolerance_pct": 5})
+    assert start.status_code == 200
+    job_id = start.json()["job_id"]
+
+    job = _await_job(client, f"/live/{sleeve}/review/jobs/{job_id}")
+    assert job["status"] == "done", job.get("error")
+    assert job["result"]["regions"]["targets"] == {"nordics": 60.0}
+    assert job["result"]["regions"]["tolerance_pct"] == 5.0
+
+
+def test_an_unset_tolerance_falls_back_to_the_default_band(env, sleeve, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    result = sleeve_review.review_sleeve(
+        sleeve, include_macro=False,
+        region_mix={"targets": {"nordics": 60}, "tolerance_pct": None},
+    )
+    assert result["regions"]["tolerance_pct"] == regions.DEFAULT_TOLERANCE_PCT
+
+
+# ── Style mix ─────────────────────────────────────────────────────────────────
+
+_COMPOUNDER = {"roe": 0.28, "profit_margin": 0.22, "debt_to_equity": 60,
+               "revenue_growth": 0.09}
+_LOSSMAKER = {"profit_margin": -0.30, "revenue_growth": 1.2}
+
+
+@pytest.fixture
+def styled(env, sleeve):
+    """The sleeve's own store seeded with fundamentals, since a review builds
+    features against the sleeve DB rather than the source profile's."""
+    _meta, store = paper.open_portfolio(sleeve)
+    for ticker in ("ALFA.ST", "GAMMA.ST"):
+        store.save_fundamentals(ticker, _COMPOUNDER)
+    for ticker in ("BETA.ST", "NORSK.OL"):
+        store.save_fundamentals(ticker, _LOSSMAKER)
+    return sleeve
+
+
+def test_a_sleeve_has_no_style_mix_until_one_is_set(env, sleeve):
+    _meta, store = paper.open_portfolio(sleeve)
+    assert sleeve_review.review_defaults(store)["styles"] == {}
+
+
+def test_the_style_mix_reaches_the_prompt_and_is_remembered(styled, monkeypatch):
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False,
+        style_mix={"targets": {"quality": 50}, "tolerance_pct": 5},
+    )
+
+    assert "Style allocation target" in capture["user"]
+    assert "45–55%" in capture["user"]
+    assert "Style: Buffett-style quality (ROE 28.0%" in capture["user"]
+    assert result["styles"]["targets"] == {"quality": 50.0}
+
+    _meta, store = paper.open_portfolio(styled)
+    stored = sleeve_review.review_defaults(store)["styles"]
+    assert stored["targets"] == {"quality": 50.0}
+    assert stored["tolerance_pct"] == 5.0
+
+
+def test_a_remembered_style_mix_applies_to_the_next_review(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    result = sleeve_review.review_sleeve(styled, include_macro=False)   # nothing passed
+    assert result["styles"]["targets"] == {"quality": 50.0}
+
+
+def test_submitting_an_empty_style_mix_clears_the_stored_one(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {}})
+
+    assert result["styles"]["targets"] == {}
+    assert "Style allocation target" not in capture["user"]
+
+
+def test_the_style_ceiling_is_enforced_against_the_sleeves_own_book(styled, monkeypatch):
+    """ALFA.ST is a compounder and already 10% of NAV, so a second one breaches
+    a 12% quality cap the first cleared."""
+    _stub_llm(monkeypatch, [
+        Action(ticker="GAMMA.ST", side="buy", target_weight_pct=10, sek_estimate=10_000,
+               confidence=0.9, thesis="add-on"),
+    ])
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False,
+        style_mix={"targets": {"quality": 12}, "tolerance_pct": 0},
+    )
+    row = next(r for r in result["actions"] if r["ticker"] == "GAMMA.ST")
+    assert row["status"] == "REJECTED"
+    assert "Buffett-style quality would reach 20.0%" in row["reason"]
+
+
+def test_a_review_reports_what_it_could_not_classify(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+    # DEUT.DE and WEIRD have no fundamentals seeded.
+    assert result["styles"]["unclassified_candidates"] >= 1
+
+
+def test_an_impossible_style_mix_is_refused_before_the_model_is_called(styled, monkeypatch):
+    def _never(*a, **k):
+        raise AssertionError("the model must not be called for an impossible mix")
+
+    monkeypatch.setattr(sleeve_review, "call_llm_consensus", _never)
+    with pytest.raises(ValueError, match="Style targets add up"):
+        sleeve_review.review_sleeve(
+            styled, include_macro=False,
+            style_mix={"targets": {"quality": 60, "growth": 60}})
+
+
+def test_the_style_mix_does_not_leak_into_the_source_profile(styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    sleeve_review.review_sleeve(
+        styled, include_macro=False, style_mix={"targets": {"quality": 50}})
+    assert whatif.load_profile_config("config_test.yaml").risk.style_targets == {}
+
+
+# ── The free-text brief ───────────────────────────────────────────────────────
+
+def test_the_brief_reaches_the_prompt_and_is_remembered(styled, monkeypatch):
+    capture = {}
+    _stub_llm(monkeypatch, [_hold_alfa()], capture)
+    result = sleeve_review.review_sleeve(
+        styled, include_macro=False,
+        style_mix={"targets": {}, "brief": "Nothing that listed in the last year."},
+    )
+    assert "Nothing that listed in the last year." in capture["user"]
+    assert "it does not relax either" in capture["user"]
+    assert result["styles"]["brief"] == "Nothing that listed in the last year."
+
+    _meta, store = paper.open_portfolio(styled)
+    assert sleeve_review.review_defaults(store)["styles"]["brief"] == (
+        "Nothing that listed in the last year.")
+
+
+def test_a_brief_survives_an_empty_target_set(env, sleeve):
+    """It is a real instruction on its own — dropping it because no bucket was
+    filled in would discard the more specific of the two."""
+    assert sleeve_review.clean_styles({"targets": {}, "brief": "founder-led only"}) == {
+        "targets": {}, "tolerance_pct": styles.DEFAULT_TOLERANCE_PCT,
+        "brief": "founder-led only",
+    }
+
+
+def test_neither_a_mix_nor_a_brief_stores_nothing(env, sleeve):
+    assert sleeve_review.clean_styles({"targets": {}, "brief": "   "}) == {}
+
+
+# ── Style mix over the web ────────────────────────────────────────────────────
+
+def test_review_form_offers_every_style(client, sleeve):
+    html = client.get(f"/live/{sleeve}").text
+    assert "Risk &amp; quality mix for this sleeve" in html
+    for code in ("quality", "growth", "speculative", "unclassified"):
+        assert f'data-style="{code}"' in html
+
+
+def test_review_rejects_an_unknown_style(client, sleeve):
+    r = client.post(f"/live/{sleeve}/review",
+                    json={"config": "config_test.yaml", "style_targets": {"vibes": 30}})
+    assert r.status_code == 400
+    assert "vibes" in r.json()["detail"]
+
+
+def test_web_review_accepts_a_style_mix_and_a_brief(client, styled, monkeypatch):
+    _stub_llm(monkeypatch, [_hold_alfa()])
+    start = client.post(f"/live/{styled}/review",
+                        json={"config": "config_test.yaml", "include_macro": False,
+                              "style_targets": {"quality": 50},
+                              "style_tolerance_pct": 5,
+                              "style_brief": "founder-led only"})
+    assert start.status_code == 200
+    job_id = start.json()["job_id"]
+
+    job = _await_job(client, f"/live/{styled}/review/jobs/{job_id}")
+    assert job["status"] == "done", job.get("error")
+    assert job["result"]["styles"]["targets"] == {"quality": 50.0}
+    assert job["result"]["styles"]["brief"] == "founder-led only"

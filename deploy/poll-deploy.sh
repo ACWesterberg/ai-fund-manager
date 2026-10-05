@@ -17,7 +17,10 @@ git fetch origin "$BRANCH" --quiet 2>&1 || exit 0
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse "origin/$BRANCH")
 
-if [ "$LOCAL" != "$REMOTE" ]; then
+SUCCESS_FILE="$REPO_DIR/data/deployed-revision"
+DEPLOYED=$(cat "$SUCCESS_FILE" 2>/dev/null || true)
+
+if [ "$LOCAL" != "$REMOTE" ] || [ "$DEPLOYED" != "$REMOTE" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] New commit detected ($LOCAL → $REMOTE), deploying…"
     DEPLOY_BRANCH="$BRANCH" bash "$REPO_DIR/deploy/deploy.sh"
 fi

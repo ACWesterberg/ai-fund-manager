@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fundmgr.state.models import DecisionOutcome, Learning, NavPoint, Position, RecommendationLog, Transaction
@@ -81,7 +82,7 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
 CREATE TABLE IF NOT EXISTS learnings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
-    category    TEXT NOT NULL,   -- calibration | sector_bias | timing | general
+    category    TEXT NOT NULL,   -- calibration | qualitative
     body        TEXT NOT NULL,   -- plain-text lesson (injected into future prompts)
     run_ids     TEXT,            -- JSON list of run_ids this learning derives from
     is_active   INTEGER NOT NULL DEFAULT 1,
@@ -353,7 +354,22 @@ class Store:
         fills are entered in SEK (OCR reads Köpesumma/Totalt belopp). The
         currency tag is metadata only; no conversion happens here.
         """
+        if txn.side not in ("buy", "sell") or not txn.ticker.strip():
+            raise ValueError("Fill requires a ticker and a buy/sell side")
+        if (not all(math.isfinite(v) for v in (txn.shares, txn.price_sek, txn.fee_sek))
+                or txn.shares <= 0 or txn.price_sek <= 0 or txn.fee_sek < 0
+                or not math.isfinite(txn.gross_sek + txn.fee_sek)):
+            raise ValueError("Fill requires finite positive shares and price, and a nonnegative fee")
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cash = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+            if cash is None:
+                raise ValueError("Portfolio must be initialised before recording fills")
+            held = conn.execute("SELECT shares FROM positions WHERE ticker = ?", (txn.ticker,)).fetchone()
+            if txn.side == "sell" and (held is None or txn.shares > held["shares"]):
+                raise ValueError("Cannot sell more shares than the portfolio holds")
+            if txn.side == "buy" and txn.gross_sek + txn.fee_sek > cash["balance_sek"]:
+                raise ValueError("Insufficient cash for this fill including fees")
             # Record the transaction (price/fee native, plus its currency)
             conn.execute(
                 "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source, currency) "
@@ -408,25 +424,50 @@ class Store:
 
     # ── Transactions ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _txn_from_row(r: sqlite3.Row) -> Transaction:
+        return Transaction(
+            id=r["id"],
+            timestamp=datetime.fromisoformat(r["timestamp"]),
+            ticker=r["ticker"],
+            side=r["side"],
+            shares=r["shares"],
+            price_sek=r["price_sek"],
+            fee_sek=r["fee_sek"],
+            source=r["source"],
+            currency=(r["currency"] if "currency" in r.keys() and r["currency"] else "SEK"),
+        )
+
     def get_transactions(self, limit: int = 100) -> list[Transaction]:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM transactions ORDER BY timestamp DESC LIMIT ?", (limit,)
             ).fetchall()
-        return [
-            Transaction(
-                id=r["id"],
-                timestamp=datetime.fromisoformat(r["timestamp"]),
-                ticker=r["ticker"],
-                side=r["side"],
-                shares=r["shares"],
-                price_sek=r["price_sek"],
-                fee_sek=r["fee_sek"],
-                source=r["source"],
-                currency=(r["currency"] if "currency" in r.keys() and r["currency"] else "SEK"),
-            )
-            for r in rows
-        ]
+        return [self._txn_from_row(r) for r in rows]
+
+    def count_transactions(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+
+    def find_similar_fills(self, ticker: str, side: str, shares: float, price_sek: float,
+                           around: datetime, window_days: int = 7) -> list[Transaction]:
+        """Recorded transactions that look like the same broker fill entered twice.
+
+        Same ticker, side, share count and price (to the öre) within
+        `window_days` of `around`. The window matters: a fill first recorded
+        without a date is stamped with the day it was typed in, so re-entering
+        it later with its real trade date would never match on the exact day.
+        Fee is ignored — OCR and hand entry disagree on it more than on price."""
+        lo = (around - timedelta(days=window_days)).strftime("%Y-%m-%d")
+        hi = (around + timedelta(days=window_days)).strftime("%Y-%m-%d")
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM transactions WHERE ticker = ? AND side = ? "
+                "AND ABS(shares - ?) < 1e-6 AND ABS(price_sek - ?) < 0.005 "
+                "AND substr(timestamp, 1, 10) BETWEEN ? AND ? ORDER BY timestamp DESC",
+                (ticker, side, shares, price_sek, lo, hi),
+            ).fetchall()
+        return [self._txn_from_row(r) for r in rows]
 
     def undo_last_fill(self) -> Transaction | None:
         """
@@ -1367,6 +1408,25 @@ class Store:
             for k, v in buckets.items()
         }
 
+    def get_calibration_run_ids(self, qualifying_buckets: set[str]) -> list[str]:
+        """Run provenance behind the calibration bands that cleared the sample bar."""
+        if not qualifying_buckets:
+            return []
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT run_id, confidence FROM decision_outcomes "
+                "WHERE outperformed IS NOT NULL AND action = 'buy' "
+                "AND (source IS NULL OR source = 'run') ORDER BY run_id"
+            ).fetchall()
+
+        def bucket(confidence: float | None) -> str:
+            value = confidence or 0.0
+            return "high" if value >= 0.7 else "medium" if value >= 0.4 else "low"
+
+        return sorted({
+            r["run_id"] for r in rows if bucket(r["confidence"]) in qualifying_buckets
+        })
+
     # ── Learnings ─────────────────────────────────────────────────────────────
 
     def save_learning(self, learning: "Learning") -> int:
@@ -1382,6 +1442,31 @@ class Store:
                 ),
             )
             return cur.lastrowid
+
+    def replace_learnings(self, learning: "Learning", old_ids: list[int]) -> int:
+        """Save one replacement and atomically link every active predecessor to it."""
+        import json as _json
+        ids = list(dict.fromkeys(old_ids))
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO learnings (created_at, category, body, run_ids, is_active) "
+                "VALUES (?, ?, ?, ?, 1)",
+                (
+                    learning.created_at.isoformat(),
+                    learning.category,
+                    learning.body,
+                    _json.dumps(learning.run_ids),
+                ),
+            )
+            new_id = cur.lastrowid
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE learnings SET is_active = 0, superseded_by = ? "
+                    f"WHERE is_active = 1 AND id IN ({placeholders})",
+                    [new_id, *ids],
+                )
+            return new_id
 
     def get_active_learnings(self) -> list["Learning"]:
         import json as _json
@@ -1480,6 +1565,24 @@ class Store:
             return None
         return row["date"], float(row["close"])
 
+    def close_on_or_before(
+        self, ticker: str, target_date: str, max_delta_days: int = 7
+    ) -> tuple[str, float] | None:
+        """Finite positive historical close without looking beyond the horizon."""
+        import math
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT date, close FROM price_cache WHERE ticker = ? "
+                "AND date <= ? AND date >= DATE(?, ?) AND close > 0 "
+                "ORDER BY date DESC",
+                (ticker, target_date, target_date, f"-{max_delta_days} days"),
+            ).fetchall()
+        for row in rows:
+            if math.isfinite(row["close"]):
+                return row["date"], float(row["close"])
+        return None
+
     def save_benchmark(self, rows: list[dict]) -> None:
         """rows: list of {date, close}."""
         now = datetime.utcnow().isoformat()
@@ -1534,6 +1637,53 @@ class Store:
                 (ticker, since_date),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_news_in_window(self, ticker: str, since_date: str, until_date: str) -> list[dict]:
+        """News published and available inside an inclusive UTC date window.
+
+        Unknown publication dates are not historical evidence. Both ISO dates
+        and RFC 2822 feed dates are accepted. This intentionally differs from
+        the live sentiment feed, which selects by cache freshness alone.
+        """
+        from datetime import date, timezone
+        from email.utils import parsedate_to_datetime
+
+        start, end = date.fromisoformat(since_date), date.fromisoformat(until_date)
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT headline, summary, source_url, published_at, fetched_at "
+                "FROM news_cache WHERE ticker = ? "
+                "AND DATE(fetched_at) >= ? AND DATE(fetched_at) <= ?",
+                (ticker, since_date, until_date),
+            ).fetchall()
+        items = []
+        for row in rows:
+            published = row["published_at"]
+            if not published:
+                continue
+            try:
+                try:
+                    timestamp = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                except ValueError:
+                    timestamp = parsedate_to_datetime(published)
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                published_day = timestamp.astimezone(timezone.utc).date()
+                fetched_day = datetime.fromisoformat(row["fetched_at"]).date()
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if start <= published_day <= end and published_day <= fetched_day:
+                items.append((timestamp, dict(row)))
+        items.sort(key=lambda item: item[0], reverse=True)
+        # Repeated feed fetches must not crowd distinct evidence out of the cap.
+        seen = set()
+        result = []
+        for _, item in items:
+            key = (item["headline"], item["published_at"], item["source_url"])
+            if key not in seen:
+                result.append(item)
+                seen.add(key)
+        return result
 
     # ── News triggers ─────────────────────────────────────────────────────────
 

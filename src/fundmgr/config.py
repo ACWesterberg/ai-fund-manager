@@ -37,6 +37,18 @@ class RiskConfig:
     stale_after_days: int = 5
     cold_start_cash_threshold: float = 80.0  # if cash% above this, use cold_start_turnover_pct
     cold_start_turnover_pct: float = 50.0    # turnover cap when deploying from near-100% cash
+    # Geographic mix, {region code: % of NAV} — see fundmgr.regions. Empty means
+    # the book's geography is whatever the screener's ranking happens to produce.
+    # Only named regions constrain anything; the ceiling (target + tolerance) is
+    # enforced here, the floor is not, because no guardrail can force a buy.
+    region_targets: dict[str, float] = field(default_factory=dict)
+    region_tolerance_pct: float = 10.0       # band around each regional target
+    # Risk/quality mix, {style code: % of NAV} — see fundmgr.styles. Same shape
+    # as the regional dial, but over a judgement rather than a fact: a name with
+    # no fundamentals on file is `unclassified`, counted against no target and
+    # blocked by none, so these caps under-count rather than bind tightly.
+    style_targets: dict[str, float] = field(default_factory=dict)
+    style_tolerance_pct: float = 10.0        # band around each style target
 
 
 @dataclass
@@ -95,16 +107,20 @@ def default_heavy_model(provider: str) -> str:
 
 @dataclass
 class OptimizerConfig:
-    # Heavy model that *writes* candidate instructions (MIPRO prompt_model).
-    # None → derived from llm.provider at run time (see default_heavy_model).
+    # Bounded instruction-only search, separate from live decision settings.
+    max_calls: int = 7
+    max_total_tokens: int = 200000  # conservative request reservations, not billed usage
+    max_output_tokens: int = 2048
+    reasoning_effort: str = "low"
+    validation_runs: int = 3
+    min_new_periods: int = 3  # own-fund matured decision dates since prior paid search
+    reuse_evaluations: bool = True
+    # Optional model override for the single instruction-writing call.
+    # None uses the fund's decision model.
     prompt_model_id: str | None = None
     min_outcomes: int = 30       # evaluated outcomes required before optimization runs
-    # Usable run-level examples required before MIPRO runs at all. MIPRO holds
-    # out 20% and picks the winning instructions on that slice, so at 8 examples
-    # it was selecting on 2 runs — with weekly excess return noise of roughly 2pp,
-    # the best of a dozen candidates beats the field by more than that from
-    # chance alone, and the artifact would look like an improvement while being
-    # none. This is the "should we believe it" threshold, not "can it run".
+    # Keep the minimum historical evidence gate even for the smaller search.
+    # Search validation alone never qualifies an artifact for promotion.
     min_examples: int = 25
     # Other funds' configs to pool training examples from (filenames in config/,
     # or absolute paths). Empty = this fund's own history only. Pooling shares
@@ -112,6 +128,14 @@ class OptimizerConfig:
     # applies its own.
     pool_configs: list[str] = field(default_factory=list)
     compiled_dir: Path = field(default_factory=lambda: CONFIG_DIR / "compiled")
+
+
+@dataclass
+class ShadowConfig:
+    # Explicit opt-in: each new weekly run makes two additional sample sets.
+    candidate: str | None = None
+    benchmark_currency: str = ""
+    benchmark_calendar: str = ""
 
 
 @dataclass
@@ -126,6 +150,7 @@ class AppConfig:
     web: WebConfig = field(default_factory=WebConfig)
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    shadow: ShadowConfig = field(default_factory=ShadowConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -296,6 +321,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.optimizer = OptimizerConfig(**opt_raw)
         if compiled:
             cfg.optimizer.compiled_dir = ROOT / compiled
+    if shadow_raw := raw.get("shadow"):
+        cfg.shadow = ShadowConfig(**shadow_raw)
+        if cfg.shadow.candidate:
+            cfg.shadow.candidate = str(ROOT / cfg.shadow.candidate)
     if env_prompt_model := os.getenv("FUND_OPTIMIZER_PROMPT_MODEL"):
         cfg.optimizer.prompt_model_id = env_prompt_model
 

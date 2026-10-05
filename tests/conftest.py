@@ -38,3 +38,21 @@ def no_live_llm_calls(monkeypatch):
 def alias_file() -> Path:
     """The isolated alias file for the current test."""
     return Path(os.environ["FUND_ALIAS_PATH"])
+
+
+@pytest.fixture(autouse=True)
+def authenticated_dashboard_tests(monkeypatch):
+    """Existing route tests exercise authenticated access; auth tests opt out per client."""
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("FUND_WEB_USERNAME", "fund")
+    monkeypatch.setenv("FUND_WEB_PASSWORD", "test-password")
+    original = TestClient.__init__
+
+    def init(self, *args, **kwargs):
+        headers = dict(kwargs.get("headers") or {})
+        headers.setdefault("Authorization", "Basic ZnVuZDp0ZXN0LXBhc3N3b3Jk")
+        kwargs["headers"] = headers
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", init)

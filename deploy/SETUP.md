@@ -102,6 +102,8 @@ OPENAI_API_KEY=sk-...           # GPT-5.6-sol simulation fund
 ANTHROPIC_API_KEY=sk-ant-...    # Claude Opus simulation fund
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
+FUND_WEB_USERNAME=fund
+FUND_WEB_PASSWORD=...          # unique strong password; required for the dashboard
 ```
 
 Optional (only needed if using the webhook deploy method):
@@ -211,18 +213,19 @@ Summary:
 | 🇸🇪 Nordic REAL | Weekly run / news / stops | Mon 09:30 / wkdays / 15-min |
 | 🌍 Global sim GPT-5.6-sol | Weekly run / news / stops | Mon 16:00 / wkdays / 15-min |
 | 🤖 Global sim Claude | Weekly run / news / stops | Mon 16:30 / wkdays / 15-min |
-| All funds | Prompt optimize (MIPRO) | Sun 02:00 / 02:30 / 03:00 |
+| All funds | Bounded prompt search eligibility | Sun 02:00 / 02:30 / 03:00 |
 | Backups | DB → Google Drive | Daily 03:00 + post-Mon-run |
 
 The backup cron lines need **rclone + Google Drive** set up once — see
 `deploy/BACKUP.md`. (Without rclone the script still keeps local archives.)
 
-The optimize jobs need the optional DSPy dependency (`uv pip install -e ".[optimize]"`).
-`fund optimize` rebuilds each fund's decision guidance from decisions whose 28-day
-outcome vs the benchmark is known (MIPROv2, alpha-weighted metric); the winning
-instructions land in `config/compiled/<fund-db>_guidance.json` and are appended to
-the mandate on every subsequent `fund run`. Until 30 evaluated outcomes and 8 scored
-runs accumulate, the job logs a skip and exits — safe to install from day one.
+The optimize jobs use the native client; no optional DSPy dependency is required.
+Search requires 30 evaluated outcomes and 25 usable run examples (pooling allowed).
+After the first paid search, another search needs 3 new evaluated decision dates
+from that fund. Weekly checks skip without calls until eligible. Call and token
+reservation limits apply; winners remain inactive candidates until forward evaluation
+and explicit promotion. Use `fund optimize --dry-run` before running and
+`fund optimizer-usage` to inspect saved provider token counters.
 
 ---
 
@@ -404,9 +407,14 @@ systemctl status cloudflared
 
 That's it — no port forwarding, no router config needed. Cloudflare handles HTTPS and the SSL certificate automatically.
 
-### 10e. Optional: restrict access to yourself only
+### 10e. Protect dashboard access
 
-If you don't want the dashboard public, add a Cloudflare Access policy:
+The app requires HTTP Basic authentication through `FUND_WEB_PASSWORD`, even
+behind a tunnel. An unset password returns 503. Set it in the Pi `.env` before
+restarting the web services, and access the dashboard over HTTPS. The `/deploy`
+webhook continues to verify its own GitHub signature.
+
+For an additional email-based access check, add a Cloudflare Access policy:
 
 1. In Cloudflare Zero Trust → **Access** → **Applications** → **Add an application**
 2. Choose **Self-hosted** → enter `fund.yourdomain.com`
@@ -436,3 +444,33 @@ Price data is cached in SQLite for `lookback_days` (252 days). Re-running the sa
 
 **`fund` command not found**
 Make sure you're using the venv's binary: `~/Documents/ai-fund-manager/.venv/bin/fund` or `source ~/.venv/bin/activate` first.
+
+
+## Regression checks and retryable deployments
+
+GitHub Actions runs the test suite before its SSH deployment job. Add a repository
+secret `FINANCEDATA_READ_TOKEN` with read-only contents access to the private
+`ACWesterberg/FinanceData` repository. The test workflow pins its revision and uses
+`uv.lock`; update that revision deliberately when upgrading the shared data layer.
+Fork pull requests cannot access this secret and require a trusted test run.
+
+The deploy script serializes deployments using `flock`, waits for active fund
+runs before changing source or dependencies, and writes `data/deployed-revision`
+only after all services report that they are running. Polling retries an unfinished deployment
+even when Git HEAD is already current. A missing marker causes one full deployment.
+The poller and direct webhook are independent of GitHub's test job; use protected
+`deploy` branches with required checks if those deployment paths are enabled.
+
+The installed `FinanceData` source on the Pi still follows its configured branch;
+CI's pin does not change that operational policy.
+
+### Batch completion notifications
+
+Add the `fund optimizer-watch` line from `deploy/cron.example` to the Pi's existing
+crontab (`crontab -e`) to check the Nordic fund every 15 minutes. The command uses
+`.env` Telegram settings and sends a completion or attention notice; pending checks
+stay quiet. It only collects already-submitted batches and never starts a paid
+search, retries failed evaluations, or activates guidance. Changing the example
+file alone does not install the live schedule. Run the command once manually to
+check an existing batch; repeat the cron line with another `FUND_CONFIG` to watch
+another OpenAI fund.

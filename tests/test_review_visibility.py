@@ -33,6 +33,7 @@ except ModuleNotFoundError:  # pragma: no cover
     sys.modules["financedata"] = _stub
 
 from fundmgr.engine.review_common import (  # noqa: E402
+    action_banner_html,
     follow_up,
     instruction,
     log_review,
@@ -326,3 +327,45 @@ def test_an_invented_status_is_refused(client, store):
     rid = log_review(_target(), store, "target_review", 23.05)
     assert client.post(f"/reviews/{rid}/resolve", data={"status": "traded-half"}).status_code == 400
     assert store.get_open_reviews()[0]["review_id"] == rid
+
+
+# ── What the Telegram alert leads with ────────────────────────────────────────
+
+def _owed(store, positions):
+    return open_reviews_context(store, positions)["rows"]
+
+
+def test_an_owed_order_leads_the_alert_as_an_action(store):
+    """The SELL used to sit mid-message under "Target review" and read as a report."""
+    log_review(_target("sell", trim=None, new_tp=None), store, "target_review", 23.05)
+    rows = _owed(store, [_position(shares=1, price=3643.70)])
+    today = rows[0]["when"]
+    banner = action_banner_html(rows, today)
+    first, order = banner.splitlines()[:2]
+    assert first == "🔴 <b>ACTION NEEDED — 1 order for you to place</b>"
+    assert order == (
+        "👉 <b>SELL TRUE-B.ST</b>: Sell the whole position — about 1 share, ≈3,644 SEK."
+    )
+    assert "Still open" not in banner
+    assert "/fill" in banner and "/decisions done TICKER" in banner
+
+
+def test_an_order_left_from_an_earlier_review_says_it_is_still_open(store):
+    """The 11:00 drop alert on a name with a 09:00 SELL looked like nothing to do."""
+    log_review(_target(), store, "target_review", 23.05)
+    banner = action_banner_html(_owed(store, [_position()]), "2099-01-01")
+    assert "👉 <b>TRIM TRUE-B.ST</b>: Sell 50% of the position" in banner
+    assert "Keep the other 50% as it is." in banner
+    assert "Still open since" in banner and "(target hit)" in banner
+
+
+def test_nothing_owed_means_no_banner(store):
+    log_review(_target("raise", trim=None, new_tp=80.0), store, "target_review", 23.05)
+    assert action_banner_html(_owed(store, [_position()]), "2026-10-08") == ""
+
+
+def test_model_text_in_the_banner_is_escaped():
+    row = {"verdict_label": "SELL", "ticker": "A<B", "instruction": "Sell <all>.",
+           "follow_up": "", "when": "2026-10-08", "source_label": "Target hit"}
+    banner = action_banner_html([row], "2026-10-08")
+    assert "A&lt;B" in banner and "Sell &lt;all&gt;." in banner

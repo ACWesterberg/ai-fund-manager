@@ -625,13 +625,21 @@ async def cmd_target(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
 
 
 async def cmd_decisions(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    """/decisions [all] — review verdicts still waiting on an order from you.
+    """/decisions [all | done TICKER | dismiss TICKER] — verdicts still owed an order.
 
     A stop or target review's alert scrolls away; the instruction in it does not
-    stop being owed. This reads the same list back on demand.
+    stop being owed. This reads the same list back on demand, and ticks one off —
+    the alert's ACTION NEEDED banner repeats until it is.
     """
     args = context.args or []
-    extra = ["--all"] if args and args[0].lower() in ("all", "--all") else []
+    verb = args[0].lower() if args else ""
+    if verb in ("done", "dismiss"):
+        if len(args) < 2:
+            await update.message.reply_text(f"Usage: /decisions {verb} TICKER")
+            return
+        extra = [f"--{verb}", args[1]]
+    else:
+        extra = ["--all"] if verb in ("all", "--all") else []
     output = _run_cli("decisions", *extra, timeout=30)
     await _send(update, output)
 
@@ -651,6 +659,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
         "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
         "/decisions [all] — review verdicts still waiting on an order from you\n"
+        "/decisions done TICKER — you placed it (dismiss TICKER: not acting on it)\n"
         "/setcash AMOUNT — correct the cash balance (SEK)\n"
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"

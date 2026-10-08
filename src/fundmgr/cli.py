@@ -915,6 +915,7 @@ def check_stops(quiet: bool):
     stops_hit: list[tuple] = []
     profits_hit: list[tuple] = []
     warnings: list[tuple] = []
+    live_by_ticker: dict[str, float] = {}
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
     today_date = datetime.utcnow().date()
@@ -932,6 +933,7 @@ def check_stops(quiet: bool):
 
         live_native = float(hist["Close"].iloc[-1])
         live_price = _to_sek(live_native, p.ticker)  # SEK, for cost-basis comparison & display
+        live_by_ticker[p.ticker] = live_price
 
         # % change since entry — the metric stop/take-profit levels are measured against.
         chg = (live_price / p.avg_cost_sek - 1) * 100 if p.avg_cost_sek else 0.0
@@ -1105,7 +1107,34 @@ def check_stops(quiet: bool):
     alert_profits = alertable_hits(profits_hit, "target", auto_sold, store, today) if bot_token and chat_id else []
 
     if (alert_stops or alert_profits or warnings) and bot_token and chat_id:
-        lines = [f"<b>{cfg.display_name}</b>\n📉 Price Alert"]
+        # Advisory: a banner that fails to build must not cost the alert itself.
+        try:
+            from fundmgr.engine.review_common import action_banner_html
+            from fundmgr.web.views import review_row
+
+            # Every order still owed on a name this alert mentions — today's review
+            # or an earlier one nobody ticked off — leads the message.
+            alerted = {t for t, *_ in alert_stops + alert_profits + warnings}
+            held = {p.ticker: p for p in store.get_positions()}
+            owed = [
+                review_row(r, {
+                    "ticker": r["ticker"], "name": r["ticker"],
+                    "shares": held[r["ticker"]].shares,
+                    # live_by_ticker is SEK only when the fund converts; otherwise
+                    # the share count stands alone rather than mislabel a currency.
+                    "current_price": live_by_ticker.get(r["ticker"]) if cfg.fx_to_sek else None,
+                })
+                for r in store.get_open_reviews(tickers=list(held))
+                if r["ticker"] in alerted
+            ]
+            banner = action_banner_html(owed, today)
+        except Exception as e:
+            click.echo(f"  ⚠ could not list owed orders: {e}", err=True)
+            banner = ""
+        lines = [f"<b>{cfg.display_name}</b>"]
+        if banner:
+            lines += [banner, ""]
+        lines.append("📉 Price Alert")
         for ticker, chg, stop_pct, price in alert_stops:
             if ticker in auto_sold:
                 note = " — <b>AUTO-SOLD</b>"
@@ -1140,6 +1169,8 @@ def check_stops(quiet: bool):
             lines.append(snip)
         if (alert_stops or alert_profits) and not auto_sold and not review_snippets:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
+        if not banner and not alert_stops and not alert_profits:
+            lines.append("\nℹ️ No action needed — for information only.")
         msg = "\n".join(lines)
         try:
             data = urllib.parse.urlencode({

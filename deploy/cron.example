@@ -26,6 +26,11 @@
 */15 9-17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
+# ═══ SIMULATIONS PAUSED (2026-10-09) ═════════════════════════════════════════
+# The four sim configs carry `paused: true`. Their lines below can stay: run,
+# optimize and check-news exit at once without calling anything, and
+# check-stops only records the day's NAV (no trades). Remove them if you like.
+#
 # ═══ GLOBAL SIMULATION FUND (OpenAI GPT-5.6-sol) — NYSE/NASDAQ + European overlap ══
 #
 # Best execution window: 16:00 CET

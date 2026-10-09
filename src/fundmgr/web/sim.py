@@ -97,13 +97,19 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
         return HTMLResponse(tmpl.render(**context))
 
     def _sim_base_ctx() -> dict:
-        return {
+        ctx = {
             "is_simulation": True,
             "sim_prefix": prefix,
             "sim_label": sim_label,
             "sim_accent": sim_accent,
             "api_base": prefix,
         }
+        if _get_deps()[0].paused:
+            ctx["sim_banner"] = (
+                f"PAUSED — {sim_label} · Holdings frozen, no runs or API calls · "
+                "Still valued daily"
+            )
+        return ctx
 
     @router.get("/", response_class=HTMLResponse)
     def sim_index(request: Request):

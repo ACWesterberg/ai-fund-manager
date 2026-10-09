@@ -30,6 +30,8 @@ Each `config/config*.yaml` bundles a mandate + universe + risk limits + model, s
 
 All five run `reasoning_effort: high` and `n_samples: 3`.
 
+**The four sims are paused (since 2026-10-09)** to save API cost while the real Nordic book is the focus: `paused: true` in each config. A paused fund keeps its holdings and is still valued daily (`check-stops` marks NAV at live prices instead of trading), but `run`, `optimize`, `check-news`, `review-stop`/`review-target`, `compare-guidance` and `consolidate-learnings` exit before doing anything — `--force` does not override it. The gate is per command, not in `call_llm`, because live sleeves and the What-If Lab borrow sim *profiles* and must keep working. Their past outcomes still feed the Nordic fund's pooled trainset. Delete the line to resume.
+
 The two Global and two Buffett funds are deliberately **paired across providers on an identical universe and mandate**, so the only difference is the decision model. Keep `learning_model_id` pinned to the same id everywhere for the same reason: the comparison should be a difference in decision-making, not in how each fund is coached.
 
 `FUND_CONFIG=config/config_x.yaml` selects the profile for any `fund` command; unset means `config.yaml`.

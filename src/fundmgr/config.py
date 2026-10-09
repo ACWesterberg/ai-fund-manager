@@ -158,6 +158,11 @@ class AppConfig:
     fx_to_sek: bool = False  # convert foreign-currency holdings to SEK for cash/NAV
                              # (real fund). Sims run native-consistent; leave False.
     name: str = ""           # display name for notifications (which fund this is)
+    # Paused: the book stays as it is and keeps being valued, but nothing that
+    # costs money runs for it — no decision runs, reviews, optimizer searches or
+    # news-triggered runs — and nothing trades, mechanical stops included.
+    # Un-pausing is deleting the line.
+    paused: bool = False
     # Model that distils evaluated outcomes into learnings. None → this fund's
     # provider's heavy model. Pin the same id across every fund's config to keep
     # one lesson-writer system-wide, so the GPT-vs-Claude comparison is a
@@ -266,6 +271,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.mandate_path = ROOT / mandate
     if universe := raw.get("universe_path"):
         cfg.universe_path = ROOT / universe
+    if "paused" in raw:
+        cfg.paused = bool(raw["paused"])
     if "auto_fill" in raw:
         cfg.auto_fill = bool(raw["auto_fill"])
     if "fx_to_sek" in raw:

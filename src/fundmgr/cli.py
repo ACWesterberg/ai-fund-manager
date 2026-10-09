@@ -53,6 +53,20 @@ def _get_store(cfg=None) -> tuple:
     return cfg, store
 
 
+def _paused(cfg, what: str) -> bool:
+    """True (and says so) when this fund is paused and `what` must not happen.
+
+    Gated per command rather than inside call_llm: live sleeves and the What-If
+    Lab borrow a sim profile's mandate and universe, and pausing the sim book
+    must not quietly break a review of a real sleeve built from its profile.
+    """
+    if not cfg.paused:
+        return False
+    click.echo(f"⏸ {cfg.display_name} is paused — {what} skipped. "
+               "Nothing called, nothing traded.")
+    return True
+
+
 
 
 @click.group()
@@ -167,6 +181,10 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         skip_fundamentals: bool, force: bool):
     """Ingest data, call the LLM, apply guardrails, and emit the action list."""
     cfg, store = _get_store()
+    # Before the holiday gate and deliberately not overridable by --force: that
+    # flag answers "is the market open", not "should this fund spend money".
+    if _paused(cfg, "weekly run"):
+        return
     if not store.is_initialised():
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
@@ -871,6 +889,61 @@ def report(html: bool):
         click.echo(f"\n  HTML report saved to: {out}")
 
 
+def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
+    """Value the book at live prices and record today's NAV point.
+
+    No model calls and no trades — this is how a paused fund's dashboard stays
+    current. Writes nothing when a holding has no price: a NAV with a hole in it
+    reads as a loss, and filling the hole with cost basis would invent a value.
+    """
+    from fundmgr.config import load_universe
+    from fundmgr.data.fx import rate_to_sek
+    from fundmgr.data.quotes import live_prices
+
+    positions = store.get_positions()
+    prices = live_prices([p.ticker for p in positions]) if positions else {}
+    missing = [p.ticker for p in positions if not prices.get(p.ticker)]
+    if missing:
+        click.echo(f"  ⚠ NAV not marked — no price for {', '.join(missing)}.")
+        return None
+
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+    fx_cache: dict[str, float] = {}
+    for p in positions:
+        price = prices[p.ticker]
+        cur = cur_by_ticker.get(p.ticker, "SEK")
+        if cfg.fx_to_sek and cur != "SEK":
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                click.echo(f"  ⚠ NAV not marked — no {cur}/SEK rate for {p.ticker}.")
+                return None
+            fx_cache[cur] = rate
+            price *= rate
+        p.current_price_sek = price
+    cash = store.get_cash()
+    nav = PortfolioSnapshot(positions=positions, cash_sek=cash).nav_sek
+
+    fetch_and_cache_benchmark(store, cfg.benchmark, cfg.data.lookback_days)
+    bench_rows = store.get_benchmark()
+    store.upsert_nav(NavPoint(
+        date=datetime.utcnow().strftime("%Y-%m-%d"),
+        portfolio_nav_sek=nav,
+        benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+        cash_sek=cash,
+    ))
+    if not quiet:
+        click.echo(f"  NAV marked: {nav:,.0f} ({len(positions)} positions, cash {cash:,.0f}).")
+    return nav
+
+
+@cli.command("mark")
+def mark():
+    """Record today's NAV at live prices. No model calls, no trades."""
+    cfg, store = _get_store()
+    if _mark_nav(cfg, store) is None:
+        sys.exit(1)
+
+
 @cli.command("check-stops")
 @click.option("--quiet", is_flag=True, help="Suppress output unless a stop or warning fires")
 def check_stops(quiet: bool):
@@ -879,13 +952,20 @@ def check_stops(quiet: bool):
     import urllib.request as _req
     import yfinance as yf
 
+    cfg, store = _get_store()
+    if cfg.paused:
+        # Frozen, not forgotten: no stop sells, no alerts, but the book is still
+        # valued so its dashboard keeps showing how the holdings it froze with
+        # are doing. This is the job cron already fires for every sim.
+        _mark_nav(cfg, store, quiet)
+        return
+
     # Markets are closed on weekends — nothing to check
     if datetime.utcnow().weekday() >= 5:
         if not quiet:
             click.echo("Weekend — markets closed, skipping stop-loss check.")
         return
 
-    cfg, store = _get_store()
     positions = store.get_positions()
     if not positions:
         if not quiet:
@@ -1207,6 +1287,8 @@ def review_stop(ticker: str | None, notify: bool):
     from fundmgr.notify.send import send_telegram
 
     cfg, store = _get_store()
+    if _paused(cfg, "position review"):
+        return
     n = max(1, cfg.llm.n_samples)
     held = [p.ticker for p in store.get_positions()]
 
@@ -1289,6 +1371,8 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
     from fundmgr.notify.send import send_telegram
 
     cfg, store = _get_store()
+    if _paused(cfg, "position review"):
+        return
     n = max(1, cfg.llm.n_samples)
     held = [p.ticker for p in store.get_positions()]
 
@@ -1420,6 +1504,10 @@ def check_news(auto_run: bool, max_age_hours: int):
     import urllib.request
 
     cfg, store = _get_store()
+    # A paused fund has no run for a headline to trigger, and scoring the news
+    # with FinBERT for nobody is just CPU on the Pi.
+    if _paused(cfg, "news check"):
+        return
     if not cfg.data.news_feeds:
         click.echo("No news feeds configured — set data.news_feeds in config.yaml")
         return
@@ -1738,6 +1826,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     from fundmgr.engine.optimizer_batch import BatchPending
     cfg, store = _get_store()
+    if _paused(cfg, "prompt search"):
+        return
     for key, value in (("max_calls", max_calls), ("max_total_tokens", max_total_tokens),
                        ("max_output_tokens", max_output_tokens)):
         if value is not None:
@@ -2018,6 +2108,9 @@ def consolidate_learnings_cmd(dry_run: bool, all_books: bool):
     click.echo("\n─── Consolidate active qualitative learnings ───────────────")
     total = 0
     for label, cfg, store in books:
+        if getattr(cfg, "paused", False):
+            click.echo(f"\n  {label}: paused — skipped.")
+            continue
         proposals = consolidate_qualitative_learnings(store, cfg, apply=not dry_run)
         if not proposals:
             if all_books:
@@ -3447,7 +3540,9 @@ def compare_guidance_cmd(run_id: str, candidate: Path, output: Path):
 
     if output.exists() or not output.parent.is_dir():
         raise click.ClickException("Output must be a new file in an existing directory")
-    _, store = _get_store()
+    cfg, store = _get_store()
+    if _paused(cfg, "guidance comparison"):
+        return
     rec = store.get_recommendation_by_run_id(run_id)
     if rec is None:
         raise click.ClickException(f"Unknown run: {run_id}")

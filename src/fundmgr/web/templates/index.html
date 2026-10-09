@@ -1239,7 +1239,7 @@
       {{ "{:+,.0f}".format(pnl_sek) }}
     </div>
     <div class="kpi-sub {{ 'ret-pos' if pnl_pct > 0 else 'ret-neg' if pnl_pct < 0 else 'ret-neu' }}">
-      {{ "{:+.2f}".format(pnl_pct) }}% vs initial
+      {{ "{:+.2f}".format(pnl_pct) }}%{% if invested_sek is defined %} on {{ "{:,.0f}".format(invested_sek) }} put in{% else %} vs initial{% endif %}
     </div>
   </div>
 
@@ -1249,7 +1249,7 @@
       <div class="kpi-value {{ 'ret-pos' if stats.twr_pct > 0 else 'ret-neg' if stats.twr_pct < 0 else 'ret-neu' }}">
         {{ "{:+.2f}".format(stats.twr_pct) }}%
       </div>
-      <div class="kpi-sub">{{ benchmark_label|default("Benchmark") }} {{ "{:+.2f}".format(stats.benchmark_return_pct) }}%</div>
+      <div class="kpi-sub">{{ benchmark_label|default("Benchmark") }} {{ "{:+.2f}".format(stats.benchmark_return_pct) }}%{% if stats.net_flows_sek %} · deposits excluded{% endif %}</div>
     {% else %}
       <div class="kpi-value ret-neu">—</div>
       <div class="kpi-sub">No history yet</div>

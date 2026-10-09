@@ -1042,7 +1042,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         cash = store.get_cash()
         fees_paid = store.total_fees_paid()
         nav_history = store.get_nav_history()
-        stats = compute_stats(nav_history, meta["capital_sek"])
+        stats = compute_stats(nav_history, meta["capital_sek"], store.get_cash_flows())
 
         live_prices = _live_prices_sek(slug, store, meta, [p.ticker for p in positions])
         live_market_value = sum(live_prices.get(p.ticker, p.avg_cost_sek) * p.shares for p in positions)
@@ -1406,7 +1406,8 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         except KeyError:
             return {"data": [], "layout": {}}
         return json.loads(nav_chart_json(
-            store.get_nav_history(), benchmark_label(meta.get("benchmark"))))
+            store.get_nav_history(), benchmark_label(meta.get("benchmark")),
+            store.get_cash_flows()))
 
     @router.get("/{slug}/api/stats")
     def api_stats(slug: str):
@@ -1414,7 +1415,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             meta, store = paper.open_portfolio(slug)
         except KeyError:
             return {}
-        return compute_stats(store.get_nav_history(), meta["capital_sek"])
+        return compute_stats(store.get_nav_history(), meta["capital_sek"], store.get_cash_flows())
 
     return router
 

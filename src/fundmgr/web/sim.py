@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 
 from fundmgr.config import load_config, load_universe
-from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, gain, invested, nav_chart_json
 from fundmgr.state.store import Store
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -118,7 +118,7 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
         cash = store.get_cash()
         fees_paid = store.total_fees_paid()
         nav_history = store.get_nav_history()
-        stats = compute_stats(nav_history, cfg.capital_sek)
+        stats = compute_stats(nav_history, cfg.capital_sek, store.get_cash_flows())
 
         universe = load_universe(cfg.universe_path)
         name_map = {t.yahoo_ticker: t.name for t in universe}
@@ -160,8 +160,10 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
             })
 
         cash_pct = round(cash / nav * 100, 1) if nav > 0 else 100.0
-        pnl_sek = round(nav - cfg.capital_sek, 0)
-        pnl_pct = round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0
+        flows = store.get_cash_flows()
+        gain_sek, gain_pct = gain(nav, cfg.capital_sek, flows)
+        pnl_sek, pnl_pct = round(gain_sek, 0), round(gain_pct, 2)
+        invested_sek = round(invested(cfg.capital_sek, flows), 0)
 
         last_run = None
         last_rec = store.get_last_recommendation()
@@ -205,6 +207,7 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
             "last_run": last_run,
             "pnl_sek": pnl_sek,
             "pnl_pct": pnl_pct,
+            "invested_sek": invested_sek,
             "active_page": "portfolio",
         "benchmark_label": benchmark_label(cfg.benchmark),
             **_sim_base_ctx(),
@@ -301,12 +304,12 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
     def sim_api_nav():
         cfg, store = _get_deps()
         nav_history = store.get_nav_history()
-        return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark)))
+        return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark), store.get_cash_flows()))
 
     @router.get("/api/stats")
     def sim_api_stats():
         cfg, store = _get_deps()
         nav_history = store.get_nav_history()
-        return compute_stats(nav_history, cfg.capital_sek)
+        return compute_stats(nav_history, cfg.capital_sek, store.get_cash_flows())
 
     return router

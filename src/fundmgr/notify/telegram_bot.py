@@ -13,6 +13,7 @@ Commands:
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
   /target [TICKER] — take-profit review (no ticker = every position at target)
   /setcash AMOUNT — correct the cash balance (SEK)
+  /deposit AMOUNT [note] — new money in (not profit); /withdraw for money out
   /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
   /help          — show this message
 
@@ -360,6 +361,32 @@ async def cmd_setcash(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     await _send(update, output)
 
 
+async def _cash_flow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", verb: str) -> None:
+    """/deposit or /withdraw AMOUNT [note…] — money in or out, not profit or loss."""
+    args = context.args or []
+    try:
+        amount = float(args[0].replace(",", "").replace(" ", "")) if args else 0.0
+    except ValueError:
+        amount = 0.0
+    if amount <= 0:
+        await update.message.reply_text(
+            f"Usage: /{verb} AMOUNT [note]\nExample: /{verb} 50000 monthly top-up")
+        return
+    note = " ".join(args[1:])
+    output = _run_cli(verb, f"{amount:.2f}", *(["--note", note] if note else []), timeout=30)
+    await _send(update, output)
+
+
+async def cmd_deposit(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/deposit AMOUNT [note] — new money into the account; not counted as profit."""
+    await _cash_flow(update, context, "deposit")
+
+
+async def cmd_withdraw(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/withdraw AMOUNT [note] — money taken out; not counted as a loss."""
+    await _cash_flow(update, context, "withdraw")
+
+
 # ── Paper / mirror portfolio commands ─────────────────────────────────────────
 
 def _all_books() -> dict[str, str]:
@@ -660,7 +687,9 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
         "/decisions [all] — review verdicts still waiting on an order from you\n"
         "/decisions done TICKER — you placed it (dismiss TICKER: not acting on it)\n"
-        "/setcash AMOUNT — correct the cash balance (SEK)\n"
+        "/deposit AMOUNT [note] — new money into the account (not profit)\n"
+        "/withdraw AMOUNT [note] — money taken out (not a loss)\n"
+        "/setcash AMOUNT — correct the cash balance (SEK); not for top-ups\n"
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"
         "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
@@ -1013,6 +1042,8 @@ def main() -> None:
     app.add_handler(CommandHandler("target",   cmd_target))
     app.add_handler(CommandHandler("decisions", cmd_decisions))
     app.add_handler(CommandHandler("setcash",  cmd_setcash))
+    app.add_handler(CommandHandler("deposit",  cmd_deposit))
+    app.add_handler(CommandHandler("withdraw", cmd_withdraw))
     app.add_handler(CommandHandler("plist",    cmd_plist))
     app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
     app.add_handler(CommandHandler("prun",     cmd_prun))

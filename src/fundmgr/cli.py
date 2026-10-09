@@ -490,10 +490,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             lines.append(html.escape(decision.market_summary))
             # NAV vs benchmark performance line
             from fundmgr.data.benchmark import get_benchmark_return_pct
+            from fundmgr.reporting.dashboard import return_index
             nav_history = store.get_nav_history()
             if nav_history:
                 first = nav_history[0]
-                fund_ret = (snap.nav_sek / first.portfolio_nav_sek - 1) * 100 if first.portfolio_nav_sek else None
+                # Deposit-proof: today's point was written above from this same
+                # snapshot, so the index's last step is the fund's own return.
+                fund_ret = (return_index(nav_history, store.get_cash_flows())[-1] - 1) * 100
                 bench_ret = get_benchmark_return_pct(store, since_date=first.date)
                 if fund_ret is not None:
                     bench_str = f"  vs {cfg.benchmark} {bench_ret:+.1f}%" if bench_ret is not None else ""
@@ -730,6 +733,90 @@ def set_cash_cmd(amount: float):
     old = store.get_cash()
     store.set_cash(amount)
     click.echo(f"✓ Cash set: {old:,.2f} → {amount:,.2f} SEK")
+    if amount > old:
+        click.echo("  If that was new money transferred in, undo this with set-cash "
+                   f"{old:.2f} and use `fund deposit {amount - old:.2f}` (/deposit) "
+                   "instead — set-cash counts a top-up as profit.")
+
+
+def _record_flow(sign: int, amount: float, on: str | None, note: str, record_only: bool) -> None:
+    cfg, store = _get_store()
+    try:
+        cash = store.record_cash_flow(sign * amount, flow_date=on, note=note,
+                                      adjust_cash=not record_only)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    word = "Deposit" if sign > 0 else "Withdrawal"
+    if record_only:
+        click.echo(f"✓ {word} of {amount:,.0f} SEK recorded for {on} — cash left as it is "
+                   f"({cash:,.0f} SEK).")
+    else:
+        click.echo(f"✓ {word} of {amount:,.0f} SEK recorded. Cash now {cash:,.0f} SEK.")
+    flows = store.get_cash_flows()
+    from fundmgr.reporting.dashboard import invested
+    click.echo(f"  Money put in: {invested(cfg.capital_sek, flows):,.0f} SEK "
+               f"(start {cfg.capital_sek:,.0f} + net flows "
+               f"{sum(f['amount_sek'] for f in flows):+,.0f}). "
+               "The fund's return and alpha exclude this.")
+
+
+_FLOW_OPTIONS = [
+    click.argument("amount", type=click.FloatRange(min=0, min_open=True)),
+    click.option("--note", default="", help="What it was, e.g. 'monthly top-up'."),
+    click.option("--record-only", is_flag=True,
+                 help="Backfill only: cash was already corrected with set-cash, so just "
+                      "log the flow. Requires --date."),
+    click.option("--date", "on", default=None, metavar="YYYY-MM-DD",
+                 help="With --record-only: the first NAV date that already shows the money."),
+]
+
+
+def _flow_options(fn):
+    for opt in reversed(_FLOW_OPTIONS):
+        fn = opt(fn)
+    return fn
+
+
+def _check_flow_args(record_only: bool, on: str | None) -> None:
+    if record_only and not on:
+        raise click.UsageError("--record-only needs --date")
+    if on and not record_only:
+        raise click.UsageError("--date is only for --record-only backfills; "
+                               "a deposit that moves cash is dated today")
+
+
+@cli.command("deposit")
+@_flow_options
+def deposit(amount: float, note: str, record_only: bool, on: str | None):
+    """Add AMOUNT SEK of new money to the book — not counted as profit.
+
+    Use this, not set-cash, when you transfer money into the account: set-cash
+    overwrites the balance and the dashboard would read the top-up as a gain.
+    """
+    _check_flow_args(record_only, on)
+    _record_flow(+1, amount, on, note, record_only)
+
+
+@cli.command("withdraw")
+@_flow_options
+def withdraw(amount: float, note: str, record_only: bool, on: str | None):
+    """Take AMOUNT SEK out of the book — not counted as a loss."""
+    _check_flow_args(record_only, on)
+    _record_flow(-1, amount, on, note, record_only)
+
+
+@cli.command("cash-flows")
+def cash_flows():
+    """List every deposit and withdrawal, and what has been put in overall."""
+    from fundmgr.reporting.dashboard import invested
+    cfg, store = _get_store()
+    flows = store.get_cash_flows()
+    click.echo(f"\n─── {cfg.display_name} — money in and out ───────────────")
+    click.echo(f"  Starting capital: {cfg.capital_sek:>12,.0f} SEK")
+    for f in flows:
+        note = f"  {f['note']}" if f["note"] else ""
+        click.echo(f"  {f['date']}  {f['amount_sek']:>+12,.0f} SEK{note}")
+    click.echo(f"  Money put in:     {invested(cfg.capital_sek, flows):>12,.0f} SEK\n")
 
 
 @cli.command("undo-fill")
@@ -792,7 +879,12 @@ def backfill_nav():
     ))
 
     inserted = 1
+    # Deposits and withdrawals move the replayed cash on their own dates, or
+    # every point after a top-up would be short of the money that arrived.
+    pending_flows = list(store.get_cash_flows())
     for txn in txns:
+        while pending_flows and pending_flows[0]["date"] <= txn.timestamp.strftime("%Y-%m-%d"):
+            cash += pending_flows.pop(0)["amount_sek"]
         if txn.side == "buy":
             existing_shares, existing_cost = sim_positions.get(txn.ticker, (0.0, 0.0))
             new_shares = existing_shares + txn.shares

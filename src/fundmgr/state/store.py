@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS nav_history (
     cash_sek            REAL NOT NULL
 );
 
+-- Money in (+) and out (-) of the book that is not a trade. Returns are
+-- measured with these taken out, so a deposit never reads as profit. A flow
+-- belongs to the NAV point of its date: that point already includes it.
+CREATE TABLE IF NOT EXISTS cash_flows (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    date        TEXT NOT NULL,
+    amount_sek  REAL NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
 -- Tracks the outcome of each LLM action recommendation once enough time has passed.
 -- Populated retrospectively (e.g. 4 weeks after the decision).
 CREATE TABLE IF NOT EXISTS decision_outcomes (
@@ -301,6 +312,66 @@ class Store:
         new_balance = self.get_cash() + delta_sek
         self.set_cash(new_balance)
         return new_balance
+
+    # ── Deposits and withdrawals ──────────────────────────────────────────────
+
+    def record_cash_flow(
+        self,
+        amount_sek: float,
+        flow_date: str | None = None,
+        note: str = "",
+        adjust_cash: bool = True,
+    ) -> float:
+        """Record money moving in (+) or out (-) of the book. Returns the cash balance.
+
+        With `adjust_cash` (the normal case) the cash balance moves with it and
+        today's NAV point, if one is already written, gains the same amount — so
+        the point on the flow's date includes the flow, which is the convention
+        returns are computed against, whichever job writes the next point.
+
+        `adjust_cash=False` is for recording a top-up after the fact, when cash
+        was already corrected with set-cash: only the ledger row is written, and
+        `flow_date` must name the first NAV date that already shows the money.
+        """
+        if not math.isfinite(amount_sek) or amount_sek == 0:
+            raise ValueError(f"cash flow must be a non-zero amount, got {amount_sek!r}")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        date = flow_date or today
+        datetime.strptime(date, "%Y-%m-%d")
+        if adjust_cash and date != today:
+            raise ValueError("a flow that moves cash is dated today; use adjust_cash=False to backfill")
+        with self._conn() as conn:
+            row = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+            cash = float(row["balance_sek"]) if row else 0.0
+            if adjust_cash:
+                if cash + amount_sek < 0:
+                    raise ValueError(
+                        f"withdrawal of {-amount_sek:,.2f} exceeds cash of {cash:,.2f}"
+                    )
+                cash += amount_sek
+                conn.execute(
+                    "INSERT INTO cash (id, balance_sek) VALUES (1, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET balance_sek = excluded.balance_sek",
+                    (cash,),
+                )
+                conn.execute(
+                    "UPDATE nav_history SET portfolio_nav_sek = portfolio_nav_sek + ?, "
+                    "cash_sek = cash_sek + ? WHERE date = ?",
+                    (amount_sek, amount_sek, date),
+                )
+            conn.execute(
+                "INSERT INTO cash_flows (date, amount_sek, note, created_at) VALUES (?, ?, ?, ?)",
+                (date, amount_sek, note, datetime.utcnow().isoformat()),
+            )
+        return cash
+
+    def get_cash_flows(self) -> list[dict]:
+        """Every deposit (+) and withdrawal (-), oldest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT date, amount_sek, note, created_at FROM cash_flows ORDER BY date, id"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Meta flags ────────────────────────────────────────────────────────────
 
@@ -721,6 +792,7 @@ class Store:
         if not nav_rows:
             return []
 
+        flows = self.get_cash_flows()
         nav_by_date = {r["date"]: r for r in nav_rows}
         nav_dates = sorted(nav_by_date.keys())
 
@@ -744,7 +816,11 @@ class Store:
             if nav_start is None or nav_end is None:
                 continue
 
-            nav_ret   = nav_end["portfolio_nav_sek"] / nav_start["portfolio_nav_sek"] - 1
+            # Net out deposits in the window, or a top-up week would score as
+            # the best decision the fund ever made.
+            flow = sum(f["amount_sek"] for f in flows
+                       if nav_start["date"] < f["date"] <= nav_end["date"])
+            nav_ret   = (nav_end["portfolio_nav_sek"] - flow) / nav_start["portfolio_nav_sek"] - 1
             bench_ret = nav_end["benchmark_value"]   / nav_start["benchmark_value"]   - 1
             score     = round(nav_ret - bench_ret, 6)
 
@@ -1848,6 +1924,7 @@ class Store:
         "transactions",
         "recommendations",
         "nav_history",
+        "cash_flows",
         "decision_outcomes",
         "learnings",
         "position_stops",

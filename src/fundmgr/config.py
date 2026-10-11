@@ -136,6 +136,9 @@ class ShadowConfig:
     candidate: str | None = None
     benchmark_currency: str = ""
     benchmark_calendar: str = ""
+    # Named variants (experiments.VARIANTS), each a further pair per run, e.g.
+    # ["no_lessons"]. Created once with `fund shadow-variant NAME`.
+    variants: list[str] = field(default_factory=list)
 
 
 @dataclass

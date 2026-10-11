@@ -14,8 +14,8 @@ from pathlib import Path
 
 from fundmgr.data.market_hours import _EXCHANGE_TO_CALENDAR, is_trading_day
 from fundmgr.engine.experiments import (
-    Case, FORWARD_CONVENTION, Outcomes, compare_guidance, digest, load_case,
-    project_allocation, score_comparison, validate_candidate, write_report,
+    Case, FORWARD_CONVENTION, VARIANTS, Outcomes, candidate_prompt, compare_guidance,
+    digest, load_case, project_allocation, score_comparison, validate_candidate, write_report,
 )
 
 
@@ -35,17 +35,62 @@ def _check_hash(payload: dict, key: str) -> None:
         raise ValueError(f"Modified artifact: {key}")
 
 
-def record_forward(cfg, snapshot: dict, run_id: str, tickers: list) -> Path | None:
+def variant_path(cfg, name: str) -> Path:
+    """Where `fund shadow-variant NAME` writes a fund's variant candidate."""
+    return cfg.optimizer.compiled_dir / "variants" / cfg.db_path.stem / f"{name}.json"
+
+
+def create_variant(cfg, name: str, replace: bool = False) -> tuple[Path, bool]:
+    """Write the fund's `name` variant candidate. Returns (path, written).
+
+    It must exist before the run it is compared on (a candidate may not postdate
+    its case), so it is created once ahead of time rather than during a run. It
+    pins today's mandate and incumbent guidance: if either changes, the pair is
+    refused at registration and the variant has to be created again. Replacing
+    it starts a new evidence group; earlier results stay valid in their own.
+    """
+    from fundmgr.engine.optimizer import guidance_fingerprint, load_guidance
+
+    if name not in VARIANTS:
+        raise ValueError(f"Unknown variant {name!r}; known: {', '.join(sorted(VARIANTS))}")
+    path = variant_path(cfg, name)
+    if path.exists() and not replace:
+        return path, False
+    now = datetime.now(timezone.utc)
+    payload = {
+        "variant": name, "description": VARIANTS[name],
+        "instructions": load_guidance(cfg), "status": "pending_evaluation",
+        "candidate_id": f"variant_{name}_{now.strftime('%Y%m%d_%H%M%S')}",
+        "fund_id": cfg.db_path.stem, "task_model": cfg.llm.model_id,
+        "provider": cfg.llm.provider, "horizon_days": cfg.evaluation_horizon_days,
+        "mandate": cfg.mandate_path.read_text().strip(),
+        "incumbent_guidance_hash": guidance_fingerprint(cfg),
+        "created_at": now.isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    write_report(path, payload)
+    return path, True
+
+
+def record_forward(cfg, snapshot: dict, run_id: str, tickers: list,
+                   candidate_path: str | None = None) -> Path | None:
     """Called only by a new, saved weekly run when shadow.candidate is configured.
 
     Reserve the run before calls. A crash/invalid pair cannot silently be retried
     and cherry-picked. Disabled profiles don't create files or call a provider.
+
+    `candidate_path` records an additional pair for the same run (a variant such
+    as no_lessons); its directory is keyed by run and candidate so the pairs
+    never collide, while the primary candidate keeps its original key.
     """
-    if not cfg.shadow.candidate:
+    path_str = candidate_path or cfg.shadow.candidate
+    if not path_str:
         return None
     case = load_case(snapshot)
-    candidate = json.loads(Path(cfg.shadow.candidate).read_text())
+    candidate = json.loads(Path(path_str).read_text())
     created = validate_candidate(case, candidate)
+    candidate_prompt(case, snapshot, candidate)  # Refuse an ineligible arm before reserving.
     now = datetime.now(timezone.utc)
     if not (created <= case.decision_time <= now
             and now - case.decision_time < timedelta(hours=2)):
@@ -64,7 +109,8 @@ def record_forward(cfg, snapshot: dict, run_id: str, tickers: list) -> Path | No
         raise ValueError("Every shown ticker needs a known exchange calendar")
     for mic in set(calendars.values()) | {calendar}:
         _session(mic, now.date())
-    path = experiment_root(cfg) / digest({"run_id": run_id})[:24]
+    key = {"run_id": run_id} if candidate_path is None else {"run_id": run_id, "candidate": digest(candidate)}
+    path = experiment_root(cfg) / digest(key)[:24]
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.mkdir()  # Exclusive reservation, including across concurrent processes.

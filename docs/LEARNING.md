@@ -274,6 +274,23 @@ rounding or intraday execution simulation. Collection timestamps establish when
 this system retrieved evidence, not when the provider first published it. All
 forward results therefore remain **ineligible for automatic promotion**.
 
+## Variant arms: does each learning channel help?
+
+`shadow.variants` adds a further registered pair per saved run, using the same
+reservation, scoring and audit chain as the guidance candidate. A variant keeps
+the incumbent guidance and changes the frozen prompt in one named way
+(`experiments.VARIANTS`):
+
+- `no_lessons`: the incumbent user prompt with exactly the run's lessons block
+  (`fields["learnings"]`) removed. Its candidate arm is the prompt the run would
+  have had with no lessons, so `candidate_advantage_pp > 0` means the lessons
+  cost return. A run that carried no lessons is refused before reservation.
+
+Create the variant once, before the runs it is compared on:
+`fund shadow-variant no_lessons`. It pins the mandate and incumbent guidance;
+after either changes, registration refuses it until it is written again with
+`--replace`, which starts a separate evidence group.
+
 ## Aggregate evidence audit
 
 ```sh

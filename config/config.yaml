@@ -90,6 +90,10 @@ shadow:
   candidate: config/compiled/candidates/fund/20260923_064505_341292_554ebc2ba230/guidance.json
   benchmark_currency: SEK
   benchmark_calendar: XSTO
+  # A second pair per run: the same prompt with its lessons removed. Measures
+  # whether the lessons injected each week actually improve decisions. Needs
+  # `fund shadow-variant no_lessons` once on the Pi. Skipped on a run with no lessons.
+  variants: [no_lessons]
 
 # Prompt optimizer (`fund optimize`: bounded instruction search; MIPRO retired).
 optimizer:

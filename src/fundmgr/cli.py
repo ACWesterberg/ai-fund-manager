@@ -597,12 +597,26 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if not dry_run:
         # Shadow research is isolated from fills and uses the saved pre-trade book.
         from fundmgr.engine.forward import record_forward, collect_forward
+        from fundmgr.engine.forward import variant_path
         try:
             shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers)
             if shadow_path:
                 click.echo(f"\n  Forward comparison recorded: {shadow_path}")
         except Exception as exc:
             click.echo(f"  Forward comparison unavailable: {exc}", err=True)
+        for variant in cfg.shadow.variants:
+            vpath = variant_path(cfg, variant)
+            if not vpath.exists():
+                click.echo(f"  Shadow variant {variant} not created yet — run "
+                           f"`fund shadow-variant {variant}` before the next run.", err=True)
+                continue
+            try:
+                shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id,
+                                             tickers, candidate_path=str(vpath))
+                if shadow_path:
+                    click.echo(f"  Forward comparison ({variant}) recorded: {shadow_path}")
+            except Exception as exc:
+                click.echo(f"  Forward comparison ({variant}) unavailable: {exc}", err=True)
         try:
             for result in collect_forward(cfg):
                 click.echo(f"  Shadow {result['case']}: {result['status']}"
@@ -3679,6 +3693,31 @@ def paper_edgar(slug, ticker, quarters, apply_):
                f"{tail}, {periods[0]} to {periods[-1]}.")
 
 
+@cli.command("shadow-variant")
+@click.argument("name")
+@click.option("--replace", is_flag=True,
+              help="Write it again (after a mandate or guidance change). Starts a new evidence group.")
+def shadow_variant(name: str, replace: bool):
+    """Create a variant candidate for the weekly shadow comparison, e.g. no_lessons.
+
+    no_lessons asks the incumbent prompt with its lessons removed, so the pair
+    measures whether the lessons help. Free: no model calls. List the variant
+    under shadow.variants in the fund's config for runs to use it.
+    """
+    from fundmgr.engine.forward import create_variant
+    cfg, _store = _get_store()
+    try:
+        path, written = create_variant(cfg, name.replace("-", "_"), replace=replace)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if written:
+        click.echo(f"✓ Variant written: {path}")
+    else:
+        click.echo(f"Variant already exists: {path} (use --replace to write it again)")
+    if name.replace("-", "_") not in cfg.shadow.variants:
+        click.echo("  Note: it is not listed under shadow.variants in this fund's config yet.")
+
+
 @cli.command("compare-guidance")
 @click.option("--run-id", required=True, help="Saved weekly run with frozen evaluation context")
 @click.option("--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
@@ -3771,7 +3810,10 @@ def evaluate_guidance_cmd(roots, min_periods, output):
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     for group in report["groups"]:
-        click.echo(f"{group['identity']['fund_id']} {group['group'][:12]}: {group['status']} "
+        variant = group["identity"].get("variant")
+        label = (f"variant {variant} (candidate arm = {variant}; a positive advantage means "
+                 "the incumbent's addition cost return)" if variant else "guidance candidate")
+        click.echo(f"{group['identity']['fund_id']} {group['group'][:12]} [{label}]: {group['status']} "
                    f"({group['scored_selected_periods']}/{group['matured_selected_periods']} matured non-overlapping periods scored)")
     click.echo(f"Evidence report saved: {output}. Descriptive only; no promotion.")
     if report["counts"].get("invalid"):

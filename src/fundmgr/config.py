@@ -139,6 +139,18 @@ class ShadowConfig:
 
 
 @dataclass
+class ReportWatchConfig:
+    # The report-reaction experiment (engine/report_events.py). Off unless a
+    # fund opts in; it judges drops but never trades or touches the prompt.
+    enabled: bool = False
+    move_threshold_pct: float = 5.0     # |abnormal| reaction that counts as an event
+    judge_threshold_pct: float = 5.0    # drops at least this large get a verdict
+    max_judged_per_day: int = 10        # largest drops first; the rest stay unjudged
+    reasoning_effort: str = "medium"
+    max_tokens: int = 8000
+
+
+@dataclass
 class AppConfig:
     capital_sek: float = 50000.0
     cadence: str = "weekly"
@@ -151,6 +163,7 @@ class AppConfig:
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     shadow: ShadowConfig = field(default_factory=ShadowConfig)
+    report_watch: ReportWatchConfig = field(default_factory=ReportWatchConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -328,6 +341,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.optimizer = OptimizerConfig(**opt_raw)
         if compiled:
             cfg.optimizer.compiled_dir = ROOT / compiled
+    if rw_raw := raw.get("report_watch"):
+        cfg.report_watch = ReportWatchConfig(**rw_raw)
     if shadow_raw := raw.get("shadow"):
         cfg.shadow = ShadowConfig(**shadow_raw)
         if cfg.shadow.candidate:

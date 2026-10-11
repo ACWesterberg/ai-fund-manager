@@ -50,6 +50,39 @@ CREATE TABLE IF NOT EXISTS nav_history (
     cash_sek            REAL NOT NULL
 );
 
+-- The report-reaction experiment: one row per report that moved a stock, with
+-- the model's verdict on whether the move was justified and the abnormal
+-- returns that followed. Research data, not book state — reset keeps it.
+CREATE TABLE IF NOT EXISTS report_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker              TEXT NOT NULL,
+    report_date         TEXT NOT NULL,
+    event_date          TEXT NOT NULL,       -- close the reaction is measured to; entry point
+    reaction_pct        REAL NOT NULL,
+    abnormal_pct        REAL NOT NULL,       -- reaction minus the benchmark's
+    volume_ratio        REAL,
+    source              TEXT NOT NULL,       -- calendar | news
+    eps_estimate        REAL,                -- consensus EPS, where Yahoo carries it
+    eps_reported        REAL,
+    eps_surprise_pct    REAL,
+    verdict             TEXT,                -- overreaction | justified | unclear | NULL
+    confidence          REAL,
+    what_changed        TEXT,
+    temporary_factors   TEXT,
+    structural_factors  TEXT,
+    expectations        TEXT,
+    quotes_json         TEXT,
+    n_sources           INTEGER,
+    judge_model         TEXT,
+    judged_at           TEXT,
+    fwd_5               REAL,
+    fwd_20              REAL,
+    fwd_28              REAL,
+    matured_at          TEXT,
+    created_at          TEXT NOT NULL,
+    UNIQUE (ticker, report_date)
+);
+
 -- Money in (+) and out (-) of the book that is not a trade. Returns are
 -- measured with these taken out, so a deposit never reads as profit. A flow
 -- belongs to the NAV point of its date: that point already includes it.
@@ -312,6 +345,62 @@ class Store:
         new_balance = self.get_cash() + delta_sek
         self.set_cash(new_balance)
         return new_balance
+
+    # ── Report-reaction experiment ────────────────────────────────────────────
+
+    def add_report_event(self, event: dict) -> int | None:
+        """Log a report reaction once. Returns its id, or None if already logged."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO report_events (ticker, report_date, event_date, "
+                "reaction_pct, abnormal_pct, volume_ratio, source, eps_estimate, "
+                "eps_reported, eps_surprise_pct, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (event["ticker"], event["report_date"], event["event_date"],
+                 event["reaction_pct"], event["abnormal_pct"], event.get("volume_ratio"),
+                 event["source"], event.get("eps_estimate"), event.get("eps_reported"),
+                 event.get("eps_surprise_pct"), datetime.utcnow().isoformat()),
+            )
+            return cur.lastrowid if cur.rowcount else None
+
+    def get_report_events(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM report_events ORDER BY event_date, ticker"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_report_verdict(self, event_id: int, verdict: dict) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE report_events SET verdict = ?, confidence = ?, what_changed = ?, "
+                "temporary_factors = ?, structural_factors = ?, expectations = ?, "
+                "quotes_json = ?, n_sources = ?, judge_model = ?, judged_at = ? WHERE id = ?",
+                (verdict["verdict"], verdict.get("confidence"), verdict.get("what_changed", ""),
+                 verdict.get("temporary_factors", ""), verdict.get("structural_factors", ""),
+                 verdict.get("expectations", ""), json.dumps(verdict.get("quotes", [])),
+                 verdict.get("n_sources", 0), verdict.get("judge_model", ""),
+                 datetime.utcnow().isoformat(), event_id),
+            )
+
+    def set_report_forward(self, event_id: int, fwd: dict[int, float | None]) -> None:
+        matured = datetime.utcnow().isoformat() if fwd.get(28) is not None else None
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE report_events SET fwd_5 = COALESCE(?, fwd_5), "
+                "fwd_20 = COALESCE(?, fwd_20), fwd_28 = COALESCE(?, fwd_28), "
+                "matured_at = COALESCE(?, matured_at) WHERE id = ?",
+                (fwd.get(5), fwd.get(20), fwd.get(28), matured, event_id),
+            )
+
+    def count_report_verdicts_on(self, day: str) -> int:
+        """Verdicts actually paid for on `day` (UTC) — what the daily cap counts."""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM report_events WHERE judge_model != '' "
+                "AND substr(judged_at, 1, 10) = ?",
+                (day,),
+            ).fetchone()[0]
 
     # ── Deposits and withdrawals ──────────────────────────────────────────────
 

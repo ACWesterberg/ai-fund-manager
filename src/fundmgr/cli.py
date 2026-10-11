@@ -1594,6 +1594,62 @@ def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | Non
         click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
 
 
+@cli.command("report-study")
+@click.option("--years", default=2, show_default=True, type=click.IntRange(1, 5),
+              help="How far back to look for reports.")
+@click.option("--limit", default=None, type=click.IntRange(min=1),
+              help="Only the first N names — a quick look before the full sweep.")
+def report_study(years: int, limit: int | None):
+    """Free: what did past report-day reactions go on to do? No model calls.
+
+    Answers the question the report-reaction experiment rests on — in this
+    universe, do report-day drops tend to reverse or keep falling — from price
+    history alone. Slow on the full universe: one Yahoo lookup per name.
+    """
+    from fundmgr.engine.report_events import format_study, run_study
+    cfg, store = _get_store()
+    tickers = get_enabled_tickers(cfg.universe_path)
+    if limit:
+        tickers = tickers[:limit]
+    click.echo(format_study(run_study(store, cfg, tickers, years=years, echo=click.echo)))
+
+
+@cli.command("report-watch")
+@click.option("--dry-run", is_flag=True,
+              help="Detect and show what would be judged. No model calls, nothing written.")
+def report_watch(dry_run: bool):
+    """Log yesterday's report reactions and judge the biggest drops (capped).
+
+    An experiment: verdicts are scored at +5/+20/+28 trading days and compared
+    in `fund report-results`. Nothing trades and nothing reaches the weekly
+    prompt. Overreaction calls go to Telegram as a daily digest.
+    """
+    from fundmgr.engine.report_events import digest_html, run_watch
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if _paused(cfg, "report watch"):
+        return
+    if not cfg.report_watch.enabled:
+        click.echo("report_watch is not enabled in this fund's config — nothing to do.")
+        return
+    tickers = get_enabled_tickers(cfg.universe_path)
+    judged = run_watch(store, cfg, tickers, dry_run=dry_run, echo=click.echo)
+    if dry_run:
+        return
+    msg = digest_html(cfg.display_name, judged)
+    if msg and send_telegram(msg):
+        click.echo("  Digest sent to Telegram.")
+
+
+@cli.command("report-results")
+def report_results():
+    """How the report-reaction verdicts have done so far. Free."""
+    from fundmgr.engine.report_events import format_results
+    cfg, store = _get_store()
+    click.echo(format_results(store.get_report_events(), cfg.report_watch.judge_threshold_pct))
+
+
 @cli.command("check-news")
 @click.option("--auto-run/--no-auto-run", default=True, show_default=True,
               help="Automatically trigger 'fund run' when a high-severity event fires")

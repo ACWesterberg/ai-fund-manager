@@ -69,6 +69,17 @@ reporting:
   currency: SEK
   output_dir: "data/reports"
 
+# Report-reaction experiment (`fund report-watch`, engine/report_events.py):
+# logs each report that moves a stock ±5% vs the index, has the model judge the
+# biggest drops (overreaction / justified / unclear), and scores every event at
+# +5/+20/+28 trading days. Never trades or touches the weekly prompt.
+report_watch:
+  enabled: true
+  move_threshold_pct: 5.0
+  judge_threshold_pct: 5.0
+  max_judged_per_day: 10     # largest drops first; one call each, medium reasoning
+  reasoning_effort: medium
+
 # Prompt optimizer (DSPy MIPROv2, `fund optimize`).
 optimizer:
   # Training examples are pooled across the funds: MIPRO searches for

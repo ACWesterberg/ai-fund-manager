@@ -80,6 +80,12 @@
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_buffett_claude.log 2>&1
 
 
+# ═══ REPORT-REACTION EXPERIMENT (Nordic) ══════════════════════════════════════
+# After the OMX close: log yesterday's report reactions, judge up to 10 of the
+# biggest drops (one model call each), score older events, Telegram digest of
+# overreaction calls. `fund report-results` shows how the verdicts are doing.
+15 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-watch >> data/logs/report_watch.log 2>&1
+
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,

@@ -706,20 +706,7 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
     cash = store.get_cash()
     click.echo(f"  Cash remaining: {cash:,.0f} SEK")
 
-    # Record a NAV snapshot (cost-basis) so the chart shows fill events
-    try:
-        bench_rows = store.get_benchmark()
-        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
-        positions_after = store.get_positions()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash
-        store.upsert_nav(NavPoint(
-            date=ts.strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_val,
-            cash_sek=cash,
-        ))
-    except Exception:
-        pass
+    _mark_after_ledger_change(cfg, store, ts.strftime("%Y-%m-%d"))
 
 
 @cli.command("set-cash")
@@ -1026,6 +1013,30 @@ def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
     if not quiet:
         click.echo(f"  NAV marked: {nav:,.0f} ({len(positions)} positions, cash {cash:,.0f}).")
     return nav
+
+
+def _mark_after_ledger_change(cfg, store, trade_date: str) -> None:
+    """Re-value today's NAV point after a fill or reconcile, at live prices.
+
+    This used to write cost basis — shares × average cost + cash — and fills are
+    recorded the same Monday the weekly run marks the book, so it overwrote the
+    marked point almost every week. The real fund's history ended up counting a
+    gain only once it was sold: +6.8% on record against ~+10% held.
+
+    A back-dated fill writes nothing, since today's prices would misstate that
+    day. Advisory throughout: the fill is already booked, so a failed valuation
+    leaves the existing point as it is rather than failing the command.
+    """
+    if trade_date != datetime.utcnow().strftime("%Y-%m-%d"):
+        click.echo(f"  NAV history left as it is — {trade_date} is not today.")
+        return
+    try:
+        nav = _mark_nav(cfg, store)
+    except Exception as exc:
+        nav = None
+        click.echo(f"  ⚠ NAV not marked: {exc}")
+    if nav is None:
+        click.echo("  Today's NAV point left unchanged; the next run or fill will mark it.")
 
 
 @cli.command("mark")
@@ -1809,21 +1820,7 @@ def reconcile(holdings_path: str | None, cash_actual: float | None,
         store.set_cash(actual_cash)
         click.echo(f"  ✓ Cash set to {actual_cash:,.2f} SEK")
 
-    # Record a cost-basis NAV snapshot so the chart reflects the reconciled book.
-    try:
-        bench_rows = store.get_benchmark()
-        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
-        positions_after = store.get_positions()
-        cash_after = store.get_cash()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash_after
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_val,
-            cash_sek=cash_after,
-        ))
-    except Exception:
-        pass
+    _mark_after_ledger_change(cfg, store, datetime.utcnow().strftime("%Y-%m-%d"))
     click.echo("\n  Reconciliation applied.")
 
 

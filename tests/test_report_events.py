@@ -311,3 +311,42 @@ def test_the_study_stops_with_the_reason_when_the_calendar_cannot_be_read(store,
     monkeypatch.setattr(rx, "run_study", broken)
     result = CliRunner().invoke(commands.cli, ["report-study", "--limit", "5"])
     assert result.exit_code != 0 and "lxml" in result.output
+
+
+def test_the_study_fetches_in_chunks_and_says_how_far_it_has_got(store, cfg, monkeypatch):
+    """One silent 1,605-name download was indistinguishable from a hang."""
+    calls, lines = [], []
+
+    def fetch(chunk, store_, lookback_days, force_refresh=False):
+        calls.append(([t.yahoo_ticker for t in chunk], force_refresh))
+        if any(t.yahoo_ticker == "N120.ST" for t in chunk) and not force_refresh:
+            raise RuntimeError("Yahoo throttled")
+        return {}
+    monkeypatch.setattr("fundmgr.data.prices.fetch_and_cache_prices", fetch)
+    monkeypatch.setattr(rx, "_ensure_benchmark", lambda s, c, d: rx._Bench([]))
+    tickers = [_ticker(f"N{i}.ST") for i in range(250)]
+    rx.run_study(store, cfg, tickers, history=lambda t: [], echo=lines.append)
+
+    plain = [names for names, forced in calls if not forced]
+    assert [len(c) for c in plain] == [100, 100, 50]
+    assert sorted(sum(plain, [])) == sorted(t.yahoo_ticker for t in tickers)
+    assert any("failed: Yahoo throttled" in ln for ln in lines)
+    assert [ln.split(" · ")[0].strip() for ln in lines if ln.strip().startswith("prices ")] == [
+        "prices 100/250", "prices 200/250", "prices 250/250"]
+    assert sum(ln.strip().startswith("reports ") for ln in lines) == 5     # every 50 names
+
+
+def test_a_name_with_too_short_a_history_is_fetched_again_forced(store, cfg, monkeypatch):
+    """The cache skips anything updated today, however little of it there is."""
+    days = _days(60)
+    _seed(store, "SHORT.ST", [100.0] * 60, days)
+    forced = []
+
+    def fetch(chunk, store_, lookback_days, force_refresh=False):
+        if force_refresh:
+            forced.extend(t.yahoo_ticker for t in chunk)
+        return {}
+    monkeypatch.setattr("fundmgr.data.prices.fetch_and_cache_prices", fetch)
+    monkeypatch.setattr(rx, "_ensure_benchmark", lambda s, c, d: rx._Bench([]))
+    rx.run_study(store, cfg, [_ticker("SHORT.ST")], history=lambda t: [], echo=lambda *_: None)
+    assert forced == ["SHORT.ST"]

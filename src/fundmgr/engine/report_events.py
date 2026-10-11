@@ -29,12 +29,14 @@ import logging
 import math
 import random
 import re
+import time
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median
 from typing import Callable
 
 HORIZONS = (5, 20, 28)
+FETCH_CHUNK = 100
 MIN_TO_CONCLUDE = 20
 MAX_SOURCE_CHARS = 30_000
 
@@ -208,23 +210,54 @@ def _ensure_benchmark(store, cfg, days: int) -> _Bench:
 
 # ── Step 1: the free base-rate study ──────────────────────────────────────────
 
+def _elapsed(started: float) -> str:
+    secs = int(time.monotonic() - started)
+    return f"{secs // 60}m{secs % 60:02d}s"
+
+
+def _fetch_history(store, tickers: list, days: int, echo: Callable[[str], None]) -> None:
+    """Prices back `days` for every name, in chunks, saying how far it has got.
+
+    One 1,605-ticker download printed nothing for as long as it took, which
+    from the outside is indistinguishable from a hang, and is the request
+    Yahoo is likeliest to throttle. The cache also skips any name already
+    updated today however short its history, so a name the 90-day watch has
+    touched would give the study one year instead of two: those are fetched
+    again, forced.
+    """
+    from fundmgr.data.prices import fetch_and_cache_prices
+
+    since = (datetime.utcnow() - timedelta(days=days - 14)).strftime("%Y-%m-%d")
+    started = time.monotonic()
+    for i in range(0, len(tickers), FETCH_CHUNK):
+        chunk = tickers[i:i + FETCH_CHUNK]
+        try:
+            fetch_and_cache_prices(chunk, store, lookback_days=days)
+            short = [t for t in chunk
+                     if not (rows := store.get_prices(t.yahoo_ticker)) or rows[0]["date"] > since]
+            if short:
+                fetch_and_cache_prices(short, store, lookback_days=days, force_refresh=True)
+        except Exception as exc:
+            echo(f"  ⚠ prices for names {i + 1}–{i + len(chunk)} failed: {exc}")
+        echo(f"  prices {min(i + FETCH_CHUNK, len(tickers))}/{len(tickers)} · {_elapsed(started)}")
+
+
 def run_study(store, cfg, tickers: list, years: int = 2,
               history: Callable[[str], list[dict]] | None = None,
               echo: Callable[[str], None] = print) -> dict:
     """Every past report Yahoo dates for these names: reaction and what followed."""
-    from fundmgr.data.prices import fetch_and_cache_prices
     history = history or earnings_history
     _quiet_yfinance()
 
     days = 365 * years + 30
-    echo(f"  Fetching {years}y of prices for {len(tickers)} names…")
-    fetch_and_cache_prices(tickers, store, lookback_days=days)
+    echo(f"  Fetching {years}y of prices for {len(tickers)} names, {FETCH_CHUNK} at a time…")
+    _fetch_history(store, tickers, days, echo)
     bench = _ensure_benchmark(store, cfg, days)
 
+    echo("  Looking up report dates, one name at a time…")
     events, covered = [], 0
+    started = time.monotonic()
     for n, t in enumerate(tickers, 1):
-        if n % 100 == 0:
-            echo(f"  …{n}/{len(tickers)} names, {len(events)} reports so far")
         reports = history(t.yahoo_ticker)
         if reports:
             covered += 1
@@ -239,6 +272,11 @@ def run_study(store, cfg, tickers: list, years: int = 2,
             events.append({"ticker": t.yahoo_ticker, "report_date": rep["date"],
                            "abnormal_pct": r[1], "fwd": forward(series, bench, win[1]),
                            "eps_surprise_pct": rep.get("eps_surprise_pct")})
+        if n % 50 == 0 or n == len(tickers):
+            spent = time.monotonic() - started
+            left = int(spent / n * (len(tickers) - n))
+            echo(f"  reports {n}/{len(tickers)} names · {len(events)} found · "
+                 f"{_elapsed(started)} elapsed, ~{left // 60}m left")
     return {"n_tickers": len(tickers), "covered": covered, "events": events}
 
 

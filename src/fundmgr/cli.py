@@ -1598,7 +1598,7 @@ def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | Non
 @click.option("--years", default=2, show_default=True, type=click.IntRange(1, 5),
               help="How far back to look for reports.")
 @click.option("--limit", default=None, type=click.IntRange(min=1),
-              help="Only the first N names — a quick look before the full sweep.")
+              help="A random sample of N names — a quick look before the full sweep.")
 def report_study(years: int, limit: int | None):
     """Free: what did past report-day reactions go on to do? No model calls.
 
@@ -1606,12 +1606,20 @@ def report_study(years: int, limit: int | None):
     universe, do report-day drops tend to reverse or keep falling — from price
     history alone. Slow on the full universe: one Yahoo lookup per name.
     """
-    from fundmgr.engine.report_events import format_study, run_study
+    import random
+
+    from fundmgr.engine.report_events import CalendarUnavailable, format_study, run_study
     cfg, store = _get_store()
     tickers = get_enabled_tickers(cfg.universe_path)
-    if limit:
-        tickers = tickers[:limit]
-    click.echo(format_study(run_study(store, cfg, tickers, years=years, echo=click.echo)))
+    if limit and limit < len(tickers):
+        # Seeded, so a rerun looks at the same names. The first N rows were all
+        # Danish small caps and funds, which said nothing about the universe.
+        tickers = random.Random(0).sample(tickers, limit)
+    try:
+        result = run_study(store, cfg, tickers, years=years, echo=click.echo)
+    except CalendarUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(format_study(result))
 
 
 @cli.command("report-watch")

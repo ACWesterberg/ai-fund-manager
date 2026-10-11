@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import html
 import json
+import logging
 import math
 import random
 import re
@@ -147,15 +148,33 @@ def _num(v) -> float | None:
     return f if math.isfinite(f) else None
 
 
+class CalendarUnavailable(RuntimeError):
+    """Yahoo's report history can't be read at all here — a setup problem, not coverage."""
+
+
+def _quiet_yfinance() -> None:
+    # One "possibly delisted" line per dead ticker buried the run's own output.
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+
 def earnings_history(ticker: str) -> list[dict]:
     """Past report dates with EPS estimate, reported EPS and surprise, from Yahoo.
 
     Coverage of Nordic small caps is patchy; a name Yahoo knows nothing about
     returns [] and is caught, if at all, by the headline fallback.
+
+    A missing library is not "no coverage". yfinance needs lxml to read this
+    table and raises ImportError per call; swallowing it made the first study
+    on the Pi report 0/100 names covered when Yahoo had the dates all along.
     """
     try:
         import yfinance as yf
         df = yf.Ticker(ticker).get_earnings_dates(limit=16)
+    except ImportError as exc:
+        raise CalendarUnavailable(
+            f"Yahoo's report history can't be read: {exc} "
+            "Redeploy (lxml is now a dependency) or run: .venv/bin/pip install lxml"
+        ) from exc
     except Exception:
         return []
     if df is None or getattr(df, "empty", True):
@@ -195,6 +214,7 @@ def run_study(store, cfg, tickers: list, years: int = 2,
     """Every past report Yahoo dates for these names: reaction and what followed."""
     from fundmgr.data.prices import fetch_and_cache_prices
     history = history or earnings_history
+    _quiet_yfinance()
 
     days = 365 * years + 30
     echo(f"  Fetching {years}y of prices for {len(tickers)} names…")
@@ -268,7 +288,8 @@ def _headline_report(ticker: str, after: str, upto: str, news_fn) -> bool:
 
 def detect_events(store, cfg, tickers: list, bench: _Bench, today: str | None = None,
                   history: Callable[[str], list[dict]] | None = None,
-                  news_fn: Callable | None = None) -> list[dict]:
+                  news_fn: Callable | None = None,
+                  warn: Callable[[str], None] = print) -> list[dict]:
     """Reports from the previous session that moved a stock by the threshold.
 
     Price first, calendar second: only the handful of movers get a Yahoo lookup,
@@ -281,6 +302,7 @@ def detect_events(store, cfg, tickers: list, bench: _Bench, today: str | None = 
     stale = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=4)).strftime("%Y-%m-%d")
     since = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
     threshold = cfg.report_watch.move_threshold_pct
+    calendar_down = False
 
     events = []
     for t in tickers:
@@ -293,7 +315,14 @@ def detect_events(store, cfg, tickers: list, bench: _Bench, today: str | None = 
         if r is None or abs(r[1]) < threshold:
             continue
         before = series[i0]["date"]
-        rep = next((h for h in history(t.yahoo_ticker) if before < h["date"] <= report_day), None)
+        reports: list[dict] = []
+        if not calendar_down:
+            try:
+                reports = history(t.yahoo_ticker)
+            except CalendarUnavailable as exc:
+                calendar_down = True
+                warn(f"  ⚠ {exc}\n    Falling back to report headlines for every name this run.")
+        rep = next((h for h in reports if before < h["date"] <= report_day), None)
         if rep is not None:
             source = "calendar"
         elif _headline_report(t.yahoo_ticker, before, series[i1]["date"], news_fn):
@@ -501,9 +530,10 @@ def run_watch(store, cfg, tickers: list, dry_run: bool = False,
     from fundmgr.data.prices import fetch_and_cache_prices
     from fundmgr.engine.client import LLMError
 
+    _quiet_yfinance()
     fetch_and_cache_prices(tickers, store, lookback_days=90)
     bench = _ensure_benchmark(store, cfg, 120)
-    found = detect_events(store, cfg, tickers, bench)
+    found = detect_events(store, cfg, tickers, bench, warn=echo)
     echo(f"  {len(found)} report reaction(s) of ±{cfg.report_watch.move_threshold_pct:.0f}% "
          "or more vs the index.")
 

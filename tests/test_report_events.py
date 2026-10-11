@@ -269,3 +269,45 @@ def test_the_study_buckets_past_reports_and_reports_its_coverage(store, cfg, mon
     assert result["events"][0]["abnormal_pct"] == pytest.approx(-15.0)
     text = rx.format_study(result)
     assert "1/2 names (50%)" in text and "≤ −10%" in text
+
+
+def test_a_missing_library_is_said_out_loud_not_counted_as_no_coverage(monkeypatch):
+    """The first study on the Pi read 0/100 covered: lxml was missing, not the dates."""
+    class FakeTicker:
+        def __init__(self, t):
+            pass
+
+        def get_earnings_dates(self, limit):
+            raise ImportError("`Import lxml` failed.")
+    monkeypatch.setattr("yfinance.Ticker", FakeTicker)
+    with pytest.raises(rx.CalendarUnavailable, match="lxml"):
+        rx.earnings_history("VOLV-B.ST")
+
+
+def test_the_watch_falls_back_to_headlines_once_and_says_why(store, cfg):
+    days = _days(25)
+    bench = _flat_bench(store, days)
+    for sym in ("A.ST", "B.ST"):
+        _seed(store, sym, [100.0] * 23 + [92, 90], days)
+    calls, warned = [], []
+
+    def broken(t):
+        calls.append(t)
+        raise rx.CalendarUnavailable("lxml missing")
+    news = {"B.ST": [{"headline": "Interim report Q3", "published": days[-2]}]}
+    found = rx.detect_events(store, cfg, [_ticker("A.ST"), _ticker("B.ST")], bench,
+                             history=broken, news_fn=lambda t: news.get(t, []),
+                             warn=warned.append)
+    assert calls == ["A.ST"]                      # not retried for every name
+    assert len(warned) == 1 and "lxml missing" in warned[0]
+    assert [e["ticker"] for e in found] == ["B.ST"]
+
+
+def test_the_study_stops_with_the_reason_when_the_calendar_cannot_be_read(store, cfg, monkeypatch):
+    monkeypatch.setattr(commands, "_get_store", lambda cfg_=None: (cfg, store))
+
+    def broken(*a, **k):
+        raise rx.CalendarUnavailable("Yahoo's report history can't be read: lxml")
+    monkeypatch.setattr(rx, "run_study", broken)
+    result = CliRunner().invoke(commands.cli, ["report-study", "--limit", "5"])
+    assert result.exit_code != 0 and "lxml" in result.output

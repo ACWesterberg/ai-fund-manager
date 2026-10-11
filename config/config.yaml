@@ -80,7 +80,18 @@ report_watch:
   max_judged_per_day: 10     # largest drops first; one call each, medium reasoning
   reasoning_effort: medium
 
-# Prompt optimizer (DSPy MIPROv2, `fund optimize`).
+# Forward shadow comparison (engine/forward.py, docs/LEARNING.md). Each saved
+# Monday run also asks the incumbent prompt and this inactive candidate for a
+# decision on the same frozen inputs — two extra sample sets, no trades — and
+# scores both at a later common close. It is evidence for a promotion decision,
+# never a promotion. Started 2026-10-12 with the 2026-09-23 bounded-search
+# candidate; it is rejected (and the run carries on) if the mandate changes.
+shadow:
+  candidate: config/compiled/candidates/fund/20260923_064505_341292_554ebc2ba230/guidance.json
+  benchmark_currency: SEK
+  benchmark_calendar: XSTO
+
+# Prompt optimizer (`fund optimize`: bounded instruction search; MIPRO retired).
 optimizer:
   # Training examples are pooled across the funds: MIPRO searches for
   # instructions that make the decision task go better, which is a question

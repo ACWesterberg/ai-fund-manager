@@ -607,6 +607,33 @@ def sek_prices_for(store: Store, tickers: list[str], currency_map: dict[str, str
     return out
 
 
+def mark_nav_today(store: Store, meta: dict) -> float | None:
+    """Re-value a sleeve's NAV point for today at live prices after a ledger change.
+
+    Fills, retags and cost corrections used to write shares × average cost + cash
+    here, overwriting the day's marked point — the same fault that hid the real
+    fund's unrealised gains. Returns None and writes nothing when any holding has
+    no quote or FX rate: a hole read as cost would invent a value.
+    """
+    from fundmgr.data.quotes import live_prices
+
+    positions = store.get_positions()
+    tickers = [p.ticker for p in positions]
+    native = {t: v for t, v in (live_prices(tickers) if tickers else {}).items() if v}
+    prices_sek = sek_prices_for(store, tickers, meta["currency_map"], native)
+    if any(t not in prices_sek for t in tickers):
+        return None
+    nav = sum(p.shares * prices_sek[p.ticker] for p in positions) + store.get_cash()
+    bench_rows = store.get_benchmark()
+    store.upsert_nav(NavPoint(
+        date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        portfolio_nav_sek=round(nav, 2),
+        benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+        cash_sek=store.get_cash(),
+    ))
+    return nav
+
+
 def _cache_price_history(store: Store, tickers: list[str], lookback_days: int = 40) -> None:
     """Mirror recent daily closes into the store's price cache (native currency),
     so the evaluator can pin outcomes to decision_date + 28d closes."""

@@ -1067,6 +1067,105 @@ def mark():
         sys.exit(1)
 
 
+def _remark_point(point: NavPoint, held: dict[str, float], closes: dict[str, list[dict]],
+                  cur_by_ticker: dict[str, str], fx_to_sek: bool,
+                  max_age_days: int) -> tuple[float | None, str]:
+    """Market value of one NAV point's holdings from cached daily closes.
+
+    Returns (nav, "") or (None, reason). The newest close on or before the point's
+    date counts only if it is at most `max_age_days` calendar days old.
+    """
+    earliest = (datetime.strptime(point.date, "%Y-%m-%d")
+                - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+    equity = 0.0
+    for ticker, shares in held.items():
+        rows = [r for r in closes.get(ticker, []) if earliest <= r["date"] <= point.date]
+        if not rows:
+            return None, f"no close for {ticker}"
+        price = rows[-1]["close"]
+        cur = cur_by_ticker.get(ticker, "SEK")
+        if fx_to_sek and cur != "SEK":
+            from fundmgr.data.fx import rate_to_sek_on
+            rate = rate_to_sek_on(cur, rows[-1]["date"])
+            if rate is None:
+                return None, f"no {cur}/SEK rate for {rows[-1]['date']}"
+            price *= rate
+        equity += shares * price
+    return point.cash_sek + equity, ""
+
+
+@cli.command("remark-history")
+@click.option("--apply", "apply_", is_flag=True,
+              help="Write the re-marked points. Without it, only print them.")
+@click.option("--max-age-days", default=7, show_default=True,
+              help="Oldest cached close (calendar days before the point) that may value it.")
+def remark_history(apply_: bool, max_age_days: int):
+    """Re-value NAV points that were recorded at cost basis, from cached closes.
+
+    Until 2026-10-11 `fund fill`, `fund reconcile` and `fund backfill-nav` wrote
+    NAV as shares × average cost + cash, so the real fund's history counted a gain
+    only once it was sold (+6.8% on record against +11.7% marked). The fix stopped
+    new cost-basis points; this repairs the ones already written.
+
+    A point is re-valued only when its equity equals the replayed cost basis to
+    the krona — a point the weekly run or `fund mark` valued at market is left
+    alone. Recorded cash is kept, so deposits and set-cash corrections stand.
+    A point with any holding lacking a recent close (or FX rate) is left as it
+    is rather than half-valued. Closes are dividend-adjusted, so a point before
+    an ex-date reads slightly low.
+    """
+    from fundmgr.config import load_universe
+
+    cfg, store = _get_store()
+    history = store.get_nav_history()
+    txns = sorted(store.get_transactions(limit=100_000),
+                  key=lambda t: t.timestamp.strftime("%Y-%m-%dT%H:%M:%S.%f"))
+    if not history or not txns:
+        click.echo("Nothing to re-mark: no NAV history or no transactions.")
+        return
+
+    cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+    closes = {tk: store.get_prices(tk) for tk in {t.ticker for t in txns}}
+
+    changed = skipped = 0
+    for point in history:
+        held: dict[str, tuple[float, float]] = {}
+        for t in txns:
+            if t.timestamp.strftime("%Y-%m-%d") > point.date:
+                break
+            shares, avg = held.get(t.ticker, (0.0, 0.0))
+            if t.side == "buy":
+                total = shares + t.shares
+                held[t.ticker] = (total, (shares * avg + t.shares * t.price_sek) / total)
+            else:
+                held[t.ticker] = (max(0.0, shares - t.shares), avg)
+        open_ = {tk: s for tk, (s, _) in held.items() if s > 1e-9}
+        if not open_:
+            continue
+        cost = sum(s * held[tk][1] for tk, s in open_.items())
+        if abs((point.portfolio_nav_sek - point.cash_sek) - cost) > 1.0:
+            continue  # already valued at market
+
+        nav, reason = _remark_point(point, open_, closes, cur_by_ticker,
+                                    cfg.fx_to_sek, max_age_days)
+        if nav is None:
+            skipped += 1
+            click.echo(f"  {point.date}  {point.portfolio_nav_sek:>12,.0f}  left as it is ({reason})")
+            continue
+        changed += 1
+        click.echo(f"  {point.date}  {point.portfolio_nav_sek:>12,.0f} → {nav:>12,.0f}"
+                   f"  ({nav - point.portfolio_nav_sek:+,.0f})")
+        if apply_:
+            store.upsert_nav(NavPoint(date=point.date, portfolio_nav_sek=round(nav, 2),
+                                      benchmark_value=point.benchmark_value,
+                                      cash_sek=point.cash_sek))
+
+    verb = "Re-marked" if apply_ else "Would re-mark"
+    click.echo(f"\n{verb} {changed} cost-basis point(s); {skipped} left as they were.")
+    if changed and not apply_:
+        click.echo("Run again with --apply to write them.")
+
+
 @cli.command("check-stops")
 @click.option("--quiet", is_flag=True, help="Suppress output unless a stop or warning fires")
 def check_stops(quiet: bool):
@@ -2826,6 +2925,24 @@ def paper_import(json_file: str, name: str | None, capital: float | None,
                f"record fills with 'fund paper-fill {slug} …'.")
 
 
+def _mark_sleeve_after_ledger_change(meta: dict, store, trade_date: str) -> None:
+    """Sleeve counterpart of `_mark_after_ledger_change`: market value or nothing."""
+    from fundmgr import paper
+
+    if trade_date != datetime.utcnow().strftime("%Y-%m-%d"):
+        click.echo(f"  NAV history left as it is — {trade_date} is not today.")
+        return
+    try:
+        nav = paper.mark_nav_today(store, meta)
+    except Exception as exc:
+        nav = None
+        click.echo(f"  ⚠ NAV not marked: {exc}")
+    if nav is None:
+        click.echo("  Today's NAV point left unchanged; paper-track will mark it.")
+    else:
+        click.echo(f"  NAV marked: {nav:,.0f} SEK.")
+
+
 @cli.command("paper-fill")
 @click.argument("slug")
 @click.argument("ticker")
@@ -2885,19 +3002,7 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
                f"{gross:,.0f} SEK (fee {fee:.2f} SEK)")
     click.echo(f"  Cash remaining: {store.get_cash():,.0f} SEK")
 
-    # Cost-basis NAV snapshot so the chart reflects the fill event
-    try:
-        bench_rows = store.get_benchmark()
-        positions_after = store.get_positions()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=ts.strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
-    except Exception:
-        pass
+    _mark_sleeve_after_ledger_change(meta, store, ts.strftime("%Y-%m-%d"))
 
 
 @cli.command("paper-retag")
@@ -2946,17 +3051,7 @@ def paper_retag(slug: str, old: str, new: str | None):
         click.echo("  Price anchors were cleared: the drawdown line and review "
                    "price were set from the wrong instrument. Re-anchor after a "
                    "fresh look.")
-    try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
-    except Exception:
-        pass
+    _mark_sleeve_after_ledger_change(meta, store, datetime.utcnow().strftime("%Y-%m-%d"))
 
 
 @cli.command("paper-setcost")
@@ -2986,17 +3081,7 @@ def paper_setcost(slug: str, ticker: str, avg_sek: float):
     click.echo(f"✓ {res['ticker']}: cost basis {res['old_avg']:,.2f} → "
                f"{res['new_avg']:,.2f} SEK/share ({res['shares']:g} sh). "
                f"Cash {res['cash_delta']:+,.0f} SEK.")
-    try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
-    except Exception:
-        pass
+    _mark_sleeve_after_ledger_change(meta, store, datetime.utcnow().strftime("%Y-%m-%d"))
 
 
 @cli.command("paper-status")

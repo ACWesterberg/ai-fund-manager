@@ -247,5 +247,10 @@ unfunded buys atomically; reconcile missing holdings/cash before recording a fil
 Consensus and clipping preserve the highest-confidence action's monitoring plan.
 
 The dashboard requires `FUND_WEB_PASSWORD`; no configured password means 503.
-Only the GitHub deployment webhook bypasses Basic authentication, retaining its
-own signature validation. Browsers cannot submit authenticated cross-origin writes.
+Browsers log in once at `/login` (the code only) and get a signed, HttpOnly,
+SameSite=Lax session cookie for 90 days; it covers both web ports because cookies
+are scoped by host. Basic credentials are still accepted for scripts, but no
+response sends `WWW-Authenticate` (that challenge was the recurring browser
+popup). Failed logins are throttled per client. Only the GitHub deployment
+webhook bypasses authentication, retaining its own signature validation.
+Browsers cannot submit authenticated cross-origin writes.

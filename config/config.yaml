@@ -12,7 +12,9 @@ llm:
   temperature: 0.2
   max_tokens: 16000
   reasoning_effort: "high"  # low | medium | high — activates extended reasoning on gpt-5+/o-series
-  n_samples: 3              # run LLM 3× in parallel and take majority-vote consensus; 1 = disabled
+  n_samples: 5              # majority vote over 5 parallel calls; 1 = disabled. Was 3 until
+                            # 2026-10-12: the week's one marginal buy (IVSO vs BONEX) split
+                            # 2-of-3 differently across four sample sets of the same prompt.
 
 # Model that distils evaluated outcomes into learnings (one call per evaluation
 # batch, ~monthly). Defaults to this fund's provider's heavy reasoner. Set the

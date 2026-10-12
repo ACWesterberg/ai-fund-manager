@@ -274,6 +274,17 @@ rounding or intraday execution simulation. Collection timestamps establish when
 this system retrieved evidence, not when the provider first published it. All
 forward results therefore remain **ineligible for automatic promotion**.
 
+## The traded decision is the incumbent arm
+
+A saved weekly run passes its own consensus (decision, votes, sampling) to
+`record_forward`, so the incumbent arm is what was actually traded rather than a
+second sample set of the same prompt. The first shadow week showed why: two
+re-asked incumbents bought IVSO on 2-of-3 votes while the traded run had bought
+BONEX on its own 2-of-3. Guardrails and allocation are recomputed identically for
+both arms; an incomplete production vote makes the pair unscoreable. The
+registration records `incumbent_source`, and `aggregate` groups by it, so
+re-run and traded incumbents never pool.
+
 ## Variant arms: does each learning channel help?
 
 `shadow.variants` adds a further registered pair per saved run, using the same

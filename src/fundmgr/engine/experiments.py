@@ -257,8 +257,16 @@ def candidate_prompt(case: Case, snapshot: dict, candidate: dict) -> tuple[str, 
     raise ValueError(f"Unknown candidate variant: {variant}")
 
 
-def compare_guidance(snapshot: dict, candidate: dict) -> dict:
-    """Call both arms on identical frozen input. No future labels are accepted."""
+def compare_guidance(snapshot: dict, candidate: dict, incumbent: dict | None = None) -> dict:
+    """Call both arms on identical frozen input. No future labels are accepted.
+
+    `incumbent` is the production run's own consensus on this very prompt
+    ({decision, response, votes, sampling}). Re-asking the incumbent cost a
+    sample set per pair and answered a different question: the first shadow
+    week re-ran it twice and got IVSO both times, while the run the owner
+    traded on had bought BONEX on a 2-of-3 vote. Guardrails and allocation are
+    still recomputed here, identically for both arms.
+    """
     case = load_case(snapshot)
     candidate_created = validate_candidate(case, candidate)
     candidate_hash = digest(candidate)
@@ -273,7 +281,12 @@ def compare_guidance(snapshot: dict, candidate: dict) -> dict:
         if user != case.user:
             arm["user"] = user
         try:
-            decision, raw, votes, sampling = call_llm_consensus(system, user, case.config())
+            if name == "incumbent" and incumbent is not None:
+                decision, raw = incumbent["decision"], incumbent["response"]
+                votes, sampling = incumbent.get("votes"), incumbent["sampling"]
+                arm["source"] = "production_run"
+            else:
+                decision, raw, votes, sampling = call_llm_consensus(system, user, case.config())
             arm.update(decision=decision.model_dump(), response=raw, votes=votes, sampling=sampling)
             if sampling.get("failed") or sampling.get("succeeded") != case.llm.n_samples:
                 raise ValueError("Incomplete consensus sample set; comparison is not scoreable")

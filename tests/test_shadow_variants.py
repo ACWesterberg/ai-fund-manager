@@ -139,3 +139,51 @@ def test_creating_a_variant_twice_keeps_the_first(setup, monkeypatch):
     result = CliRunner().invoke(commands.cli, ["shadow-variant", "no_lessons", "--replace"])
     assert result.exit_code == 0 and "written" in result.output
     assert CliRunner().invoke(commands.cli, ["shadow-variant", "bogus"]).exit_code != 0
+
+
+# ── The traded decision as the incumbent arm ──────────────────────────────────
+
+def _production(n=1, ticker="B"):
+    run = DecisionRun(run_id="weekly-1", market_summary="Prod", cash_target_pct=90,
+        actions=[Action(ticker=ticker, side="buy", target_weight_pct=10,
+                        sek_estimate=10000, confidence=.8, thesis="Prod")])
+    return {"decision": run, "response": run.model_dump_json(), "votes": {ticker: n},
+            "sampling": {"requested": n, "succeeded": n, "failed": 0, "errors": []}}
+
+
+def test_the_traded_decision_is_the_incumbent_and_only_the_candidate_is_asked(setup):
+    """The first shadow week re-asked the incumbent twice and got IVSO; the owner traded BONEX."""
+    cfg, store, variant, tickers, calls = setup
+    snapshot = _prompt(cfg, store)
+    directory = fw.record_forward(cfg, snapshot, "weekly-1", tickers,
+                                  candidate_path=str(variant), incumbent=_production())
+    pair = json.loads((directory / "comparison.json").read_text())
+    registration = json.loads((directory / "registration.json").read_text())
+    assert len(calls) == 1 and LESSONS[0] not in calls[0]          # only the no-lessons arm paid
+    incumbent = pair["arms"]["incumbent"]
+    assert incumbent["source"] == "production_run" and incumbent["status"] == "ready"
+    assert [a["ticker"] for a in incumbent["approved"]] == ["B"]
+    assert registration["incumbent_source"] == "production_run"
+
+
+def test_an_incomplete_production_vote_cannot_be_scored(setup):
+    cfg, store, variant, tickers, _ = setup
+    production = _production()
+    production["sampling"] = {"requested": 1, "succeeded": 0, "failed": 1, "errors": ["x"]}
+    directory = fw.record_forward(cfg, _prompt(cfg, store), "weekly-1", tickers,
+                                  candidate_path=str(variant), incumbent=production)
+    pair = json.loads((directory / "comparison.json").read_text())
+    assert pair["arms"]["incumbent"]["status"] == "invalid"
+
+
+def test_rerun_and_traded_incumbents_are_separate_evidence_groups(setup, tmp_path):
+    from fundmgr.engine import aggregate
+    cfg, store, variant, tickers, _ = setup
+    snapshot = _prompt(cfg, store)
+    traded = fw.record_forward(cfg, snapshot, "weekly-1", tickers,
+                               candidate_path=str(variant), incumbent=_production())
+    rerun = fw.record_forward(cfg, snapshot, "weekly-2", tickers, candidate_path=str(variant))
+    groups = {aggregate.audit_case(d)["identity"]["incumbent_source"]: aggregate.audit_case(d)["group"]
+              for d in (traded, rerun)}
+    assert set(groups) == {"production_run", "rerun"}
+    assert groups["production_run"] != groups["rerun"]

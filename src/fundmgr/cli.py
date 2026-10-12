@@ -598,8 +598,12 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         # Shadow research is isolated from fills and uses the saved pre-trade book.
         from fundmgr.engine.forward import record_forward, collect_forward
         from fundmgr.engine.forward import variant_path
+        # The decision just traded on is the incumbent arm of every pair.
+        production = {"decision": decision.model_copy(deep=True), "response": raw_response,
+                      "votes": vote_counts, "sampling": sampling}
         try:
-            shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers)
+            shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers,
+                                         incumbent=production)
             if shadow_path:
                 click.echo(f"\n  Forward comparison recorded: {shadow_path}")
         except Exception as exc:
@@ -612,7 +616,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 continue
             try:
                 shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id,
-                                             tickers, candidate_path=str(vpath))
+                                             tickers, candidate_path=str(vpath), incumbent=production)
                 if shadow_path:
                     click.echo(f"  Forward comparison ({variant}) recorded: {shadow_path}")
             except Exception as exc:

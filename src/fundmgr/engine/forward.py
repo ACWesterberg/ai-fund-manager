@@ -74,7 +74,7 @@ def create_variant(cfg, name: str, replace: bool = False) -> tuple[Path, bool]:
 
 
 def record_forward(cfg, snapshot: dict, run_id: str, tickers: list,
-                   candidate_path: str | None = None) -> Path | None:
+                   candidate_path: str | None = None, incumbent: dict | None = None) -> Path | None:
     """Called only by a new, saved weekly run when shadow.candidate is configured.
 
     Reserve the run before calls. A crash/invalid pair cannot silently be retried
@@ -121,11 +121,12 @@ def record_forward(cfg, snapshot: dict, run_id: str, tickers: list,
                     "snapshot": snapshot, "candidate": candidate,
                     "calendars": calendars, "benchmark_calendar": calendar,
                     "benchmark_currency": currency,
-                    "execution_convention": FORWARD_CONVENTION}
+                    "execution_convention": FORWARD_CONVENTION,
+                    "incumbent_source": "production_run" if incumbent is not None else "rerun"}
     registration["registration_hash"] = digest(registration)
     write_report(path / "registration.json", registration)
     try:
-        pair = compare_guidance(snapshot, candidate)
+        pair = compare_guidance(snapshot, candidate, incumbent=incumbent)
         pair.pop("comparison_hash")
         pair.update(mode="registered_forward", registration_hash=registration["registration_hash"])
         pair["comparison_hash"] = digest(pair)

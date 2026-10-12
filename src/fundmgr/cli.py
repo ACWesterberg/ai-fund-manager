@@ -36,7 +36,7 @@ from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.levels import (
     alertable_hits, deferred_note, merged_levels, record_sent_alerts, settled_sells,
 )
-from fundmgr.reporting.actions import format_action_list
+from fundmgr.reporting.actions import format_action_list, trade_line
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
 from fundmgr.state.store import Store
 
@@ -505,13 +505,15 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 lines.append("")
                 lines.append("<b>🟢 BUYS</b>")
                 for a in buys:
-                    lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
+                    lines.append(f"  {html.escape(trade_line(a, snap, features, cfg))}  "
+                                 f"conf {a.confidence:.2f}{tg_vote(a.ticker)}")
                     lines.append(f"  <i>{html.escape(a.thesis)}</i>")
             if sells:
                 lines.append("")
                 lines.append("<b>🔴 SELLS</b>")
                 for a in sells:
-                    lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
+                    lines.append(f"  {html.escape(trade_line(a, snap, features, cfg))}  "
+                                 f"conf {a.confidence:.2f}{tg_vote(a.ticker)}")
                     lines.append(f"  <i>{html.escape(a.thesis)}</i>")
             if holds:
                 lines.append("")

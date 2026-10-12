@@ -9,6 +9,39 @@ from fundmgr.guardrails.rules import GuardrailResult, shares_for_action
 from fundmgr.state.models import PortfolioSnapshot
 
 
+def trade_kind(action: Action, snap: PortfolioSnapshot) -> str:
+    """ADD / NEW / TRIM / EXIT — what a buy or sell does to the book.
+
+    A target weight alone reads as a trade size: "IVSO.ST 11%" was an add to a
+    position already held, beside "BONEX.ST 5.5%", a new one — and nothing in
+    the alert said which was which.
+    """
+    held = any(p.ticker == action.ticker and p.shares > 0 for p in snap.positions)
+    if action.side == "buy":
+        return "ADD" if held else "NEW"
+    if action.side == "sell":
+        return "EXIT" if action.target_weight_pct <= 0 else "TRIM"
+    return "HOLD"
+
+
+def trade_line(
+    action: Action,
+    snap: PortfolioSnapshot,
+    features: dict[str, TickerFeatures],
+    cfg: AppConfig | None = None,
+) -> str:
+    """One trade in order terms: kind, weight now → target, shares and SEK."""
+    kind = trade_kind(action, snap)
+    now = snap.weight_pct(action.ticker)
+    weights = (f"→ {action.target_weight_pct:.1f}%" if kind == "NEW"
+               else f"{now:.1f}% → {action.target_weight_pct:.1f}%")
+    shares = shares_for_action(action, snap, features, cfg)
+    verb = "buy" if action.side == "buy" else "sell"
+    size = (f"{verb} {shares} share{'s' if shares != 1 else ''} ≈ {action.sek_estimate:,.0f} SEK"
+            if shares is not None else f"{verb} ≈ {action.sek_estimate:,.0f} SEK")
+    return f"{kind} {action.ticker}  {weights}  · {size}"
+
+
 def format_action_list(
     decision: DecisionRun,
     guardrail: GuardrailResult,
@@ -61,7 +94,7 @@ def format_action_list(
             total_turnover += a.sek_estimate
             conf_bar = "█" * round(a.confidence * 5)
             lines.append(
-                f"  BUY  {a.ticker:<16} {shares_str:<12} {price_str:<14}"
+                f"  {trade_kind(a, snap):<4} {a.ticker:<16} {shares_str:<12} {price_str:<14}"
                 f"≈ {a.sek_estimate:>7,.0f} SEK  fee {fee:.2f}  [{conf_bar:<5}] {a.confidence:.2f}{_vote_badge(a.ticker)}"
             )
             lines.append(f"       → {a.thesis}")

@@ -221,6 +221,11 @@ class AppConfig:
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
+_SUFFIX_CURRENCY: dict[str, str] = {
+    "ST": "SEK", "CO": "DKK", "OL": "NOK", "HE": "EUR", "IC": "ISK",
+    "WA": "PLN", "MC": "EUR", "DE": "EUR", "PA": "EUR", "AS": "EUR", "L": "GBP",
+}
+
 _EXCHANGE_CURRENCY: dict[str, str] = {
     # Nordic
     "OMXS": "SEK",
@@ -232,6 +237,11 @@ _EXCHANGE_CURRENCY: dict[str, str] = {
     "OSLO": "NOK",
     "OMXH": "EUR",
     "OMXI": "ISK",
+    "STOCKHOLM": "SEK",
+    "HELSINKI": "EUR",
+    "COPENHAGEN": "DKK",
+    "WSE": "PLN",
+    "BME": "EUR",
     # Global
     "NYSE": "USD",
     "NASDAQ": "USD",
@@ -259,7 +269,17 @@ class UniverseTicker:
 
     @property
     def currency(self) -> str:
-        return _EXCHANGE_CURRENCY.get(self.exchange, "SEK")
+        """Quote currency: the exchange's, else the Yahoo suffix's, else SEK.
+
+        The SEK default used to apply to any exchange code missing from the
+        table, which priced Orion Oyj (ORNBV.HE, EUR, listed as "HELSINKI")
+        at an eleventh of its value in the real fund's SEK maths.
+        """
+        known = _EXCHANGE_CURRENCY.get((self.exchange or "").upper())
+        if known:
+            return known
+        suffix = self.yahoo_ticker.rsplit(".", 1)[-1].upper() if "." in self.yahoo_ticker else ""
+        return _SUFFIX_CURRENCY.get(suffix, "SEK")
 
     @property
     def needs_fx(self) -> bool:

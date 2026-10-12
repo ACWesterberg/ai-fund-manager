@@ -171,8 +171,8 @@ Risk Intelligence A/S,RISK.CO,,DK,OMXC-FN,Unknown,true
 Scandinavian Medical Solutions AS,SMSMED.CO,DK0061675006,DK,OMXC-FN,Unknown,true
 Stenocare AS,STENO.CO,DK0061078425,DK,OMXC-FN,Unknown,true
 TROPHY GAMES Development AS,TGAMES.CO,DK0061537206,DK,OMXC-FN,Unknown,true
-Admicom Oyj,ADMCM.HE,FI4000251830,FI,HELSINKI,Technology,true
-Orion Oyj B,ORNBV.HE,FI0009014377,FI,HELSINKI,Healthcare,true
+Admicom Oyj,ADMCM.HE,FI4000251830,FI,OMXH,Technology,true
+Orion Oyj B,ORNBV.HE,FI0009014377,FI,OMXH,Healthcare,true
 Aallon Group Oyj,AALLON.HE,FI4000369608,FI,OMXH,Unknown,true
 Aspocomp Group Oyj,ACG1V.HE,FI0009008080,FI,OMXH,Unknown,true
 Administer Oyj,ADMIN.HE,,FI,OMXH,Unknown,true
@@ -1599,9 +1599,9 @@ SensoDetect AB,SDET.ST,,SE,SPOTLIGHT,Unknown,true
 Sustainion Group AB,SUSG.ST,,SE,SPOTLIGHT,Industrials,true
 Tessin Nordic Holding AB,TESSIN.ST,SE0009522451,SE,SPOTLIGHT,Technology,true
 Transfer Group,TRNSF.ST,,SE,SPOTLIGHT,Unknown,true
-Acrinova AB Series B,ACRI-B.ST,SE0015660030,SE,STOCKHOLM,Real Estate,true
-Duroc AB (publ),DURC-B.ST,SE0000331266,SE,STOCKHOLM,Industrials,true
-K-Fast Holding AB (publ),KFAST-B.ST,SE0016101679,SE,STOCKHOLM,Real Estate,true
-AB Sagax (publ),SAGA-D.ST,SE0009161052,SE,STOCKHOLM,Real Estate,true
-Stendörren Fastigheter AB (publ),STEF-B.ST,SE0006543344,SE,STOCKHOLM,Real Estate,true
-Viaplay Group AB (publ),VPLAY-B.ST,SE0012116390,SE,STOCKHOLM,Communication Services,true
+Acrinova AB Series B,ACRI-B.ST,SE0015660030,SE,OMXS,Real Estate,true
+Duroc AB (publ),DURC-B.ST,SE0000331266,SE,OMXS,Industrials,true
+K-Fast Holding AB (publ),KFAST-B.ST,SE0016101679,SE,OMXS,Real Estate,true
+AB Sagax (publ),SAGA-D.ST,SE0009161052,SE,OMXS,Real Estate,true
+Stendörren Fastigheter AB (publ),STEF-B.ST,SE0006543344,SE,OMXS,Real Estate,true
+Viaplay Group AB (publ),VPLAY-B.ST,SE0012116390,SE,OMXS,Communication Services,true

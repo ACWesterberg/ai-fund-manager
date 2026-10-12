@@ -106,7 +106,8 @@ def record_forward(cfg, snapshot: dict, run_id: str, tickers: list,
     venues = {t.yahoo_ticker: _EXCHANGE_TO_CALENDAR.get(t.exchange.upper()) for t in tickers}
     calendars = {t: venues.get(t) for t in case.features}
     if not all(calendars.values()):
-        raise ValueError("Every shown ticker needs a known exchange calendar")
+        missing = sorted(t for t, mic in calendars.items() if not mic)
+        raise ValueError(f"Every shown ticker needs a known exchange calendar; none for {', '.join(missing)}")
     for mic in set(calendars.values()) | {calendar}:
         _session(mic, now.date())
     key = {"run_id": run_id} if candidate_path is None else {"run_id": run_id, "candidate": digest(candidate)}

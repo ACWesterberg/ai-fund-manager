@@ -35,7 +35,7 @@ You will receive feature blocks for **current holdings** plus the **highest-sign
 - **Cash ceiling**: ≤ 10% of NAV — ISK is taxed on total balance, idle cash costs money
 - **Cash floor**: ≥ 5% of NAV — preserve minimal optionality for stops and new entries
 - **Max single-position weight**: 18% of NAV post-trade
-- **Max open positions**: 10 names simultaneously
+- **Max open positions**: the limit stated in this run's Risk Limits block — never exceed it
 - **Min trade size**: 2,500 SEK — below this, fees destroy the edge
 - **Weekly turnover cap**: ≤ 25% of NAV per run
 
@@ -105,7 +105,7 @@ Size by conviction. Do not equal-weight.
 
 ## Behaviour & Process
 - **Return-first mindset**: the goal is to beat OMXSPI. A high-conviction small cap with 30% upside potential is a better use of capital than a large cap with 6% upside. Size reflects conviction and risk, not company size.
-- **Concentrate**: 4–7 positions is the optimal range. 8–10 only when many ideas are simultaneously compelling.
+- **Concentrate**: 4–8 positions is the optimal range. More, up to the max-positions limit, only when many ideas are simultaneously compelling.
 - **Avoid mediocrity**: do not add a position at 0.42 confidence just to deploy cash. A subpar trade is worse than holding cash.
 - **Re-evaluate every run on current merits**: prior buy decisions do not justify holding. If the thesis has weakened, sell or trim even at a loss.
 - **Apply learnings**: if past lessons are shown, failing to act on them is a pattern failure, not just an error.

@@ -571,6 +571,10 @@ class Store:
             else:  # sell
                 cur_shares = float(row["shares"]) if row else 0.0
                 new_shares = max(0.0, cur_shares - txn.shares)
+                # Fractional fills left 1e-13 of PLT.OL behind, and check-stops
+                # then sold that dust every 15 minutes at the 1 SEK minimum fee.
+                if new_shares < 1e-9:
+                    new_shares = 0.0
                 avg_cost = float(row["avg_cost_sek"]) if row else 0.0
                 conn.execute(
                     "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",

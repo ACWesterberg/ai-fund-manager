@@ -82,6 +82,26 @@ def _local_rate_to_sek(cur: str, store: "Store | None" = None) -> float | None:
     return rate
 
 
+def rate_to_sek_on(currency: str, date: str) -> float | None:
+    """{currency}->SEK close on `date` (YYYY-MM-DD). None when unavailable.
+
+    Only the shared financedata cache keeps dated rates; without it there is no
+    honest historical rate, and today's spot would misstate a past valuation.
+    """
+    cur = (currency or "SEK").upper()
+    if cur == "SEK":
+        return 1.0
+    try:
+        from financedata import get_fx_rate
+    except ImportError:
+        return None
+    try:
+        rate = get_fx_rate(cur, "SEK", on=date)
+    except Exception:
+        return None
+    return rate if rate and rate > 0 else None
+
+
 def to_sek(amount: float, currency: str, store: "Store | None" = None) -> float | None:
     """Convert `amount` in `currency` to SEK. None if the rate is unavailable."""
     rate = rate_to_sek(currency, store)

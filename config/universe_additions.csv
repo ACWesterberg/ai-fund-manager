@@ -1,0 +1,72 @@
+name,yahoo_ticker,isin,country,exchange,sector,enabled
+Danish Aerospace and Defence Company A/S,DADC.CO,,DK,OMXC,Industrials,true
+Investeringsselskabet af 3. November 2025 A/S,3NOV25.CO,,DK,OMXC,Industrials,true
+BAR DJUS A/S,BARDJU.CO,,DK,OMXC,Consumer Staples,true
+InstallatørGruppen A/S,IG.CO,,DK,OMXC,Industrials,true
+ODI Pharma AB (publ),ODI.ST,,SE,NGM,Health Care,true
+Space Nord Invest AB,SPACEN-B.ST,,SE,OMXS,Industrials,true
+Envirologic AB (publ),ENVI-B.ST,,SE,SPOTLIGHT,Industrials,true
+BPC Instruments AB,BPCINS.ST,,SE,SPOTLIGHT,Technology,true
+Finepart Sweden AB (publ),FINE.ST,,SE,SPOTLIGHT,Industrials,true
+SolidX AB (publ),SOLIDX.ST,,SE,SPOTLIGHT,Technology,true
+Cynca Nordic AB (publ),CYNCA.ST,,SE,OMXS,Industrials,true
+Linjemontage i Grästorp Aktiebolag (publ),LMGAB.ST,,SE,OMXS,Industrials,true
+PEPTONIC medical AB (publ),PMED.ST,,SE,SPOTLIGHT,Health Care,true
+Ellos Holding AB (publ),ELLOS.ST,,SE,OMXS,Consumer Discretionary,true
+Hamlet BioPharma AB (publ),HAMLET-B.ST,,SE,SPOTLIGHT,Health Care,true
+Axvik Group AB (publ),AXVIK.ST,,SE,OMXS,Industrials,true
+Svevik Industri AB,SVEVIK.ST,,SE,OMXS,Industrials,true
+Dextech Medical AB,DEX.ST,,SE,SPOTLIGHT,Health Care,true
+INQ Group AB (publ),INQ.ST,,SE,OMXS,Technology,true
+Invent Medic Sweden AB (publ),IMS.ST,,SE,SPOTLIGHT,Health Care,true
+Prebona AB (publ),PREBON.ST,,SE,SPOTLIGHT,Materials,true
+Abera Bioscience AB,ABERA.ST,,SE,NGM,Health Care,true
+AcuCort AB (publ),ACUC.ST,,SE,SPOTLIGHT,Health Care,true
+AI Revenue Assistant Software Stockholm AB,AIRA.ST,,SE,OMXS,Technology,true
+Sound Dimension AB (publ),SOUND.ST,,SE,SPOTLIGHT,Consumer Discretionary,true
+NordAmps AB,NRDAMP.ST,,SE,OMXS,Technology,true
+Neem's Hill AB,NEEMS-B.ST,,SE,OMXS,Health Care,true
+AB Igrene (publ),ABI.ST,,SE,SPOTLIGHT,Energy,true
+Hoodin AB,HOODIN.ST,,SE,SPOTLIGHT,Communication Services,true
+PExA AB (publ),PEXA-B.ST,,SE,SPOTLIGHT,Health Care,true
+Sjöstrand Coffee Int AB (Publ),SCC-B.ST,,SE,SPOTLIGHT,Consumer Discretionary,true
+Spermosens AB (publ),SPERM.ST,,SE,NGM,Health Care,true
+Double Bond Pharmaceutical International AB (publ),DBP-B.ST,,SE,SPOTLIGHT,Health Care,true
+Biofrigas Sweden AB (publ),BIOF.ST,,SE,SPOTLIGHT,Energy,true
+Vibrosense Dynamics AB (publ),VSD-B.ST,,SE,SPOTLIGHT,Health Care,true
+PolarCool AB (publ),POLAR.ST,,SE,NGM,Health Care,true
+Monivent AB,MONI.ST,,SE,SPOTLIGHT,Health Care,true
+Odinwell AB (publ),ODIN.ST,,SE,NGM,Health Care,true
+Recyctec Holding AB (publ),RECY-B.ST,,SE,SPOTLIGHT,Materials,true
+Aptahem AB (publ),APTA.ST,,SE,NGM,Health Care,true
+EatGood Sweden AB (Publ),EATG.ST,,SE,SPOTLIGHT,Consumer Discretionary,true
+Prisjakt AB (publ),PJ.ST,,SE,OMXS,Communication Services,true
+Nyorda AB,NYOR.ST,,SE,OMXS,Communication Services,true
+Aerowash AB (publ),AERW-B.ST,,SE,SPOTLIGHT,Industrials,true
+Medicortex International AB (publ),MEDFIN.ST,,SE,NGM,Consumer Staples,true
+Beyond Frames Entertainment AB (publ),BEYOND.ST,,SE,SPOTLIGHT,Communication Services,true
+EasyFill AB (publ.),EASY-B.ST,,SE,SPOTLIGHT,Industrials,true
+EcoRub AB (publ),ECO-B.ST,,SE,SPOTLIGHT,Materials,true
+Sileon AB (publ),SILEON.ST,,SE,OMXS,Technology,true
+Provide IT Sweden AB (publ),PROVIT.ST,,SE,SPOTLIGHT,Technology,true
+SyntheticMR AB (publ),SYNT.ST,,SE,NGM,Health Care,true
+Umida Group AB (publ),UMIDA-B.ST,,SE,SPOTLIGHT,Consumer Staples,true
+Exalt AB (publ),EXALT.ST,,SE,SPOTLIGHT,Technology,true
+Nattaro Labs AB (publ),NATTA.ST,,SE,NGM,Consumer Staples,true
+BlincVision AB,BLINC-B.ST,,SE,OMXS,Technology,true
+NFO Drives AB (publ),NFO.ST,,SE,SPOTLIGHT,Industrials,true
+SHT Smart High-Tech AB (publ),SHT-B.ST,,SE,SPOTLIGHT,Technology,true
+My Beat AB (publ),MYBEAT.ST,,SE,NGM,Communication Services,true
+Bohus ASA,BOHUS.OL,,NO,OSLO,Consumer Discretionary,true
+Polar Resources AS,POLAR.OL,,NO,OSLO,Materials,true
+Magnora Data Center ASA,MDATA.OL,,NO,OSLO,Technology,true
+NOS Nova AS,NOSN.OL,,NO,OSLO,Energy,true
+Voim ASA,VOIM.OL,,NO,OSLO,Energy,true
+Sensofusion Oyj,SENSO.HE,,FI,OMXH,Industrials,true
+Savox Communications Oyj,SAVOX.HE,,FI,OMXH,Technology,true
+KPY osk,KPYOSK.HE,,FI,OMXH,Industrials,true
+Steady Energy Oy,STEADY.HE,,FI,OMXH,Industrials,true
+Easor Oyj,EASOR.HE,,FI,OMXH,Technology,true
+Ilkka Oyj,ILKKA.HE,,FI,OMXH,Communication Services,true
+Lehto Group Oyj,LEHTO.HE,,FI,OMXH,Industrials,true
+Pallas Air Oyj,PALLAS.HE,,FI,OMXH,Industrials,true

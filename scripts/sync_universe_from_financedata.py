@@ -26,6 +26,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NORDIC_CSV = ROOT / "config" / "universe.csv"
 GLOBAL_CSV = ROOT / "config" / "universe_global.csv"
+# Nordic listings the snapshot lacks, added by hand from a fiscal.ai screen
+# (2026-10-20). Without this file every sync would silently drop them again.
+ADDITIONS_CSV = ROOT / "config" / "universe_additions.csv"
 
 FIELDNAMES = ["name", "yahoo_ticker", "isin", "country", "exchange", "sector", "enabled"]
 
@@ -132,7 +135,8 @@ def _load_snapshot_rows(path: Path) -> list[dict[str, str]]:
 def _load_existing_meta() -> dict[str, dict[str, str]]:
     """Preserve sector / fine-grained exchange / manual disables from the current CSVs."""
     meta: dict[str, dict[str, str]] = {}
-    for path in (NORDIC_CSV, GLOBAL_CSV):
+    # Nordic last, so its curated sector and exchange win for Nordic tickers.
+    for path in (GLOBAL_CSV, NORDIC_CSV):
         if not path.is_file():
             continue
         with path.open(newline="", encoding="utf-8-sig") as f:
@@ -154,6 +158,19 @@ def _load_existing_meta() -> dict[str, dict[str, str]]:
                     prev["enabled"] = "false"
                 meta[yahoo] = prev
     return meta
+
+
+def _load_additions(meta: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+    if not ADDITIONS_CSV.is_file():
+        return []
+    rows = []
+    for row in _load_snapshot_rows(ADDITIONS_CSV):
+        prev = meta.get(row["yahoo_ticker"], {})
+        if prev.get("sector"):
+            row["sector"] = prev["sector"]
+        row["enabled"] = prev.get("enabled", row.get("enabled") or "true")
+        rows.append({k: row.get(k, "") for k in FIELDNAMES})
+    return rows
 
 
 def _to_yahoo_ticker(exchange_code: str, ticker: str, sub_exchange: str) -> str:
@@ -244,6 +261,7 @@ def sync(snapshot: Path, *, dry_run: bool = False) -> dict[str, int]:
     all_rows.sort(key=_sort_key)
 
     nordic_rows = [r for r in all_rows if r["country"] in {"SE", "DK", "FI", "NO"}]
+    nordic_rows = _dedupe(nordic_rows + _load_additions(meta))
     nordic_rows.sort(key=_sort_key)
 
     counts = {

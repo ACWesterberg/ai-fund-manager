@@ -86,6 +86,13 @@
 # overreaction calls. `fund report-results` shows how the verdicts are doing.
 15 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-watch >> data/logs/report_watch.log 2>&1
 
+# Held positions only: read each new quarterly report against the thesis the
+# name is held on, consensus EXIT/TRIM/HOLD/ADD to Telegram and the dashboard.
+# Nordic reports land 07:00–08:30, so 10:15 catches them with coverage; 18:45
+# catches late coverage and the odd after-close report. Each report is read once.
+15 10 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
+45 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
+
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,

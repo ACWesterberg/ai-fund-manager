@@ -129,7 +129,8 @@ def prompt_context(cfg: AppConfig) -> dict:
 # notification away and the instruction was gone, with the dashboard showing a
 # position that looked untouched. These build the dashboard's side of it.
 
-_SOURCE_LABEL = {"target_review": "Target hit", "stop_review": "Stop hit"}
+_SOURCE_LABEL = {"target_review": "Target hit", "stop_review": "Stop hit",
+                 "report_review": "Report"}
 _VERDICT_TONE = {
     "sell": "amber",
     "trim": "amber",

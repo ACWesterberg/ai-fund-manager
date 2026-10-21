@@ -1392,6 +1392,25 @@ def check_stops(quiet: bool):
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
 
 
+def _resolve_held(ticker: str, held: list[str]) -> str:
+    """A held ticker from what was typed, or exit with the reason.
+
+    Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
+    """
+    q = ticker.upper()
+    matches = [h for h in held if h == q] or \
+              [h for h in held if h.split(".")[0] == q] or \
+              [h for h in held if h.startswith(q + ".")]
+    matches = sorted(set(matches))
+    if not matches:
+        click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
+        sys.exit(1)
+    if len(matches) > 1:
+        click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+        sys.exit(1)
+    return matches[0]
+
+
 @cli.command("review-stop")
 @click.argument("ticker", required=False)
 @click.option("--notify/--no-notify", default=True, show_default=True,
@@ -1417,19 +1436,7 @@ def review_stop(ticker: str | None, notify: bool):
 
     # Decide which tickers to review.
     if ticker:
-        q = ticker.upper()
-        # Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
-        matches = [h for h in held if h == q] or \
-                  [h for h in held if h.split(".")[0] == q] or \
-                  [h for h in held if h.startswith(q + ".")]
-        matches = sorted(set(matches))
-        if not matches:
-            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
-            sys.exit(1)
-        if len(matches) > 1:
-            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
-            sys.exit(1)
-        targets = [{"ticker": matches[0], "live": None}]
+        targets = [{"ticker": _resolve_held(ticker, held), "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
         scan = find_stop_breaches(store, cfg)
@@ -1612,6 +1619,37 @@ def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | Non
             click.echo(f"    Why: {r['rationale']}")
     if not show_all:
         click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
+
+
+@cli.command("report-check")
+@click.argument("ticker", required=False)
+@click.option("--dry-run", is_flag=True, help="List the reports that would be read; call nothing.")
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+def report_check_cmd(ticker: str | None, dry_run: bool, notify: bool):
+    """Read held companies' new quarterly reports against their thesis (advisory).
+
+    With no argument: every holding that reported in the last few days and has
+    not been checked. With a TICKER: re-read that holding's latest report.
+    """
+    from fundmgr.engine import report_check as rc
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if _paused(cfg, "report check"):
+        return
+    held = [p.ticker for p in store.get_positions()]
+    only = _resolve_held(ticker, held) if ticker else None
+    click.echo(f"[report-check] {only or f'{len(held)} holdings'}"
+               f"{' (dry run)' if dry_run else ''}…")
+    out = rc.run_check(store, cfg, only=only, dry_run=dry_run, echo=click.echo)
+    for result in out["reviewed"]:
+        click.echo("\n" + rc.format_text(result))
+    if not dry_run and not any(out.values()):
+        click.echo("  No new reports on held positions.")
+    body = rc.format_html(out)
+    if notify and body and send_telegram(body):
+        click.echo("\n  (sent to Telegram)")
 
 
 @cli.command("report-study")

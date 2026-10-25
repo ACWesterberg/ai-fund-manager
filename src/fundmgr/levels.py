@@ -7,6 +7,8 @@ about fetching prices.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 
 # Why an action didn't fill. The filler is the only thing that knows, so it
 # reports in this vocabulary and callers describe what it reported — see
@@ -92,6 +94,29 @@ def alertable_hits(
         hit for hit in hits
         if hit[0] in auto_sold or not store.has_sent_position_alert(hit[0], today, kind)
     ]
+
+
+def split_by_venue(
+    hits: list[tuple],
+    venue_open: Callable[[str], bool | None],
+) -> tuple[list[tuple], list[tuple]]:
+    """Split breach hits into (actionable now, held until the venue reopens).
+
+    For a fund whose orders the owner places by hand, a breach found while its
+    exchange is shut is not an order anyone can place. The Nordic cron line
+    `*/15 9-17` fires at 17:30, the minute Stockholm closes, and that cycle
+    spent the five-sample target review on BONEX.ST and sent "ACTION NEEDED —
+    sell" at 17:31 — an order against a closing print, unplaceable until a
+    morning that may open somewhere else entirely. A held-over breach is not
+    lost: the level stays breached, so the first cycle of the next session
+    finds it again and reviews it against a price that can actually be traded.
+
+    Only a definite False holds a hit back; an unknown venue stays actionable.
+    """
+    actionable, held = [], []
+    for hit in hits:
+        (held if venue_open(hit[0]) is False else actionable).append(hit)
+    return actionable, held
 
 
 def settled_sells(

@@ -35,6 +35,7 @@ from fundmgr.engine.thesis_check import verify_theses
 from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.levels import (
     alertable_hits, deferred_note, merged_levels, record_sent_alerts, settled_sells,
+    split_by_venue,
 )
 from fundmgr.reporting.actions import format_action_list, trade_line
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
@@ -1184,6 +1185,26 @@ def check_stops(quiet: bool):
                 f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {live_price:>8.2f} "
                 f"{chg:>+7.1f}%{daily_str} {levels_str:>14} {status}"
             )
+
+    # A hand-placed order is only an order while its venue trades; see
+    # split_by_venue. Sims keep every hit — their filler defers closed venues
+    # itself and reports why.
+    if not cfg.auto_fill and (stops_hit or profits_hit):
+        from fundmgr.config import load_universe
+        from fundmgr.data.market_hours import is_exchange_open
+        try:
+            exch_by_ticker = {t.yahoo_ticker: t.exchange for t in load_universe(cfg.universe_path)}
+        except Exception:
+            exch_by_ticker = {}
+
+        def _venue_open(ticker: str) -> bool | None:
+            return is_exchange_open(exch_by_ticker.get(ticker, ""))
+
+        stops_hit, held_stops = split_by_venue(stops_hit, _venue_open)
+        profits_hit, held_profits = split_by_venue(profits_hit, _venue_open)
+        for ticker, *_ in held_stops + held_profits:
+            click.echo(f"  ⏸ {ticker} — {exch_by_ticker.get(ticker) or '?'} closed; "
+                       "reviewed at the next open, no alert now.")
 
     if not quiet:
         click.echo()

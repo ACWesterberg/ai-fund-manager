@@ -40,10 +40,12 @@ try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import (
         Application,
+        ApplicationHandlerStop,
         CallbackQueryHandler,
         CommandHandler,
         ContextTypes,
         MessageHandler,
+        TypeHandler,
         filters,
     )
     _TELEGRAM_AVAILABLE = True
@@ -63,6 +65,39 @@ _active_book: dict[int, str] = {}
 
 # Lazy-loaded ISIN -> yahoo_ticker map
 _isin_map: dict[str, str] | None = None
+
+
+def allowed_chat_ids() -> set[int]:
+    """Chats the bot obeys: TELEGRAM_CHAT_ID plus any in TELEGRAM_ALLOWED_CHAT_IDS.
+
+    The bot used to answer anyone who found its username, and its commands
+    move the real book's cash and fills. Unparseable entries are dropped, so a
+    typo narrows access rather than widening it.
+    """
+    raw = [os.getenv("TELEGRAM_CHAT_ID", "")]
+    raw += os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").split(",")
+    ids: set[int] = set()
+    for item in raw:
+        try:
+            ids.add(int(item.strip()))
+        except ValueError:
+            continue
+    return ids
+
+
+def is_authorised(update: object, allowed: set[int]) -> bool:
+    chat = getattr(update, "effective_chat", None)
+    return chat is not None and chat.id in allowed
+
+
+def _make_gate(allowed: set[int]):
+    async def gate(update: object, context: "ContextTypes.DEFAULT_TYPE") -> None:
+        if is_authorised(update, allowed):
+            return
+        chat = getattr(update, "effective_chat", None)
+        log.warning("Ignored update from unauthorised chat %s", getattr(chat, "id", None))
+        raise ApplicationHandlerStop
+    return gate
 
 
 def _get_isin_map() -> dict[str, str]:
@@ -1026,9 +1061,18 @@ def main() -> None:
         log.error("TELEGRAM_BOT_TOKEN not set in .env")
         sys.exit(1)
 
+    allowed = allowed_chat_ids()
+    if not allowed:
+        log.error("TELEGRAM_CHAT_ID not set in .env — refusing to start an unrestricted bot")
+        sys.exit(1)
+
     log.info("Starting AI Fund Manager bot…")
 
     app = Application.builder().token(token).build()
+
+    # Group -1 runs before every handler below; raising ApplicationHandlerStop
+    # there drops the update, so no command, photo or button escapes the check.
+    app.add_handler(TypeHandler(Update, _make_gate(allowed)), group=-1)
 
     app.add_handler(CommandHandler("run",      cmd_run))
     app.add_handler(CommandHandler("run_full", cmd_run_full))

@@ -15,6 +15,8 @@ Commands:
   /setcash AMOUNT — correct the cash balance (SEK)
   /deposit AMOUNT [note] — new money in (not profit); /withdraw for money out
   /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
+  /montrose_login — BankID login to Montrose MCP; paste back the callback URL
+  /montrose_probe — read-only Montrose call; replies with field names only
   /help          — show this message
 
 Photo messages:
@@ -706,6 +708,54 @@ async def cmd_decisions(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     await _send(update, output)
 
 
+async def cmd_montrose_login(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    import asyncio
+
+    from fundmgr.broker import montrose
+    try:
+        url = await asyncio.to_thread(montrose.start_login)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not start the Montrose login: {e}")
+        return
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Log in with BankID", url=url)]])
+    await update.message.reply_text(
+        "🔐 Montrose login\n\n"
+        "1. Tap the button and log in with BankID on this phone.\n"
+        "2. You'll land on a page that won't load (localhost:8765/callback). "
+        "That's expected.\n"
+        "3. Copy that page's full address and paste it here within 10 minutes.",
+        reply_markup=keyboard,
+    )
+
+
+async def montrose_callback_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    import asyncio
+
+    from fundmgr.broker import montrose
+    try:
+        status = await asyncio.to_thread(montrose.complete_login, update.message.text or "")
+        reply = (
+            "✅ Logged in to Montrose.\n"
+            f"Access token valid until: {status.get('access_expires_at') or 'not stated'}\n"
+            f"Refresh token: {'yes' if status.get('refresh_token') else 'NO'}"
+            + (f" (until {status['refresh_expires_at']})" if status.get("refresh_expires_at") else "")
+            + "\n\nNext: /montrose_probe"
+        )
+    except Exception as e:
+        reply = f"❌ Montrose login failed: {e}"
+    # The code is single-use and already spent, but keep it out of chat history anyway.
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await update.effective_chat.send_message(reply)
+
+
+async def cmd_montrose_probe(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Reading Montrose (read-only tools)…")
+    await _run_cli_bg(update, context, "montrose-probe", timeout=300)
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -734,6 +784,9 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
         "/pstatus — snapshot of the active book\n"
         "/proof [SLUG] TICKER yes|no — answer the post-earnings proof question\n"
+        "\n— Montrose connection (read-only test) —\n"
+        "/montrose_login — log in with BankID, then paste the address you land on\n"
+        "/montrose_probe — read holdings + transactions once; shows field names only\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -1096,12 +1149,19 @@ def main() -> None:
     app.add_handler(CommandHandler("psetcost", cmd_psetcost))
     app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
     app.add_handler(CommandHandler("proof",    cmd_proof))
+    app.add_handler(CommandHandler("montrose_login", cmd_montrose_login))
+    app.add_handler(CommandHandler("montrose_probe", cmd_montrose_probe))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 
     # Screenshot fill extraction
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(fill_callback, pattern="^fill_"))
+    # Before text_handler: within a group only the first matching handler runs.
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.Regex(r"(localhost|127\.0\.0\.1):8765/callback"),
+        montrose_callback_handler,
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     log.info("Bot polling… (Ctrl+C to stop)")

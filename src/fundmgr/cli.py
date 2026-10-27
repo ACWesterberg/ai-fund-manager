@@ -3826,5 +3826,48 @@ def evaluate_guidance_cmd(roots, min_periods, output):
         raise click.ClickException("Report includes invalid artifacts; inspect case errors")
 
 
+@cli.command("montrose-login")
+@click.option("--callback", "callback_url", default=None, metavar="URL",
+              help="Finish the login: the localhost:8765/callback URL the browser landed on.")
+def montrose_login_cmd(callback_url: str | None):
+    """Log in to Montrose MCP with BankID (same flow as /montrose_login in Telegram).
+
+    \b
+    1. fund montrose-login              → prints a link; open it, do BankID
+    2. the browser fails to load localhost:8765/callback — copy that address
+    3. fund montrose-login --callback 'http://localhost:8765/callback?code=…'
+    """
+    from fundmgr.broker import montrose
+
+    try:
+        if callback_url:
+            status = montrose.complete_login(callback_url)
+            click.echo("✓ Logged in to Montrose.")
+            click.echo(json.dumps(status, indent=2))
+        else:
+            click.echo("Open this link, log in with BankID, then run this command again with")
+            click.echo("--callback '<the address the browser ended up on>' within 10 minutes:\n")
+            click.echo(montrose.start_login())
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@cli.command("montrose-probe")
+def montrose_probe_cmd():
+    """Phase 0: call Montrose's read-only tools once and save the raw replies.
+
+    Writes nothing to the fund database. The raw dump (real holdings) is saved
+    0600 under data/montrose/; what is printed is keys and types only.
+    """
+    from fundmgr.broker import montrose
+
+    try:
+        path, summary = montrose.probe()
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Raw replies saved (private): {path}\n")
+    click.echo(json.dumps(summary, indent=2, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     cli()

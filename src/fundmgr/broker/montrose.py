@@ -54,6 +54,9 @@ PROTOCOL_VERSION = "2025-06-18"
 
 READ_TOOLS = frozenset({
     "get_user_accounts", "get_holdings", "get_transactions", "get_transactions_categories",
+    # Transactions name instruments by orderbookId only; this turns a sold
+    # holding's id back into a ticker. A lookup, it changes nothing.
+    "search_instruments",
 })
 
 PENDING_TTL_S = 10 * 60

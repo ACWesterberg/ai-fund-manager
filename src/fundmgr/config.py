@@ -154,6 +154,16 @@ class ReportWatchConfig:
 
 
 @dataclass
+class MontroseConfig:
+    # The real broker account this fund's ledger mirrors (phase 1: read and
+    # compare only). Empty means the fund has no broker account.
+    account_name: str = ""
+    lookback_days: int = 60          # transaction window the reconcile walks
+    cash_tolerance_sek: float = 25.0  # fee rounding across a month of fills
+    cost_tolerance_pct: float = 1.0
+
+
+@dataclass
 class AppConfig:
     capital_sek: float = 50000.0
     cadence: str = "weekly"
@@ -167,6 +177,7 @@ class AppConfig:
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     shadow: ShadowConfig = field(default_factory=ShadowConfig)
     report_watch: ReportWatchConfig = field(default_factory=ReportWatchConfig)
+    montrose: MontroseConfig = field(default_factory=MontroseConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -366,6 +377,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             cfg.optimizer.compiled_dir = ROOT / compiled
     if rw_raw := raw.get("report_watch"):
         cfg.report_watch = ReportWatchConfig(**rw_raw)
+    if montrose_raw := raw.get("montrose"):
+        cfg.montrose = MontroseConfig(**montrose_raw)
     if shadow_raw := raw.get("shadow"):
         cfg.shadow = ShadowConfig(**shadow_raw)
         if cfg.shadow.candidate:

@@ -86,6 +86,11 @@
 # overreaction calls. `fund report-results` shows how the verdicts are doing.
 15 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-watch >> data/logs/report_watch.log 2>&1
 
+# Montrose ↔ ledger reconcile (phase 1, read-only, no LLM). Telegram only when
+# shares, cash, trades or deposits disagree — or the Montrose login lapsed, so
+# this doubles as the token keep-alive. After the close, before paper-track.
+45 21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund montrose-reconcile --notify >> data/logs/montrose.log 2>&1
+
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,

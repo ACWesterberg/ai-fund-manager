@@ -84,6 +84,8 @@ class FakeMontrose:
                     "type": "object", "properties": {"accountId": {"type": ["string", "null"]}}}},
                 {"name": "get_transactions", "inputSchema": {
                     "type": "object", "properties": {"from": {}, "to": {}, "pageSize": {}}}},
+                {"name": "search_instruments", "inputSchema": {
+                    "type": "object", "properties": {"query": {}, "orderbookId": {}}}},
                 {"name": "create_trade_ticket", "inputSchema": {"type": "object"}},
             ]}
         name = msg["params"]["name"]

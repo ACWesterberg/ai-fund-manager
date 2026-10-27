@@ -82,6 +82,14 @@ report_watch:
   max_judged_per_day: 10     # largest drops first; one call each, medium reasoning
   reasoning_effort: medium
 
+# The real account this book mirrors at Montrose (src/fundmgr/broker/). Phase 1
+# is read-only: `fund montrose-reconcile` compares holdings, cash, trades and
+# deposits with the ledger and reports; it never writes to the fund.
+montrose:
+  account_name: Simulering
+  lookback_days: 60
+  cash_tolerance_sek: 25
+
 # Forward shadow comparison (engine/forward.py, docs/LEARNING.md). Each saved
 # Monday run also asks the incumbent prompt and this inactive candidate for a
 # decision on the same frozen inputs — two extra sample sets, no trades — and

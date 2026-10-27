@@ -4,7 +4,7 @@ import html
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import click
@@ -3867,6 +3867,111 @@ def montrose_probe_cmd():
         raise click.ClickException(str(exc)) from exc
     click.echo(f"Raw replies saved (private): {path}\n")
     click.echo(json.dumps(summary, indent=2, ensure_ascii=False))
+
+
+def _montrose_account(cfg) -> str:
+    if not cfg.montrose.account_name:
+        raise click.ClickException(
+            f"{cfg.display_name} has no Montrose account (montrose.account_name in its config).")
+    return cfg.montrose.account_name
+
+
+@cli.command("montrose-refresh")
+@click.option("--since", default=None, metavar="YYYY-MM-DD",
+              help="Transactions from this date (default: montrose.lookback_days ago).")
+def montrose_refresh_cmd(since: str | None):
+    """Phase 1: read the fund's Montrose account and save a private snapshot.
+
+    Holdings, cash and transactions of the account named in montrose.account_name.
+    Writes nothing to the fund database.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+
+    cfg = load_config()
+    start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
+    try:
+        path, snap = rec.refresh(_montrose_account(cfg), start)
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Snapshot saved (private): {path}")
+    click.echo(f"{snap['account']['accountName'].strip()}: {len(snap['positions'])} positions, "
+               f"{len(snap['transactions'])} transactions since {snap['since']}, "
+               f"total value {snap['summary'].get('totalValue', 0):,.0f} {snap.get('currency')}")
+
+
+@cli.command("montrose-reconcile")
+@click.option("--since", default=None, metavar="YYYY-MM-DD",
+              help="Transactions from this date (default: montrose.lookback_days ago).")
+@click.option("--offline", is_flag=True, help="Use the last saved snapshot; no Montrose call.")
+@click.option("--notify", is_flag=True,
+              help="Send the report to Telegram — only when something is off, or the login lapsed.")
+@click.option("--json", "as_json", is_flag=True, help="Print the report as JSON.")
+def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_json: bool):
+    """Phase 1: compare the Montrose account with the fund's ledger. Read-only.
+
+    \b
+    Checks shares per holding, cash, trades and deposits in the window, and
+    lists dividends/interest/tax the ledger doesn't book. Nothing is written to
+    the fund; fixes stay manual (/fill, /setcash, fund deposit --record-only).
+    Daily with --notify it doubles as the token keep-alive: a lapsed login is
+    reported instead of waiting for the day it is needed.
+    """
+    import dataclasses
+    import html
+
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.config import load_universe
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    account = _montrose_account(cfg)
+    start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
+    try:
+        if offline:
+            snap = rec.load_snapshot()
+        else:
+            _, snap = rec.refresh(account, start)
+    except montrose.LoginRequired as exc:
+        if notify:
+            send_telegram(f"🔐 Montrose login needed for the daily reconcile: {html.escape(str(exc))}"
+                          "\nSend /montrose_login.")
+        raise click.ClickException(str(exc)) from exc
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        if notify:
+            send_telegram(f"⚠️ Montrose reconcile failed: {html.escape(str(exc))}")
+        raise click.ClickException(str(exc)) from exc
+
+    report = rec.reconcile(
+        snap, **rec.ledger_inputs(store, date.fromisoformat(snap["since"])),
+        universe=load_universe(cfg.universe_path), instruments=rec.load_instruments(),
+        cash_tolerance=cfg.montrose.cash_tolerance_sek,
+        cost_tolerance_pct=cfg.montrose.cost_tolerance_pct,
+    )
+    text = rec.format_report(report)
+    if as_json:
+        click.echo(json.dumps({**dataclasses.asdict(report), "cash_diff": report.cash_diff,
+                               "in_sync": report.in_sync}, indent=2, ensure_ascii=False))
+    else:
+        click.echo(text)
+    if notify and not report.in_sync:
+        send_telegram(html.escape(text))
+
+
+@cli.command("montrose-map")
+@click.argument("orderbook_id", type=int)
+@click.argument("symbol")
+def montrose_map_cmd(orderbook_id: int, symbol: str):
+    """Pin a Montrose orderbookId to the ledger's Yahoo symbol (e.g. 1757 TRUE-B.ST).
+
+    Only needed when the reconcile reports an instrument it could not match.
+    """
+    from fundmgr.broker import reconcile as rec
+
+    entry = rec.pin_instrument(orderbook_id, symbol)
+    click.echo(f"orderbook {orderbook_id} → {entry['yahoo']}"
+               + (f" ({entry.get('ticker')} {entry.get('name')})" if entry.get("ticker") else ""))
 
 
 if __name__ == "__main__":

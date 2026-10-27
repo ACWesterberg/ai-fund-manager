@@ -17,6 +17,7 @@ Commands:
   /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
   /montrose_login — BankID login to Montrose MCP; paste back the callback URL
   /montrose_probe — read-only Montrose call; replies with field names only
+  /montrose_reconcile — compare the Montrose account with the ledger (read-only)
   /help          — show this message
 
 Photo messages:
@@ -739,7 +740,7 @@ async def montrose_callback_handler(update: "Update", context: "ContextTypes.DEF
             f"Access token valid until: {status.get('access_expires_at') or 'not stated'}\n"
             f"Refresh token: {'yes' if status.get('refresh_token') else 'NO'}"
             + (f" (until {status['refresh_expires_at']})" if status.get("refresh_expires_at") else "")
-            + "\n\nNext: /montrose_probe"
+            + "\n\nNext: /montrose_reconcile"
         )
     except Exception as e:
         reply = f"❌ Montrose login failed: {e}"
@@ -754,6 +755,11 @@ async def montrose_callback_handler(update: "Update", context: "ContextTypes.DEF
 async def cmd_montrose_probe(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text("⏳ Reading Montrose (read-only tools)…")
     await _run_cli_bg(update, context, "montrose-probe", timeout=300)
+
+
+async def cmd_montrose_reconcile(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Comparing Montrose with the ledger (read-only)…")
+    await _run_cli_bg(update, context, "montrose-reconcile", timeout=300)
 
 
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -787,6 +793,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "\n— Montrose connection (read-only test) —\n"
         "/montrose_login — log in with BankID, then paste the address you land on\n"
         "/montrose_probe — read holdings + transactions once; shows field names only\n"
+        "/montrose_reconcile — Montrose vs ledger: shares, cash, trades (writes nothing)\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -1151,6 +1158,7 @@ def main() -> None:
     app.add_handler(CommandHandler("proof",    cmd_proof))
     app.add_handler(CommandHandler("montrose_login", cmd_montrose_login))
     app.add_handler(CommandHandler("montrose_probe", cmd_montrose_probe))
+    app.add_handler(CommandHandler("montrose_reconcile", cmd_montrose_reconcile))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

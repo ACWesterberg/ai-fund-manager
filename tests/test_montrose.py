@@ -131,7 +131,8 @@ def test_login_round_trip_with_pkce_and_private_files(fake):
     assert _mode(d) == 0o700
     for name in ("client.json", "token.json"):
         assert _mode(d / name) == 0o600
-    assert not (d / "pending_login.json").exists()
+    assert json.loads((d / "pending_login.json").read_text()) == {}
+    assert _mode(d / "pending_login.json") == 0o600
 
 
 def test_registration_is_reused(fake):
@@ -142,9 +143,21 @@ def test_registration_is_reused(fake):
 
 def test_state_mismatch_is_refused(fake):
     url = m.start_login()
-    with pytest.raises(m.MontroseError, match="State mismatch"):
+    with pytest.raises(m.MontroseError, match="doesn't match"):
         m.complete_login(_callback(url, state="forged"))
     assert fake.token_calls == []
+
+
+def test_an_earlier_link_still_works_after_a_newer_one(fake):
+    first = m.start_login()
+    second = m.start_login()
+    m.complete_login(_callback(first))
+    first_state = parse_qs(urlparse(first).query)["state"][0]
+    assert first_state not in json.loads((m.state_dir() / "pending_login.json").read_text())
+    m.complete_login(_callback(second))
+    assert len(fake.token_calls) == 2
+    with pytest.raises(m.MontroseError):
+        m.complete_login(_callback(first))
 
 
 def test_wrong_issuer_is_refused(fake):

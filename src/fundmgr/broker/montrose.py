@@ -170,9 +170,13 @@ def start_login() -> str:
         reg = _client_registration(client, meta)
     verifier, challenge = _pkce()
     state = secrets.token_urlsafe(24)
-    _write_private(state_dir() / "pending_login.json", {
-        "state": state, "verifier": verifier, "created_at": _now(),
-    })
+    # Keyed by state, so every link sent in the last 10 minutes still works:
+    # the first live test pasted the callback of an earlier /montrose_login,
+    # which a single pending slot had already overwritten.
+    path = state_dir() / "pending_login.json"
+    pending = _live_pending(_read(path))
+    pending[state] = {"verifier": verifier, "created_at": _now()}
+    _write_private(path, pending)
     return meta["authorization_endpoint"] + "?" + urlencode({
         "response_type": "code",
         "client_id": reg["client_id"],
@@ -185,8 +189,10 @@ def start_login() -> str:
     })
 
 
-def looks_like_callback(text: str) -> bool:
-    return "localhost:8765/callback" in text or "127.0.0.1:8765/callback" in text
+def _live_pending(pending: dict | None) -> dict:
+    now = _now()
+    return {s: p for s, p in (pending or {}).items()
+            if isinstance(p, dict) and now - p.get("created_at", 0) <= PENDING_TTL_S}
 
 
 def complete_login(pasted: str) -> dict:
@@ -199,21 +205,28 @@ def complete_login(pasted: str) -> dict:
                             f"{params.get('error_description', '')}".strip())
 
     path = state_dir() / "pending_login.json"
-    pending = _read(path)
-    if not pending:
+    stored = _read(path) or {}
+    pending = _live_pending(stored)
+    state = params.get("state", "")
+    if not stored:
         raise MontroseError("No login in progress — start one with /montrose_login.")
-    if _now() - pending.get("created_at", 0) > PENDING_TTL_S:
-        path.unlink(missing_ok=True)
-        raise MontroseError("That login expired (10 min). Start again with /montrose_login.")
-    if not secrets.compare_digest(params.get("state", ""), pending["state"]):
-        raise MontroseError("State mismatch — this URL is not from the login I started.")
+    if state not in pending:
+        if state in stored:
+            reason = "That login link expired (10 min)."
+        elif not pending:
+            reason = "No login started in the last 10 minutes."
+        else:
+            reason = ("This address doesn't match any login link sent in the last 10 minutes "
+                      "(was the whole address pasted?).")
+        raise MontroseError(f"{reason} Send /montrose_login and use that newest link.")
     if "iss" in params and params["iss"] != ISSUER:
         raise MontroseError(f"Unexpected issuer in callback: {params['iss']!r}")
     code = params.get("code")
     if not code:
         raise MontroseError("No code in that URL — paste the whole address.")
     # Single use either way: a failed exchange must not leave a reusable verifier.
-    path.unlink(missing_ok=True)
+    verifier = pending.pop(state)["verifier"]
+    _write_private(path, pending)
 
     with _http() as client:
         meta = _metadata(client)
@@ -222,7 +235,7 @@ def complete_login(pasted: str) -> dict:
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": REDIRECT_URI,
-            "code_verifier": pending["verifier"],
+            "code_verifier": verifier,
             "resource": RESOURCE,
         })
     with _lock():

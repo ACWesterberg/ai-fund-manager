@@ -33,6 +33,7 @@ class FakeMontrose:
     def __init__(self) -> None:
         self.token_calls: list[dict] = []
         self.tool_calls: list[str] = []
+        self.tool_args: list[dict] = []
         self.registrations = 0
         self.mcp_401_once = False
         self.sse = False
@@ -52,7 +53,7 @@ class FakeMontrose:
             n = len(self.token_calls)
             return httpx.Response(200, json={"access_token": f"at{n}", "refresh_token": f"rt{n}",
                                              "expires_in": 3600, "token_type": "Bearer"})
-        if path == "/mcp":
+        if path == "/":
             if req.method == "DELETE":
                 return httpx.Response(200)
             if self.mcp_401_once:
@@ -74,19 +75,24 @@ class FakeMontrose:
         if msg["method"] == "initialize":
             return {"serverInfo": {"name": "montrose"}}
         if msg["method"] == "tools/list":
+            # Shapes as in Montrose's real tools/list: every argument optional.
             return {"tools": [
-                {"name": "get_user_accounts", "inputSchema": {"type": "object"}},
+                {"name": "get_user_accounts", "inputSchema": {"type": "object", "properties": {}}},
+                {"name": "get_transactions_categories",
+                 "inputSchema": {"type": "object", "properties": {}}},
                 {"name": "get_holdings", "inputSchema": {
-                    "type": "object", "required": ["accountId"],
-                    "properties": {"accountId": {"type": "string"}}}},
+                    "type": "object", "properties": {"accountId": {"type": ["string", "null"]}}}},
                 {"name": "get_transactions", "inputSchema": {
-                    "type": "object", "required": ["accountId", "fromDate", "toDate"]}},
+                    "type": "object", "properties": {"from": {}, "to": {}, "pageSize": {}}}},
                 {"name": "create_trade_ticket", "inputSchema": {"type": "object"}},
             ]}
         name = msg["params"]["name"]
         self.tool_calls.append(name)
+        self.tool_args.append(msg["params"]["arguments"])
         data = {
-            "get_user_accounts": {"accounts": [{"accountId": "123456", "type": "ISK"}]},
+            "get_user_accounts": {"result": [{"accountId": "3fa85f64", "accountNumber": "123456",
+                                              "accountType": "ISK"}]},
+            "get_transactions_categories": {"result": [{"type": "Buy", "description": "Köp"}]},
             "get_holdings": {"positions": [{"name": "Volvo B", "quantity": 12, "marketValue": 3500.0}]},
             "get_transactions": {"items": [{"category": "Buy", "price": 291.5}]},
         }[name]
@@ -215,7 +221,7 @@ def test_401_refreshes_once(fake):
     m.complete_login(_callback(m.start_login()))
     fake.mcp_401_once = True
     with m.Session() as s:
-        assert s.call_tool("get_user_accounts")["accounts"][0]["type"] == "ISK"
+        assert s.call_tool("get_user_accounts")["result"][0]["accountType"] == "ISK"
     assert fake.token_calls[-1]["grant_type"] == "refresh_token"
 
 
@@ -229,16 +235,19 @@ def test_sse_responses_are_parsed(fake):
 def test_probe_reads_only_and_summary_hides_values(fake):
     m.complete_login(_callback(m.start_login()))
     path, summary = m.probe()
-    assert fake.tool_calls == ["get_user_accounts", "get_holdings", "get_transactions"]
+    assert fake.tool_calls == ["get_user_accounts", "get_transactions_categories",
+                               "get_holdings", "get_transactions"]
+    assert fake.tool_args[2] == {}
+    assert set(fake.tool_args[3]) == {"from", "pageSize"}
     assert _mode(path) == 0o600
     raw = json.loads(path.read_text())
-    assert raw["calls"]["get_holdings[account 1]"]["args"] == {"accountId": "123456"}
+    assert raw["calls"]["get_holdings"]["result"]["positions"][0]["name"] == "Volvo B"
 
     text = json.dumps(summary)
-    for secret in ("123456", "Volvo", "3500", "291.5"):
+    for secret in ("123456", "3fa85f64", "Volvo", "3500", "291.5"):
         assert secret not in text
-    holdings = summary["calls"]["get_holdings[account 1]"]
-    assert holdings["shape"] == {"positions": [{"name": "str", "quantity": "int",
-                                                "marketValue": "float"}, "×1"]}
-    assert summary["calls"]["get_transactions[account 1]"]["args"] == ["accountId", "fromDate", "toDate"]
+    assert summary["calls"]["get_holdings"]["shape"] == {
+        "positions": [{"name": "str", "quantity": "int", "marketValue": "float"}, "×1"]}
+    assert summary["calls"]["get_transactions"]["args"] == ["from", "pageSize"]
     assert summary["read_tools_missing"] == []
+    assert "create_trade_ticket" in summary["tools"]

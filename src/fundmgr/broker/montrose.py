@@ -45,13 +45,16 @@ from fundmgr.config import DATA_DIR
 
 ISSUER = "https://mcp.montrose.io"
 RESOURCE = "https://mcp.montrose.io"
-MCP_URL = "https://mcp.montrose.io/mcp"
+# The MCP endpoint is the server root; /mcp answers 404 once authenticated.
+MCP_URL = "https://mcp.montrose.io"
 REDIRECT_URI = "http://localhost:8765/callback"
 SCOPE = "mcp"
 CLIENT_NAME = "fundmgr (ai-fund-manager)"
 PROTOCOL_VERSION = "2025-06-18"
 
-READ_TOOLS = frozenset({"get_user_accounts", "get_holdings", "get_transactions"})
+READ_TOOLS = frozenset({
+    "get_user_accounts", "get_holdings", "get_transactions", "get_transactions_categories",
+})
 
 PENDING_TTL_S = 10 * 60
 REFRESH_MARGIN_S = 60
@@ -486,7 +489,13 @@ def probe() -> tuple[Path, dict]:
             except MontroseError as exc:
                 out["calls"]["get_user_accounts"] = {"args": args, "error": str(exc)}
 
-        for name in ("get_holdings", "get_transactions"):
+        optional = {
+            "get_transactions": {
+                "from": (datetime.now(timezone.utc).date() - timedelta(days=90)).isoformat(),
+                "pageSize": 50,
+            },
+        }
+        for name in ("get_transactions_categories", "get_holdings", "get_transactions"):
             if name not in schemas:
                 continue
             needs_account = any("account" in r.lower() for r in schemas[name].get("required", []))
@@ -494,6 +503,7 @@ def probe() -> tuple[Path, dict]:
                 # Index, not the account number: the summary is meant to be pasted.
                 key = f"{name}[account {i + 1}]" if acc else name
                 args, missing = _guess_args(schemas[name], acc)
+                args = {**optional.get(name, {}), **args}
                 if missing:
                     out["calls"][key] = {"args": args, "missing": missing}
                     continue

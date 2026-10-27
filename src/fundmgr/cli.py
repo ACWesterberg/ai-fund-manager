@@ -3900,39 +3900,21 @@ def montrose_refresh_cmd(since: str | None):
                f"total value {snap['summary'].get('totalValue', 0):,.0f} {snap.get('currency')}")
 
 
-@cli.command("montrose-reconcile")
-@click.option("--since", default=None, metavar="YYYY-MM-DD",
-              help="Transactions from this date (default: montrose.lookback_days ago).")
-@click.option("--offline", is_flag=True, help="Use the last saved snapshot; no Montrose call.")
-@click.option("--notify", is_flag=True,
-              help="Send the report to Telegram — only when something is off, or the login lapsed.")
-@click.option("--json", "as_json", is_flag=True, help="Print the report as JSON.")
-def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_json: bool):
-    """Phase 1: compare the Montrose account with the fund's ledger. Read-only.
+def _montrose_report(cfg, store, since: date, offline: bool = False, notify: bool = False):
+    """Refresh (or load) the snapshot and reconcile it. Returns (report, proposals).
 
-    \b
-    Checks shares per holding, cash, trades and deposits in the window, and
-    lists dividends/interest/tax the ledger doesn't book. Nothing is written to
-    the fund; fixes stay manual (/fill, /setcash, fund deposit --record-only).
-    Daily with --notify it doubles as the token keep-alive: a lapsed login is
-    reported instead of waiting for the day it is needed.
+    Proposals are empty unless montrose.import_from is set (phase 2).
     """
-    import dataclasses
     import html
 
+    from fundmgr.broker import importer
     from fundmgr.broker import montrose
     from fundmgr.broker import reconcile as rec
     from fundmgr.config import load_universe
     from fundmgr.notify.send import send_telegram
 
-    cfg, store = _get_store()
-    account = _montrose_account(cfg)
-    start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
     try:
-        if offline:
-            snap = rec.load_snapshot()
-        else:
-            _, snap = rec.refresh(account, start)
+        snap = rec.load_snapshot() if offline else rec.refresh(_montrose_account(cfg), since)[1]
     except montrose.LoginRequired as exc:
         if notify:
             send_telegram(f"🔐 Montrose login needed for the daily reconcile: {html.escape(str(exc))}"
@@ -3943,20 +3925,145 @@ def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_js
             send_telegram(f"⚠️ Montrose reconcile failed: {html.escape(str(exc))}")
         raise click.ClickException(str(exc)) from exc
 
+    imports = store.get_broker_imports()
     report = rec.reconcile(
         snap, **rec.ledger_inputs(store, date.fromisoformat(snap["since"])),
         universe=load_universe(cfg.universe_path), instruments=rec.load_instruments(),
         cash_tolerance=cfg.montrose.cash_tolerance_sek,
         cost_tolerance_pct=cfg.montrose.cost_tolerance_pct,
+        booked_ids={i for i, row in imports.items() if row["status"] == "booked"},
     )
+    props = []
+    if cfg.montrose.import_from:
+        props = importer.proposals(report, import_from=date.fromisoformat(cfg.montrose.import_from),
+                                   imports=imports, fee_calc=cfg.fees.calc,
+                                   account_ccy=(snap.get("currency") or "SEK").upper())
+    return report, props
+
+
+def _offer_proposals(props) -> int:
+    """One Telegram message per proposal, with Book/Skip buttons where bookable."""
+    import html
+
+    from fundmgr.broker import importer
+    from fundmgr.notify.send import send_telegram
+
+    sent = []
+    for p in props:
+        head = {"fill": "🧾 Montrose fill not in the ledger",
+                "flow": "💰 Montrose deposit/withdrawal not in the ledger",
+                "cash": "💵 Montrose cash row not in the ledger"}.get(p.kind, "✋ Montrose row to book by hand")
+        body = f"{head}\n{html.escape(importer.describe(p))}"
+        if p.problem:
+            body += f"\n⚠️ {html.escape(p.problem)}"
+            ok = send_telegram(body)
+        else:
+            ok = send_telegram(body, buttons=[[("✓ Book", f"mi:book:{p.broker_id}"),
+                                               ("✗ Skip", f"mi:skip:{p.broker_id}")]])
+        if ok:
+            sent.append(p)
+    importer.mark_offered(sent)
+    return len(sent)
+
+
+@cli.command("montrose-reconcile")
+@click.option("--since", default=None, metavar="YYYY-MM-DD",
+              help="Transactions from this date (default: montrose.lookback_days ago).")
+@click.option("--offline", is_flag=True, help="Use the last saved snapshot; no Montrose call.")
+@click.option("--notify", is_flag=True,
+              help="Telegram: the report when something is off, each new row to book once "
+                   "(with buttons), and a lapsed login.")
+@click.option("--json", "as_json", is_flag=True, help="Print the report as JSON.")
+def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_json: bool):
+    """Compare the Montrose account with the fund's ledger. Writes nothing.
+
+    \b
+    Checks shares per holding, cash, trades and deposits in the window, and
+    lists dividends/interest/tax the ledger doesn't book. Rows dated on or
+    after montrose.import_from are offered for booking (fund montrose-import);
+    nothing is booked without that. Daily with --notify it doubles as the
+    token keep-alive: a lapsed login is reported instead of waiting for the
+    day it is needed.
+    """
+    import dataclasses
+    import html
+
+    from fundmgr.broker import importer
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
+    report, props = _montrose_report(cfg, store, start, offline=offline, notify=notify)
     text = rec.format_report(report)
+    if props:
+        text += (f"\n{len(props)} Montrose row(s) waiting to be booked — "
+                 "/montrose_import (fund montrose-import).")
     if as_json:
         click.echo(json.dumps({**dataclasses.asdict(report), "cash_diff": report.cash_diff,
-                               "in_sync": report.in_sync}, indent=2, ensure_ascii=False))
+                               "in_sync": report.in_sync,
+                               "proposals": [p.to_dict() for p in props]},
+                              indent=2, ensure_ascii=False))
     else:
         click.echo(text)
-    if notify and not report.in_sync:
-        send_telegram(html.escape(text))
+    if notify:
+        if not report.in_sync:
+            send_telegram(html.escape(text))
+        _offer_proposals(importer.unoffered(props))
+
+
+@cli.command("montrose-import")
+@click.option("--book", "book_id", type=int, default=None, metavar="ID",
+              help="Book Montrose row ID into the ledger (re-checked against Montrose first).")
+@click.option("--skip", "skip_id", type=int, default=None, metavar="ID",
+              help="Never offer Montrose row ID again; the ledger is left as it is.")
+@click.option("--notify", is_flag=True, help="Send every waiting row to Telegram with buttons.")
+def montrose_import_cmd(book_id: int | None, skip_id: int | None, notify: bool):
+    """Book Montrose fills, deposits and dividends into the ledger — one row at a time.
+
+    \b
+    No option: list the rows waiting (Montrose has them, the ledger doesn't,
+    dated on or after montrose.import_from). Every --book/--skip re-reads
+    Montrose and re-runs the reconcile first, so a row booked by hand in the
+    meantime, or cancelled at Montrose, is refused rather than doubled.
+    """
+    from fundmgr.broker import importer
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+
+    cfg, store = _get_store()
+    if not cfg.montrose.import_from:
+        raise click.ClickException("Booking from Montrose is off (set montrose.import_from).")
+    if book_id is not None and skip_id is not None:
+        raise click.UsageError("--book or --skip, not both")
+    # A few days before the cutoff, so a hand-booked fill dated just before it
+    # still matches its broker row instead of leaving that row to be offered.
+    start = max(date.fromisoformat(cfg.montrose.import_from) - timedelta(days=rec.DATE_SLACK_DAYS),
+                rec.default_since(cfg.montrose.lookback_days))
+    _, props = _montrose_report(cfg, store, start)
+
+    target = book_id if book_id is not None else skip_id
+    if target is None:
+        if not props:
+            click.echo("Nothing waiting: every Montrose row since "
+                       f"{cfg.montrose.import_from} is in the ledger or was decided.")
+        for p in props:
+            flag = f"   ⚠ {p.problem}" if p.problem else ""
+            click.echo(f"#{p.broker_id}  {importer.describe(p)}{flag}")
+        if notify:
+            n = _offer_proposals(props)
+            click.echo(f"Sent {n} to Telegram.")
+        return
+
+    try:
+        p = importer.find(props, target)
+        msg = importer.book(store, p) if book_id is not None else importer.skip(store, p)
+    except (montrose.MontroseError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(msg)
+    if book_id is not None:
+        _mark_after_ledger_change(cfg, store, p.trade_date if p.kind == "fill"
+                                  else datetime.utcnow().strftime("%Y-%m-%d"))
 
 
 @cli.command("montrose-map")

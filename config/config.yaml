@@ -82,13 +82,15 @@ report_watch:
   max_judged_per_day: 10     # largest drops first; one call each, medium reasoning
   reasoning_effort: medium
 
-# The real account this book mirrors at Montrose (src/fundmgr/broker/). Phase 1
-# is read-only: `fund montrose-reconcile` compares holdings, cash, trades and
-# deposits with the ledger and reports; it never writes to the fund.
+# The real account this book mirrors at Montrose (src/fundmgr/broker/).
+# `fund montrose-reconcile` compares holdings, cash, trades and deposits with
+# the ledger. Rows from import_from on are offered on Telegram with Book/Skip
+# buttons; nothing is booked without a tap. Earlier history was booked by hand.
 montrose:
   account_name: Simulering
   lookback_days: 60
   cash_tolerance_sek: 25
+  import_from: "2026-10-28"
 
 # Forward shadow comparison (engine/forward.py, docs/LEARNING.md). Each saved
 # Monday run also asks the incumbent prompt and this inactive candidate for a

@@ -18,6 +18,7 @@ Commands:
   /montrose_login — BankID login to Montrose MCP; paste back the callback URL
   /montrose_probe — read-only Montrose call; replies with field names only
   /montrose_reconcile — compare the Montrose account with the ledger (read-only)
+  /montrose_import — rows Montrose has and the ledger doesn't, with Book/Skip buttons
   /help          — show this message
 
 Photo messages:
@@ -762,6 +763,30 @@ async def cmd_montrose_reconcile(update: "Update", context: "ContextTypes.DEFAUL
     await _run_cli_bg(update, context, "montrose-reconcile", timeout=300)
 
 
+async def cmd_montrose_import(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Looking for Montrose rows the ledger doesn't have…")
+    await _run_cli_bg(update, context, "montrose-import", "--notify", timeout=300)
+
+
+async def montrose_import_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Book / Skip on a Montrose row. The CLI re-reads Montrose and re-runs the
+    reconcile before writing, so a stale or repeated tap can't double a fill."""
+    import asyncio
+
+    query = update.callback_query
+    await query.answer()
+    m = re.fullmatch(r"mi:(book|skip):(\d+)", query.data or "")
+    if not m:
+        return
+    action, broker_id = m.groups()
+    await query.edit_message_reply_markup(reply_markup=None)
+    ok, output = await asyncio.to_thread(_run_cli_ok, "montrose-import", f"--{action}", broker_id,
+                                         timeout=120)
+    original = query.message.text if query.message else ""
+    result = output if ok else f"❌ Nothing written.\n{output}\n\n/montrose_import shows it again."
+    await query.edit_message_text(f"{original}\n\n{result}"[:4000])
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -790,10 +815,11 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
         "/pstatus — snapshot of the active book\n"
         "/proof [SLUG] TICKER yes|no — answer the post-earnings proof question\n"
-        "\n— Montrose connection (read-only test) —\n"
+        "\n— Montrose connection —\n"
         "/montrose_login — log in with BankID, then paste the address you land on\n"
         "/montrose_probe — read holdings + transactions once; shows field names only\n"
         "/montrose_reconcile — Montrose vs ledger: shares, cash, trades (writes nothing)\n"
+        "/montrose_import — Montrose rows the ledger lacks, each with Book / Skip\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -1159,12 +1185,14 @@ def main() -> None:
     app.add_handler(CommandHandler("montrose_login", cmd_montrose_login))
     app.add_handler(CommandHandler("montrose_probe", cmd_montrose_probe))
     app.add_handler(CommandHandler("montrose_reconcile", cmd_montrose_reconcile))
+    app.add_handler(CommandHandler("montrose_import", cmd_montrose_import))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 
     # Screenshot fill extraction
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(fill_callback, pattern="^fill_"))
+    app.add_handler(CallbackQueryHandler(montrose_import_callback, pattern=r"^mi:(book|skip):\d+$"))
     # Before text_handler: within a group only the first matching handler runs.
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r"(localhost|127\.0\.0\.1):8765/callback"),

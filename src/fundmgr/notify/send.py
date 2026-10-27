@@ -1,12 +1,14 @@
 """Minimal fire-and-forget Telegram sender, reusable outside the bot process."""
 from __future__ import annotations
 
+import json
 import os
 import urllib.parse
 import urllib.request
 
 
-def send_telegram(text: str, parse_mode: str = "HTML") -> bool:
+def send_telegram(text: str, parse_mode: str = "HTML",
+                  buttons: list[list[tuple[str, str]]] | None = None) -> bool:
     """Send a Telegram message to TELEGRAM_CHAT_ID. Returns True on success.
 
     No-ops (returns False) if the token/chat env vars are unset, and never
@@ -20,6 +22,10 @@ def send_telegram(text: str, parse_mode: str = "HTML") -> bool:
     # unescaped character), retry once as plain text so the message still lands.
     for mode in (parse_mode, None):
         payload = {"chat_id": chat_id, "text": text[:4000]}
+        if buttons:
+            # Rows of (label, callback_data); the bot's CallbackQueryHandler answers them.
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [
+                [{"text": label, "callback_data": data} for label, data in row] for row in buttons]})
         if mode:
             payload["parse_mode"] = mode
         try:

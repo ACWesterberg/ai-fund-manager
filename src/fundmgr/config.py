@@ -161,6 +161,10 @@ class MontroseConfig:
     lookback_days: int = 60          # transaction window the reconcile walks
     cash_tolerance_sek: float = 25.0  # fee rounding across a month of fills
     cost_tolerance_pct: float = 1.0
+    # Phase 2: Montrose rows dated on/after this are offered for booking into
+    # the ledger (one tap each). Earlier history was booked by hand — some of
+    # it folded into cash with /setcash — so it is never offered. Empty = off.
+    import_from: str = ""
 
 
 @dataclass

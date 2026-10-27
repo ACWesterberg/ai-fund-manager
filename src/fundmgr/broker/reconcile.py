@@ -259,8 +259,14 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
               ledger_costs: dict[str, float], ledger_trades: list[LedgerTrade],
               ledger_flows: list[dict], universe: list[UniverseTicker],
               instruments: dict[str, dict], cash_tolerance: float = 25.0,
-              cost_tolerance_pct: float = 1.0) -> Report:
-    """Compare a broker snapshot with the ledger. Pure: no I/O, no writes."""
+              cost_tolerance_pct: float = 1.0, booked_ids: set[int] | frozenset = frozenset(),
+              ) -> Report:
+    """Compare a broker snapshot with the ledger. Pure: no I/O, no writes.
+
+    `booked_ids` are Montrose rows already booked into the ledger (phase 2).
+    Fills and deposits match on their own; a booked dividend or tax row has no
+    ledger row to match, so this is how it stops being listed as unbooked.
+    """
     since = date.fromisoformat(snapshot["since"])
     known = known_symbols(list(ledger_positions), universe)
     account_ccy = (snapshot.get("currency") or "SEK").upper()
@@ -337,8 +343,10 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
             broker_trades.append(t)
         elif cat in FLOW_CATEGORIES:
             continue
+        elif t.get("id") in booked_ids:
+            continue
         elif settles_in_account_ccy and abs(amount) > 0.005:
-            report.cash_events.append({"date": t.get("tradeDate"), "category": cat,
+            report.cash_events.append({"id": t.get("id"), "date": t.get("tradeDate"), "category": cat,
                                        "amount": amount, "text": t.get("text") or ""})
             explained += amount
 
@@ -373,7 +381,7 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
         amount = _num(t.get("amount"))
         entry = instruments.get(str(t.get("orderbookId")), {})
         report.missing_in_ledger.append({
-            "date": t.get("tradeDate"), "side": "buy" if t["category"] == "Buy" else "sell",
+            "id": t.get("id"), "currency": t.get("currency"), "date": t.get("tradeDate"), "side": "buy" if t["category"] == "Buy" else "sell",
             "ticker": yahoo_for(t.get("orderbookId"), currency=t.get("priceCurrency")),
             "montrose": entry.get("ticker"), "orderbookId": t.get("orderbookId"),
             "shares": abs(_num(t.get("quantity"))), "price": _num(t.get("price")),
@@ -399,7 +407,8 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
             flows.remove(match)
             explained += amount - match["amount"]
         else:
-            report.flows_missing.append({"date": d.isoformat(), "category": t["category"],
+            report.flows_missing.append({"id": t.get("id"), "date": d.isoformat(),
+                                         "category": t["category"],
                                          "amount": amount})
             explained += amount
     for f in flows:

@@ -23,9 +23,11 @@ def send_telegram(text: str, parse_mode: str = "HTML",
     for mode in (parse_mode, None):
         payload = {"chat_id": chat_id, "text": text[:4000]}
         if buttons:
-            # Rows of (label, callback_data); the bot's CallbackQueryHandler answers them.
+            # Rows of (label, data): an https data opens that page (a Montrose
+            # ticket); anything else is callback_data for the bot's handlers.
             payload["reply_markup"] = json.dumps({"inline_keyboard": [
-                [{"text": label, "callback_data": data} for label, data in row] for row in buttons]})
+                [{"text": label, ("url" if data.startswith("https://") else "callback_data"): data}
+                 for label, data in row] for row in buttons]})
         if mode:
             payload["parse_mode"] = mode
         try:

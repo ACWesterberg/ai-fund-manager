@@ -165,6 +165,10 @@ class MontroseConfig:
     # the ledger (one tap each). Earlier history was booked by hand — some of
     # it folded into cash with /setcash — so it is never offered. Empty = off.
     import_from: str = ""
+    # Phase 3: after each weekly run, send a pre-filled Montrose order ticket
+    # per approved trade. Off until the owner has tried /montrose_ticket once;
+    # the plan is saved either way, so /montrose_tickets works on demand.
+    tickets: bool = False
 
 
 @dataclass

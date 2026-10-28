@@ -1,5 +1,5 @@
 """
-Montrose MCP client — read-only, phase 0.
+Montrose MCP client.
 
 Montrose exposes the real ISK/KF account over MCP at mcp.montrose.io with
 standard MCP OAuth (dynamic client registration, PKCE S256, client secret,
@@ -8,8 +8,12 @@ the loop. Montrose's terms allow own tools and scheduled jobs; orders are
 always approved by the owner in the Montrose app.
 
 There is no read-only login: any token can also create trade tickets. So the
-read-only promise lives here, in `READ_TOOLS` — `call_tool` refuses anything
-else, and there is deliberately no code path to a ticket tool yet.
+limits live here. `call_tool` refuses anything outside `READ_TOOLS`. The one
+write — a trade *ticket*, a pre-filled order screen the owner still has to
+approve in the app — has its own method, `create_trade_ticket`, which takes
+only an orderbookId, a whole share count and an account, and returns the URL
+only if it is Montrose's own https trade page. Watchlists, price alerts and
+anything else stay unreachable.
 
 Login renewal has to work from a phone away from home. The Pi keeps the PKCE
 verifier and state; the owner opens the authorize link on the phone and does
@@ -58,6 +62,11 @@ READ_TOOLS = frozenset({
     # holding's id back into a ticker. A lookup, it changes nothing.
     "search_instruments",
 })
+
+TICKET_TOOL = "create_trade_ticket"
+# Seen live 2026-10-28: https://app.montrose.io/trade?ticketId=<id>.
+TICKET_HOST = "app.montrose.io"
+TICKET_PATH = "/trade"
 
 PENDING_TTL_S = 10 * 60
 REFRESH_MARGIN_S = 60
@@ -419,6 +428,34 @@ class Session:
             return json.loads(text)
         except json.JSONDecodeError:
             return text
+
+    def create_trade_ticket(self, side: str, orderbook_id: int, quantity: int,
+                            account_id: str) -> str:
+        """A pre-filled order screen in the Montrose app; the owner approves it there.
+
+        Only the safest identifiers: an orderbookId (never a ticker or name,
+        which Montrose itself calls ambiguous), a whole share count (never an
+        amount, whose currency it would guess) and an explicit account, so a
+        ticket can't land in the wrong ISK. No price: the owner sets the limit.
+        """
+        if side not in ("Buy", "Sell"):
+            raise ValueError(f"side must be Buy or Sell, got {side!r}")
+        if isinstance(orderbook_id, bool) or not isinstance(orderbook_id, int) or orderbook_id <= 0:
+            raise ValueError(f"orderbookId must be a positive int, got {orderbook_id!r}")
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+            raise ValueError(f"quantity must be a positive whole number, got {quantity!r}")
+        if not account_id:
+            raise ValueError("a ticket needs the account it is for")
+        result = self._rpc("tools/call", {"name": TICKET_TOOL, "arguments": {
+            "side": side, "orderbookId": orderbook_id, "quantity": quantity,
+            "accountId": account_id}})
+        if result.get("isError"):
+            raise MontroseError(f"{TICKET_TOOL}: {_text_content(result)[:500]}")
+        url = str((result.get("structuredContent") or {}).get("url") or "")
+        u = urlparse(url)
+        if u.scheme != "https" or u.netloc != TICKET_HOST or u.path != TICKET_PATH:
+            raise MontroseError(f"Unexpected ticket URL from Montrose: {url[:120]!r}")
+        return url
 
 
 def _text_content(result: dict) -> str:

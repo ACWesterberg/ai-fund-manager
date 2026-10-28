@@ -19,6 +19,8 @@ Commands:
   /montrose_probe — read-only Montrose call; replies with field names only
   /montrose_reconcile — compare the Montrose account with the ledger (read-only)
   /montrose_import — rows Montrose has and the ledger doesn't, with Book/Skip buttons
+  /montrose_tickets — pre-filled Montrose orders for the latest run's trades
+  /montrose_ticket TICKER buy|sell SHARES — one pre-filled Montrose order
   /help          — show this message
 
 Photo messages:
@@ -787,6 +789,26 @@ async def montrose_import_callback(update: "Update", context: "ContextTypes.DEFA
     await query.edit_message_text(f"{original}\n\n{result}"[:4000])
 
 
+async def cmd_montrose_tickets(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Making Montrose tickets for the latest run…")
+    await _run_cli_bg(update, context, "montrose-tickets", "--notify", timeout=300,
+                      done_msg="🎫 Done — tickets are in the message above.")
+
+
+async def cmd_montrose_ticket(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/montrose_ticket TICKER buy|sell SHARES — one pre-filled order in Montrose."""
+    args = context.args or []
+    if (len(args) != 3 or args[1].lower() not in ("buy", "sell")
+            or not re.fullmatch(r"[1-9][0-9]{0,6}", args[2])
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,15}", args[0])):
+        await update.message.reply_text("Usage: /montrose_ticket TICKER buy|sell SHARES\n"
+                                        "e.g. /montrose_ticket KCC.OL sell 36")
+        return
+    await update.message.reply_text("⏳ Making the Montrose ticket…")
+    await _run_cli_bg(update, context, "montrose-ticket", args[0].upper(), args[1].lower(), args[2],
+                      "--notify", timeout=120, done_msg="🎫 Done — the ticket is in the message above.")
+
+
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
         "🤖 AI Fund Manager Bot\n\n"
@@ -820,6 +842,8 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/montrose_probe — read holdings + transactions once; shows field names only\n"
         "/montrose_reconcile — Montrose vs ledger: shares, cash, trades (writes nothing)\n"
         "/montrose_import — Montrose rows the ledger lacks, each with Book / Skip\n"
+        "/montrose_tickets — order tickets for the latest run (you approve in the app)\n"
+        "/montrose_ticket TICKER buy|sell SHARES — one order ticket\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -1186,6 +1210,8 @@ def main() -> None:
     app.add_handler(CommandHandler("montrose_probe", cmd_montrose_probe))
     app.add_handler(CommandHandler("montrose_reconcile", cmd_montrose_reconcile))
     app.add_handler(CommandHandler("montrose_import", cmd_montrose_import))
+    app.add_handler(CommandHandler("montrose_tickets", cmd_montrose_tickets))
+    app.add_handler(CommandHandler("montrose_ticket", cmd_montrose_ticket))
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("start",    cmd_help))
 

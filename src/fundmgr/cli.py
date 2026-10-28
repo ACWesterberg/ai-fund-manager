@@ -579,6 +579,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             except Exception as e:
                 click.echo(f"  ⚠ Telegram notification failed: {e}", err=True)
 
+    if not dry_run and cfg.montrose.account_name:
+        _run_tickets(cfg, store, run_id, guardrail_result.approved_actions, snap, features)
+
     # ── Auto-fill (paper trading simulation) ─────────────────────────────────
     if not dry_run and cfg.auto_fill and guardrail_result.approved_actions:
         from fundmgr.engine.auto_fill import execute_paper_fills
@@ -4079,6 +4082,114 @@ def montrose_map_cmd(orderbook_id: int, symbol: str):
     entry = rec.pin_instrument(orderbook_id, symbol)
     click.echo(f"orderbook {orderbook_id} → {entry['yahoo']}"
                + (f" ({entry.get('ticker')} {entry.get('name')})" if entry.get("ticker") else ""))
+
+
+def _ticket_symbols(cfg, store) -> dict[str, str]:
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.config import load_universe
+
+    return rec.known_symbols([p.ticker for p in store.get_positions()],
+                             load_universe(cfg.universe_path))
+
+
+def _issue_tickets(cfg, store, lines, run_id: str, notify: bool, done=None) -> list:
+    """Create tickets for `lines`, print them, and optionally send them with buttons."""
+    from fundmgr.broker import tickets
+    from fundmgr.notify.send import send_telegram
+
+    if any(not t.problem for t in lines):
+        tickets.create_tickets(_montrose_account(cfg), lines, _ticket_symbols(cfg, store))
+    text, buttons = tickets.message(lines, run_id, done)
+    for t in lines:
+        click.echo(f"  {'✓' if t.url else '✗'} {t.label()}"
+                   + (f"  orderbook {t.orderbook_id}" if t.orderbook_id else "")
+                   + (f"  — {t.problem}" if t.problem else ""))
+    if notify and (lines or done):
+        send_telegram(text, buttons=buttons)
+    return lines
+
+
+def _run_tickets(cfg, store, run_id: str, actions, snap, features) -> None:
+    """After a saved weekly run: save the ticket plan, and send tickets if switched on.
+
+    Advisory throughout — the decision is already saved and sent; a Montrose
+    outage or a lapsed login costs the buttons, never the run.
+    """
+    import html
+
+    from fundmgr.broker import tickets
+    from fundmgr.notify.send import send_telegram
+
+    try:
+        plan = tickets.plan_from_run(run_id, actions, snap, features, cfg)
+        tickets.save_plan(plan)
+        if not cfg.montrose.tickets or not plan["lines"]:
+            return
+        click.echo("\n[→] Montrose tickets…")
+        _issue_tickets(cfg, store, tickets.plan_lines(plan), run_id, notify=True)
+    except Exception as exc:
+        click.echo(f"  ⚠ Montrose tickets not sent: {exc}", err=True)
+        if cfg.montrose.tickets:
+            send_telegram(f"⚠️ Montrose tickets not sent: {html.escape(str(exc))}\n"
+                          "/montrose_tickets tries again.")
+
+
+@cli.command("montrose-tickets")
+@click.option("--notify", is_flag=True, help="Send them to Telegram as buttons.")
+def montrose_tickets_cmd(notify: bool):
+    """Pre-filled Montrose order tickets for the latest weekly run's approved trades.
+
+    \b
+    Each ticket opens the Montrose app on a filled-in order (instrument, side,
+    whole shares, the Simulering account); you set the limit and approve it
+    there — nothing is placed from here. Trades already in the ledger since the
+    run get no ticket. An instrument Montrose lists more than once is named,
+    not guessed.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.broker import tickets
+
+    cfg, store = _get_store()
+    _montrose_account(cfg)
+    try:
+        plan = tickets.load_plan()
+        lines = tickets.plan_lines(plan)
+        since = plan["created_at"][:10]
+        done = tickets.mark_done(lines, rec.ledger_inputs(store, date.fromisoformat(since))["ledger_trades"],
+                                 since)
+        click.echo(f"Run {plan['run_id']} ({plan['created_at'][:16].replace('T', ' ')} UTC):")
+        if not lines:
+            click.echo("  No trades waiting for a ticket"
+                       + (f" — already in the ledger: {', '.join(done)}." if done else "."))
+        _issue_tickets(cfg, store, lines, plan["run_id"], notify, done)
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@cli.command("montrose-ticket")
+@click.argument("ticker")
+@click.argument("side", type=click.Choice(["buy", "sell"]))
+@click.argument("shares", type=click.IntRange(min=1))
+@click.option("--notify", is_flag=True, help="Send it to Telegram as a button.")
+def montrose_ticket_cmd(ticker: str, side: str, shares: int, notify: bool):
+    """One pre-filled Montrose order ticket, e.g. `fund montrose-ticket KCC.OL sell 36`.
+
+    Opens a filled-in order in the Montrose app; nothing is placed until you
+    approve it there.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import tickets
+
+    cfg, store = _get_store()
+    _montrose_account(cfg)
+    line = tickets.TicketLine(ticker=ticker.upper(), side=side, shares=shares, kind="MANUAL")
+    try:
+        _issue_tickets(cfg, store, [line], "manual", notify)
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if line.problem:
+        raise click.ClickException(line.problem)
 
 
 if __name__ == "__main__":

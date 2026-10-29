@@ -2767,20 +2767,50 @@ def account_list():
                    f"{len(store.get_positions()):>3} holdings  last sync {synced}")
 
 
+@cli.command("account-montrose")
+def account_montrose():
+    """List your Montrose accounts and which ones are mirrored here."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    try:
+        rows = accounts.montrose_accounts()
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(f"{e} (log in with 'fund montrose-login' or /montrose_login)") from e
+    for r in rows:
+        value = f"{r['value_sek']:>12,.0f} SEK" if r["value_sek"] else f"{'':>16}"
+        what = ("the Nordic fund (/)" if r["is_fund"]
+                else f"mirrored as {r['linked_slug']}" if r["linked_slug"] else "not mirrored")
+        click.echo(f"  {r['name']:<28} {str(r['type'] or ''):<6} "
+                   f"{r['positions'] if r['positions'] is not None else '?':>3} holdings {value}  {what}")
+
+
 @cli.command("account-create")
 @click.argument("name")
-@click.argument("snapshot_file", type=click.Path(exists=True, dir_okay=False))
-@click.option("--benchmark", default="URTH", show_default=True,
-              help="Yahoo symbol to compare against (e.g. ^OMXSPI for a Swedish account).")
+@click.argument("snapshot_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--montrose", "montrose_account", default=None,
+              help="Read the holdings from this Montrose account and keep it linked "
+                   "(NAME is then the name shown here; pass '' to use Montrose's).")
+@click.option("--benchmark", default=None,
+              help="Yahoo symbol to compare against (default: ^OMX for a mostly-Swedish "
+                   "account, URTH otherwise).")
 @click.option("--no-plans", is_flag=True, help="Don't write monitoring plans yet.")
-def account_create(name: str, snapshot_file: str, benchmark: str, no_plans: bool):
-    """Create a broker account mirror from a holdings snapshot (JSON), booked at
-    the broker's cost basis, then write a monitoring plan for every holding."""
+def account_create(name: str, snapshot_file: str | None, montrose_account: str | None,
+                   benchmark: str | None, no_plans: bool):
+    """Create a broker account mirror, booked at the broker's cost basis — from
+    Montrose (--montrose ACCOUNT) or a holdings snapshot file — then write a
+    monitoring plan for every holding."""
     from fundmgr import accounts
+    from fundmgr.broker import montrose
     try:
-        slug, log = accounts.create_account(name, Path(snapshot_file).read_text(),
-                                            benchmark=benchmark)
-    except ValueError as e:
+        if montrose_account:
+            slug, log = accounts.create_from_montrose(montrose_account, name=name or None,
+                                                      benchmark=benchmark)
+        elif snapshot_file:
+            slug, log = accounts.create_account(name, Path(snapshot_file).read_text(),
+                                                benchmark=benchmark or accounts.paper.DEFAULT_BENCHMARK)
+        else:
+            raise click.ClickException("Give a snapshot file or --montrose ACCOUNT.")
+    except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
         raise click.ClickException(str(e)) from e
     for line in log:
         click.echo(f"  {line}")
@@ -2789,21 +2819,32 @@ def account_create(name: str, snapshot_file: str, benchmark: str, no_plans: bool
 
 
 @cli.command("account-sync")
-@click.argument("slug")
-@click.argument("snapshot_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("slug", required=False)
+@click.argument("snapshot_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--all", "sync_all", is_flag=True, help="Every Montrose-linked account (cron form).")
 @click.option("--dry-run", is_flag=True, help="Show what changed without writing anything.")
 @click.option("--no-plans", is_flag=True, help="Don't write plans for newly opened names.")
 @click.option("--quiet", is_flag=True, help="Don't send the Telegram summary.")
-def account_sync(slug: str, snapshot_file: str, dry_run: bool, no_plans: bool, quiet: bool):
-    """Bring an account in line with a holdings snapshot: whatever changed since
-    the last sync is booked as your trade, new names get a monitoring plan, and
-    the summary goes to Telegram."""
+def account_sync(slug: str | None, snapshot_file: str | None, sync_all: bool, dry_run: bool,
+                 no_plans: bool, quiet: bool):
+    """Bring an account in line with its broker: whatever changed since the last
+    sync is booked as your trade, new names get a monitoring plan, and the
+    summary goes to Telegram. Reads the linked Montrose account unless a
+    snapshot file is given."""
     from fundmgr import accounts
+    from fundmgr.broker import montrose
+    if sync_all:
+        for line in accounts.sync_all(notify=not quiet):
+            click.echo(f"  {line}")
+        return
+    if not slug:
+        raise click.ClickException("Give an account slug, or --all.")
     try:
-        result = accounts.sync_account(slug, Path(snapshot_file).read_text(),
+        snapshot = Path(snapshot_file).read_text() if snapshot_file else None
+        result = accounts.sync_account(slug, snapshot,
                                        notify=not quiet and not dry_run,
                                        write_plans=not no_plans, dry_run=dry_run)
-    except (KeyError, ValueError) as e:
+    except (KeyError, ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
         raise click.ClickException(str(e)) from e
     click.echo(html.unescape(_strip_tags(result["message"])))
 

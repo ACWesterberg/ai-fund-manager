@@ -393,6 +393,7 @@ def _account_ctx(store, slug: str) -> dict:
         running = slug in _plan_jobs
     return {
         "last_sync": (store.get_meta(accounts.LAST_SYNC_KEY) or "")[:16].replace("T", " "),
+        "montrose": store.get_meta(accounts.MONTROSE_KEY) or "",
         "unplanned": [t for t in held if not kill.get(t)],
         "stances": {t: notes[t] for t in held if (notes.get(t) or {}).get("stance")},
         "plan_running": running,
@@ -1120,6 +1121,66 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             from urllib.parse import urlencode
             return RedirectResponse(
                 url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}), status_code=303)
+
+        @router.get("/montrose/accounts")
+        async def montrose_list():
+            """Your Montrose accounts, for the Add-from-Montrose list. JSON so the
+            page renders at once even when Montrose is slow or the login lapsed."""
+            from fundmgr.broker import montrose
+            try:
+                rows = await run_in_threadpool(accounts.montrose_accounts)
+            except montrose.LoginRequired as e:
+                return {"ok": False, "login": True, "error": str(e)}
+            except Exception as e:
+                return {"ok": False, "login": False, "error": str(e)}
+            return {"ok": True, "accounts": rows}
+
+        @router.post("/create-from-montrose")
+        async def create_from_montrose(request: Request, montrose_account: str = Form(...)):
+            from urllib.parse import urlencode
+
+            from fundmgr.broker import montrose
+            try:
+                slug, log = await run_in_threadpool(
+                    accounts.create_from_montrose, montrose_account)
+            except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+                return _render(home_template, _home_ctx(request, error=str(e)))
+            started = _start_plan_job(slug)
+            warn = [line[2:] for line in log if line.startswith("⚠")]
+            msg = f"Now mirroring {montrose_account} from Montrose."
+            if warn:
+                msg += " ⚠ " + "; ".join(warn)
+            if started:
+                msg += " Writing a monitoring plan for every holding — it arrives on Telegram."
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}), status_code=303)
+
+        @router.post("/{slug}/sync-montrose")
+        async def sync_montrose(slug: str):
+            from urllib.parse import urlencode
+
+            from fundmgr.broker import montrose
+            try:
+                paper.open_portfolio(slug)
+            except KeyError:
+                return _not_found()
+            try:
+                result = await run_in_threadpool(accounts.sync_account, slug)
+                n = len(result["changes"])
+                msg = (f"{n} change(s) from Montrose: " + ", ".join(
+                    f"{c['kind']} {c['ticker']}" for c in result["changes"])
+                    if n else "In step with Montrose — no trades since the last sync.")
+                if result["warnings"]:
+                    msg += " ⚠ " + "; ".join(result["warnings"])
+                ok = 1
+            except montrose.LoginRequired:
+                msg, ok = "Montrose login has lapsed — send /montrose_login in Telegram.", 0
+            except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+                msg, ok = f"Montrose sync failed: {e}", 0
+            _price_cache.pop(slug, None)
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}) + "#sync",
+                status_code=303)
 
         @router.post("/{slug}/sync")
         async def sync(request: Request, slug: str):

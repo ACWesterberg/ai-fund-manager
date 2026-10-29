@@ -713,8 +713,21 @@
     </span>
   </div>
 
-  <details {% if not account.last_sync %}open{% endif %}>
-    <summary class="text-sm font-semibold text-slate-300" style="cursor:pointer">Sync after you trade</summary>
+  {% if account.montrose %}
+  <form method="post" action="{{ book_prefix }}/sync-montrose" class="flex flex-wrap items-center gap-3 mb-3">
+    <button type="submit" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-teal-500/40 text-sm font-semibold text-teal-300">
+      Sync from Montrose now
+    </button>
+    <span class="text-[11px] text-slate-500">
+      Linked to Montrose account <b class="text-slate-300">{{ account.montrose }}</b> — read every 30 minutes in
+      trading hours; your trades there show up here and on Telegram by themselves.
+    </span>
+  </form>
+  {% endif %}
+
+  <details {% if not account.last_sync and not account.montrose %}open{% endif %}>
+    <summary class="text-sm font-semibold text-slate-300" style="cursor:pointer">
+      {% if account.montrose %}Or sync from a snapshot{% else %}Sync after you trade{% endif %}</summary>
     <p class="text-xs text-slate-500 mt-2 mb-3">
       Give the account's current holdings. Whatever changed since the last sync is booked as your trade
       (new name → bought, fewer shares → sold), a monitoring plan is written for anything new, and Telegram

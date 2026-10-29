@@ -43,7 +43,11 @@ KIND = "account"
 # the same ISIN lands on the same listing instead of reading as close + open.
 ISIN_KEY = "account_isins"
 NAMES_KEY = "account_names"
+# The Montrose account this book mirrors, by its accountName. Set when the
+# account is created from Montrose; a linked account syncs with no input.
+MONTROSE_KEY = "account_montrose_name"
 LAST_SYNC_KEY = "account_last_sync"
+_WARNED_KEY = "account_last_warnings"
 
 _SHARE_EPS = 1e-6
 
@@ -152,6 +156,7 @@ def parse_snapshot(data) -> dict:
             "cost_value_sek": cost_value if cost_value is not None
                               else (avg * shares if avg else None),
             "price_sek": price,
+            "orderbook_id": row.get("orderbook_id") or row.get("orderbookId"),
         })
     return {"holdings": holdings, "cash_sek": cash, "account_name": name}
 
@@ -166,7 +171,9 @@ def resolve_snapshot(store: Store | None, holdings: list[dict]) -> list[dict]:
     for h in holdings:
         if h.get("ticker"):
             continue
-        if h.get("isin") and known.get(h["isin"]):
+        if h.get("orderbook_id") and known.get(f"ob:{h['orderbook_id']}"):
+            h["ticker"] = known[f"ob:{h['orderbook_id']}"]
+        elif h.get("isin") and known.get(h["isin"]):
             h["ticker"] = known[h["isin"]]
         elif h.get("raw_ticker") in held:
             h["ticker"] = h["raw_ticker"]
@@ -187,6 +194,8 @@ def _remember_isins(store: Store, holdings: list[dict]) -> None:
     for h in holdings:
         if h.get("isin") and h.get("ticker"):
             known[h["isin"]] = h["ticker"]
+        if h.get("orderbook_id") and h.get("ticker"):
+            known[f"ob:{h['orderbook_id']}"] = h["ticker"]
         if h.get("ticker") and h.get("name") and h["name"] != h["ticker"]:
             names[h["ticker"]] = h["name"]
     store.set_meta(ISIN_KEY, json.dumps(known))
@@ -200,7 +209,8 @@ def names(store: Store) -> dict[str, str]:
 # ── Creating an account ───────────────────────────────────────────────────────
 
 def create_account(name: str, snapshot, *, benchmark: str = paper.DEFAULT_BENCHMARK,
-                   source: str = "holdings snapshot") -> tuple[str, list[str]]:
+                   source: str = "holdings snapshot",
+                   montrose_account: str | None = None) -> tuple[str, list[str]]:
     """Create an account book from a snapshot, seeded at the broker's cost basis.
 
     Rows that cannot be resolved to a ticker, or carry no cost basis, are skipped
@@ -222,7 +232,8 @@ def create_account(name: str, snapshot, *, benchmark: str = paper.DEFAULT_BENCHM
             log.append(f"⚠ {h['ticker']}: no cost basis or price — skipped")
             continue
         rows.append({"ticker": h["ticker"], "name": h["name"], "shares": h["shares"],
-                     "avg_cost_sek": cost, "isin": h.get("isin")})
+                     "avg_cost_sek": cost, "isin": h.get("isin"),
+                     "orderbook_id": h.get("orderbook_id")})
     if not rows:
         raise ValueError("Nothing in the snapshot could be booked — every row was "
                          "unresolved or missing its share count and cost.")
@@ -240,6 +251,8 @@ def create_account(name: str, snapshot, *, benchmark: str = paper.DEFAULT_BENCHM
     )
     _meta, store = paper.open_portfolio(slug)
     _remember_isins(store, rows)
+    if montrose_account:
+        store.set_meta(MONTROSE_KEY, montrose_account)
     store.set_meta(LAST_SYNC_KEY, datetime.now(timezone.utc).isoformat(timespec="seconds"))
     return slug, log + create_log
 
@@ -278,7 +291,7 @@ def _buy_price(old_shares: float, old_avg: float, row: dict, delta: float,
     return None, ""
 
 
-def sync_account(slug: str, snapshot, *, notify: bool = True,
+def sync_account(slug: str, snapshot=None, *, notify: bool = True,
                  write_plans: bool = True, dry_run: bool = False) -> dict:
     """Bring an account book in line with a holdings snapshot.
 
@@ -286,10 +299,18 @@ def sync_account(slug: str, snapshot, *, notify: bool = True,
     per ticker whose share count moved: kind (opened / added / trimmed / closed),
     shares, price_sek and where that price came from. With `dry_run` the diff is
     computed and nothing is written or sent.
+
+    With no snapshot, the account's linked Montrose account is read instead.
     """
     meta, store = paper.open_portfolio(slug)
     if meta.get("kind") != KIND:
         raise ValueError(f"'{slug}' is a {meta.get('kind')} book, not a broker account.")
+    if snapshot is None:
+        linked = store.get_meta(MONTROSE_KEY)
+        if not linked:
+            raise ValueError(f"'{meta['name']}' isn't linked to a Montrose account — "
+                             "give it a holdings snapshot instead.")
+        snapshot = montrose_snapshot(linked, store=store)
     parsed = parse_snapshot(snapshot)
     holdings = resolve_snapshot(store, parsed["holdings"])
 
@@ -430,7 +451,11 @@ def sync_account(slug: str, snapshot, *, notify: bool = True,
 
     result["message"] = format_sync_message(meta["name"], changes, cash_note, warnings,
                                             result["plans"], store=store)
-    if notify and (changes or warnings):
+    # A cron sync runs every half hour; an unresolvable row would otherwise
+    # repeat the same warning all day. Changes always speak; warnings once.
+    seen = json.loads(store.get_meta(_WARNED_KEY) or "[]")
+    store.set_meta(_WARNED_KEY, json.dumps(sorted(warnings)))
+    if notify and (changes or sorted(warnings) != seen and warnings):
         from fundmgr.notify.send import send_telegram
         send_telegram(result["message"])
     return result
@@ -561,3 +586,201 @@ def standing_plan_lines(store: Store, ticker: str) -> list[str]:
     if not watchplan.get_kill_text(store).get(ticker) and not target:
         out.append("No monitoring plan yet — run a plan to have it watched.")
     return out
+
+
+# ── Montrose ──────────────────────────────────────────────────────────────────
+#
+# The broker client (broker/montrose.py) is read-only bar order tickets, and
+# only `get_user_accounts` / `get_holdings` are used here. Montrose names
+# instruments by its own ticker and orderbookId, never ISIN; the orderbookId is
+# what each book remembers, so a holding maps to the same listing every sync.
+
+def _known_symbols(store: Store | None) -> dict[str, str]:
+    """Yahoo symbol → quote currency for everything an account could hold: both
+    universes (Nordic and global) plus what the book already holds."""
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.config import CONFIG_DIR, load_universe
+    universe = []
+    for name in ("universe.csv", "universe_global.csv"):
+        try:
+            universe += load_universe(CONFIG_DIR / name)
+        except Exception:
+            continue
+    held = [p.ticker for p in store.get_positions()] if store else []
+    return rec.known_symbols(held, universe)
+
+
+def _num0(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def montrose_snapshot(account_name: str, *, store: Store | None = None) -> dict:
+    """Read one Montrose account's holdings and cash as a snapshot.
+
+    Cost basis is market value minus unrealised result, both in SEK — what
+    Montrose itself reports you paid. Foreign cash balances are converted at
+    today's rate; one that cannot be converted is left out and named. Rows the
+    resolver cannot place keep their name and currency for a name search, and
+    never their bare Montrose ticker: "VOLV B" is not a Yahoo symbol.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+
+    instruments = rec.load_instruments()
+    with montrose.Session() as s:
+        account = rec._find_account(rec._unwrap(s.call_tool("get_user_accounts")), account_name)
+        account_id = account["accountId"]
+        entries = [h for h in rec._unwrap(s.call_tool("get_holdings", {"accountId": account_id}))
+                   if h.get("accountId") == account_id]
+    if len(entries) != 1:
+        raise montrose.MontroseError(f"get_holdings returned {len(entries)} entries for "
+                                     f"{account_name!r}")
+    h = entries[0]
+    if h.get("error"):
+        raise montrose.MontroseError(f"get_holdings: {h['error']}")
+
+    known = _known_symbols(store)
+    account_ccy = (h.get("currency") or "SEK").upper()
+    holdings = []
+    for pos in h.get("positions") or []:
+        obid = pos.get("orderbookId")
+        entry = instruments.setdefault(str(obid), {})
+        entry.update(ticker=pos.get("ticker"), name=pos.get("instrumentName"),
+                     currency=pos.get("instrumentCurrency"))
+        qty = _num0(pos.get("quantity"))
+        if qty <= 0:
+            continue
+        value = _num0((pos.get("marketValue") or {}).get("accountCurrency"))
+        pnl = _num0((pos.get("unrealizedResult") or {}).get("accountCurrency"))
+        yahoo = entry.get("yahoo") or rec.resolve_yahoo(
+            pos.get("ticker") or "", pos.get("instrumentName") or "",
+            pos.get("instrumentCurrency") or "", known)
+        holdings.append({
+            "ticker": yahoo,
+            "raw_ticker": "",
+            "montrose_ticker": pos.get("ticker"),
+            "name": pos.get("instrumentName") or pos.get("ticker") or str(obid),
+            "currency": pos.get("instrumentCurrency"),
+            "orderbook_id": obid,
+            "shares": qty,
+            "avg_cost_sek": (value - pnl) / qty if value else None,
+            "market_value_sek": value or None,
+        })
+    rec.save_instruments(instruments)
+
+    cash, skipped = 0.0, []
+    for cp in h.get("currencyPositions") or []:
+        code = str(cp.get("currencyCode", "")).upper()
+        bal = _num0(cp.get("balance"))
+        if code == account_ccy:
+            cash += bal
+        elif abs(bal) > 0.005:
+            from fundmgr.data.fx import rate_to_sek
+            rate = rate_to_sek(code, store)
+            if rate:
+                cash += bal * rate
+            else:
+                skipped.append(f"{bal:,.2f} {code}")
+    if not h.get("currencyPositions"):
+        cash = _num0((h.get("summary") or {}).get("availableForPurchase"))
+    return {"account_name": account.get("accountName"), "cash_sek": round(cash, 2),
+            "holdings": holdings, "unconverted_cash": skipped}
+
+
+def montrose_accounts() -> list[dict]:
+    """Every Montrose account with its holdings count and value, and whether a
+    book already mirrors it. The real fund's own account is marked, not hidden."""
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.config import load_config
+
+    linked = {}
+    for meta in list_accounts():
+        _m, store = paper.open_portfolio(meta["slug"])
+        if store.get_meta(MONTROSE_KEY):
+            linked[store.get_meta(MONTROSE_KEY).strip().casefold()] = meta["slug"]
+    try:
+        fund_account = (load_config().montrose.account_name or "").strip().casefold()
+    except Exception:
+        fund_account = ""
+
+    out = []
+    with montrose.Session() as s:
+        for a in rec._unwrap(s.call_tool("get_user_accounts")):
+            name = str(a.get("accountName", "")).strip()
+            row = {"name": name, "type": a.get("accountType"), "positions": None,
+                   "value_sek": None, "linked_slug": linked.get(name.casefold()),
+                   "is_fund": name.casefold() == fund_account}
+            try:
+                entries = [h for h in rec._unwrap(
+                    s.call_tool("get_holdings", {"accountId": a["accountId"]}))
+                    if h.get("accountId") == a["accountId"]]
+                if entries and not entries[0].get("error"):
+                    row["positions"] = sum(1 for p in entries[0].get("positions") or []
+                                           if _num0(p.get("quantity")) > 0)
+                    row["value_sek"] = _num0((entries[0].get("summary") or {}).get("totalValue")) \
+                        or None
+            except montrose.MontroseError:
+                pass
+            out.append(row)
+    return out
+
+
+def default_benchmark(snapshot: dict) -> str:
+    """OMXS30 for a mostly-Swedish account, MSCI World otherwise."""
+    rows = snapshot.get("holdings") or []
+    value = lambda r: r.get("market_value_sek") or 0  # noqa: E731
+    sek = sum(value(r) for r in rows if (r.get("currency") or "").upper() == "SEK")
+    total = sum(value(r) for r in rows)
+    return "^OMX" if total and sek / total >= 0.5 else paper.DEFAULT_BENCHMARK
+
+
+def create_from_montrose(account_name: str, *, name: str | None = None,
+                         benchmark: str | None = None) -> tuple[str, list[str]]:
+    snap = montrose_snapshot(account_name)
+    slug, log = create_account(name or snap["account_name"] or account_name, snap,
+                               benchmark=benchmark or default_benchmark(snap),
+                               source="Montrose", montrose_account=snap["account_name"])
+    if snap["unconverted_cash"]:
+        log.append("⚠ cash left out (no FX rate): " + ", ".join(snap["unconverted_cash"]))
+    return slug, log
+
+
+def linked_accounts() -> list[dict]:
+    out = []
+    for meta in list_accounts():
+        _m, store = paper.open_portfolio(meta["slug"])
+        if store.get_meta(MONTROSE_KEY):
+            out.append({**meta, "montrose_account": store.get_meta(MONTROSE_KEY)})
+    return out
+
+
+_LOGIN_NAG_KEY = "account_login_nag"
+
+
+def sync_all(*, notify: bool = True) -> list[str]:
+    """Sync every Montrose-linked account. The cron form: quiet unless something
+    changed, and a lapsed Montrose login is said once a day, not every run."""
+    from fundmgr.broker import montrose
+    log: list[str] = []
+    for meta in linked_accounts():
+        try:
+            result = sync_account(meta["slug"], notify=notify)
+            n = len(result["changes"])
+            log.append(f"{meta['name']}: {n} change(s)" if n else f"{meta['name']}: no change")
+        except montrose.LoginRequired as e:
+            _m, store = paper.open_portfolio(meta["slug"])
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if notify and store.get_meta(_LOGIN_NAG_KEY) != today:
+                store.set_meta(_LOGIN_NAG_KEY, today)
+                from fundmgr.notify.send import send_telegram
+                send_telegram(f"🔐 Montrose login needed to watch {_esc(meta['name'])}: "
+                              f"{_esc(e)}\nSend /montrose_login.")
+            log.append(f"⚠ {meta['name']}: Montrose login needed")
+            break
+        except Exception as e:
+            log.append(f"⚠ {meta['name']}: {e}")
+    return log or ["No accounts are linked to Montrose."]

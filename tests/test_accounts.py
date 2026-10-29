@@ -298,7 +298,7 @@ def client(paper_dir, mock_market, monkeypatch):
 def test_accounts_home_and_sidebar(client):
     r = client.get("/accounts/")
     assert r.status_code == 200
-    assert "Add an account" in r.text
+    assert "Add from Montrose" in r.text and "Or add from a screenshot" in r.text
     assert 'href="/whatif"' in r.text
     # The comparison sims, paper and live sections are off the sidebar…
     assert 'href="/sim-claude"' not in r.text
@@ -375,3 +375,135 @@ def test_plans_button_starts_a_job(client):
     client.started.clear()
     r = client.post("/accounts/svenska-aktier/plans", data={}, follow_redirects=False)
     assert r.status_code == 303 and client.started == ["svenska-aktier"]
+
+
+# ── Montrose ──────────────────────────────────────────────────────────────────
+
+def _position(obid, ticker, name, ccy, qty, value, pnl):
+    return {"orderbookId": obid, "ticker": ticker, "instrumentName": name,
+            "instrumentCurrency": ccy, "quantity": qty,
+            "marketValue": {"accountCurrency": value},
+            "unrealizedResult": {"accountCurrency": pnl}}
+
+
+@pytest.fixture
+def fake_montrose(monkeypatch, tmp_path):
+    """A Montrose with two accounts, shaped like the real get_* replies."""
+    import fundmgr.broker.montrose as m
+    monkeypatch.setattr(m, "DATA_DIR", tmp_path)
+    state = {
+        "accounts": [
+            {"accountId": "A1", "accountName": "Svenska aktier", "accountType": "ISK"},
+            {"accountId": "A2", "accountName": "Simulering", "accountType": "KF"},
+        ],
+        "holdings": {
+            "A1": {"accountId": "A1", "currency": "SEK",
+                   "summary": {"totalValue": 14000},
+                   "currencyPositions": [{"currencyCode": "SEK", "balance": 1000},
+                                         {"currencyCode": "USD", "balance": 10}],
+                   "positions": [
+                       _position(11, "VOLV B", "Volvo B", "SEK", 10, 3000, 500),
+                       _position(12, "AAPL", "Apple Inc", "USD", 5, 10000, 1000),
+                   ]},
+            "A2": {"accountId": "A2", "currency": "SEK", "summary": {"totalValue": 50000},
+                   "positions": []},
+        },
+    }
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def call_tool(self, name, arguments=None):
+            if name == "get_user_accounts":
+                return {"result": state["accounts"]}
+            if name == "get_holdings":
+                return [state["holdings"][arguments["accountId"]]]
+            raise AssertionError(name)
+
+    monkeypatch.setattr(m, "Session", Session)
+    return state
+
+
+def test_montrose_snapshot_resolves_and_costs(paper_dir, mock_market, fake_montrose):
+    snap = accounts.montrose_snapshot("svenska aktier")
+    rows = {r["orderbook_id"]: r for r in snap["holdings"]}
+    assert rows[11]["ticker"] == "VOLV-B.ST"          # "VOLV B" in SEK → the Stockholm B share
+    assert rows[12]["ticker"] == "AAPL"
+    assert rows[11]["avg_cost_sek"] == pytest.approx(250)   # (3000 − 500) / 10
+    assert snap["cash_sek"] == pytest.approx(1100)          # 1000 SEK + 10 USD × 10
+    assert accounts.default_benchmark(snap) == "URTH"       # most of the value is USD
+
+
+def test_create_and_sync_from_montrose(paper_dir, mock_market, fake_montrose, sent, no_plans):
+    slug, _log = accounts.create_from_montrose("Svenska aktier")
+    _meta, store = paper.open_portfolio(slug)
+    assert store.get_meta(accounts.MONTROSE_KEY) == "Svenska aktier"
+    assert {p.ticker: p.shares for p in store.get_positions()} == {"VOLV-B.ST": 10, "AAPL": 5}
+
+    # You sell Apple and buy more Volvo in Montrose; the next sync reads it alone.
+    fake_montrose["holdings"]["A1"]["positions"] = [
+        _position(11, "VOLV B", "Volvo B", "SEK", 15, 4500, 600)]
+    fake_montrose["holdings"]["A1"]["currencyPositions"] = [
+        {"currencyCode": "SEK", "balance": 9000}]
+    log = accounts.sync_all()
+    assert log == ["Svenska aktier: 2 change(s)"]
+    pos = {p.ticker: p for p in store.get_positions()}
+    assert set(pos) == {"VOLV-B.ST"} and pos["VOLV-B.ST"].shares == 15
+    assert store.get_cash() == pytest.approx(9000)
+    assert len(sent) == 1 and "Closed" in sent[0] and "AAPL" in sent[0]
+
+    # Nothing changed: the half-hourly cron stays quiet.
+    assert accounts.sync_all() == ["Svenska aktier: no change"]
+    assert len(sent) == 1
+
+
+def test_unresolvable_holding_warns_once(paper_dir, mock_market, fake_montrose, sent,
+                                         no_plans, monkeypatch):
+    import fundmgr.vision.portfolio_photo as photo
+    monkeypatch.setattr(photo, "_resolve_tickers", lambda rows: rows)
+    slug, _ = accounts.create_from_montrose("Svenska aktier")
+    fake_montrose["holdings"]["A1"]["positions"].append(
+        _position(99, "ZZZ", "Obscure Holding AB", "SEK", 3, 300, 0))
+    accounts.sync_all()
+    accounts.sync_all()
+    assert len(sent) == 1 and "Obscure Holding AB" in sent[0]
+
+
+def test_montrose_accounts_marks_fund_and_mirrors(paper_dir, mock_market, fake_montrose):
+    accounts.create_from_montrose("Svenska aktier")
+    rows = {r["name"]: r for r in accounts.montrose_accounts()}
+    assert rows["Svenska aktier"]["linked_slug"] == "svenska-aktier"
+    assert rows["Svenska aktier"]["positions"] == 2
+    assert rows["Simulering"]["is_fund"] is True
+
+
+def test_login_lapse_is_said_once_a_day(paper_dir, mock_market, fake_montrose, sent, monkeypatch):
+    import fundmgr.broker.montrose as m
+    accounts.create_from_montrose("Svenska aktier")
+
+    class Lapsed:
+        def __enter__(self):
+            raise m.LoginRequired("token expired")
+
+        def __exit__(self, *exc):
+            return None
+    monkeypatch.setattr(m, "Session", Lapsed)
+    assert accounts.sync_all() == ["⚠ Svenska aktier: Montrose login needed"]
+    accounts.sync_all()
+    assert len(sent) == 1 and "/montrose_login" in sent[0]
+
+
+def test_web_montrose_list_and_add(client, fake_montrose):
+    r = client.get("/accounts/montrose/accounts").json()
+    assert r["ok"] and {a["name"] for a in r["accounts"]} == {"Svenska aktier", "Simulering"}
+    r = client.post("/accounts/create-from-montrose",
+                    data={"montrose_account": "Svenska aktier"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/accounts/svenska-aktier")
+    page = client.get("/accounts/svenska-aktier").text
+    assert "Sync from Montrose now" in page
+    r = client.post("/accounts/svenska-aktier/sync-montrose", follow_redirects=False)
+    assert r.status_code == 303 and "In+step+with+Montrose" in r.headers["location"]

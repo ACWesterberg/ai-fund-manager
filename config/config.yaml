@@ -93,9 +93,9 @@ montrose:
   import_from: "2026-10-28"
   # After each weekly run, one pre-filled Montrose order ticket per approved
   # trade (you set the limit and approve in the app). The plan is saved either
-  # way; /montrose_tickets sends it on demand. Turn on once /montrose_ticket
-  # has been tried by hand.
-  tickets: false
+  # way; /montrose_tickets sends it on demand. On since 2026-10-29, after a
+  # hand-made /montrose_ticket opened correctly in the app.
+  tickets: true
 
 # Forward shadow comparison (engine/forward.py, docs/LEARNING.md). Each saved
 # Monday run also asks the incumbent prompt and this inactive candidate for a

@@ -126,7 +126,8 @@ def test_sync_books_each_kind_of_trade(paper_dir, mock_market, sent, no_plans):
     assert pos["VOLV-B.ST"].avg_cost_sek == pytest.approx(260)
     # 1000 + 10000 sale − 1400 − 9600 = 0; the broker says 500 → a deposit.
     assert store.get_cash() == pytest.approx(500)
-    assert meta["capital_sek"] == pytest.approx(13000)
+    assert meta["capital_sek"] == pytest.approx(12500)          # starting capital stays put
+    assert [f["amount_sek"] for f in store.get_cash_flows()] == [pytest.approx(500)]
     assert result["cash"]["unexplained_sek"] == pytest.approx(500)
 
     # The closed name stops being watched; the opened one was planned.
@@ -167,8 +168,9 @@ def test_sync_infers_a_deposit_for_an_unfunded_buy(paper_dir, mock_market, sent,
     meta, store = paper.open_portfolio(slug)
     assert {p.ticker for p in store.get_positions()} == {"VOLV-B.ST", "AAPL", "MSFT"}
     assert store.get_cash() >= 0
-    # The 15 000 SEK purchase was paid with money the mirror hadn't seen: capital, not return.
-    assert meta["capital_sek"] == pytest.approx(12500 + 15000 - 1000, abs=1)
+    # The 15 000 SEK purchase was paid with money the mirror hadn't seen: a deposit, not return.
+    assert meta["capital_sek"] == pytest.approx(12500)
+    assert sum(f["amount_sek"] for f in store.get_cash_flows()) == pytest.approx(14000, abs=1)
 
 
 def test_sync_refuses_a_non_account_book(paper_dir, mock_market):

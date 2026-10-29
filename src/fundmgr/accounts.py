@@ -26,7 +26,7 @@ difference as fills:
 
 The snapshot is the truth and the book follows it, including cash: a difference
 the fills do not explain is a deposit or withdrawal, so it moves the account's
-contributed capital rather than showing up as profit.
+a recorded cash flow rather than showing up as profit.
 """
 from __future__ import annotations
 
@@ -367,7 +367,6 @@ def sync_account(slug: str, snapshot, *, notify: bool = True,
         return result
 
     now = datetime.now(timezone.utc)
-    capital = meta["capital_sek"]
     # Sells first, so their proceeds are in the book before anything is bought.
     for ch in sorted(changes, key=lambda c: c["side"] != "sell"):
         if ch["side"] == "buy":
@@ -375,9 +374,10 @@ def sync_account(slug: str, snapshot, *, notify: bool = True,
             short = need - store.get_cash()
             if short > 0:
                 # The broker had the money; the mirror just hadn't been told. A
-                # deposit is contributed capital, not return.
-                store.adjust_cash(round(short, 2) + 0.01)
-                capital += round(short, 2) + 0.01
+                # deposit is money put in, not return.
+                store.record_cash_flow(round(short, 2) + 0.01,
+                                       note="inferred from an account sync: buy "
+                                            "larger than mirrored cash")
         store.apply_fill(Transaction(
             ticker=ch["ticker"], side=ch["side"], shares=ch["shares"],
             price_sek=round(ch["price_sek"], 4), fee_sek=0.0, source="sync",
@@ -399,10 +399,9 @@ def sync_account(slug: str, snapshot, *, notify: bool = True,
     if parsed.get("cash_sek") is not None:
         diff = parsed["cash_sek"] - store.get_cash()
         if abs(diff) >= 1:
-            store.adjust_cash(diff)
-            capital += diff
+            store.record_cash_flow(round(diff, 2),
+                                   note="account sync: broker cash the trades don't explain")
             cash_note = diff
-    store.set_meta("paper_capital_sek", str(round(capital, 2)))
     result["cash"] = {"balance_sek": store.get_cash(), "unexplained_sek": cash_note}
 
     store.set_meta("paper_currency_map", json.dumps(currency_map))

@@ -151,7 +151,9 @@ def _portfolio_summaries(kind: str) -> list[dict]:
         _, store = paper.open_portfolio(meta["slug"])
         navs = store.get_nav_history()
         nav = navs[-1].portfolio_nav_sek if navs else meta["capital_sek"]
-        pnl_pct = (nav / meta["capital_sek"] - 1) * 100 if meta["capital_sek"] else 0.0
+        # Net of deposits, so a top-up never reads as profit on the list.
+        from fundmgr.reporting.dashboard import gain
+        _, pnl_pct = gain(nav, meta["capital_sek"], store.get_cash_flows())
         last = store.get_transactions(limit=1)
         out.append({
             **meta,

@@ -57,9 +57,11 @@ app.include_router(make_sim_router(
 
 # Paper portfolios — user-created from pasted LLM picks, tracked like the sims.
 # Live sleeves — real monitored books imported via `fund paper-import`.
-from fundmgr.web.paper import router as paper_router, live_router  # noqa: E402
+from fundmgr.web.paper import router as paper_router, live_router, account_router  # noqa: E402
 app.include_router(paper_router)
 app.include_router(live_router)
+# Broker accounts — real books you trade yourself, synced from holdings snapshots.
+app.include_router(account_router)
 
 # What-If Lab — generate a fresh hypothetical portfolio for any fund profile.
 from fundmgr.web.whatif import router as whatif_router  # noqa: E402
@@ -67,6 +69,8 @@ app.include_router(whatif_router)
 
 # Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
+from fundmgr.web.nav import install as _install_nav  # noqa: E402
+_install_nav(_jinja_env)
 
 
 def _render(template_name: str, context: dict) -> HTMLResponse:

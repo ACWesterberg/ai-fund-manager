@@ -2450,6 +2450,100 @@ def paper_adds(slug):
         click.echo("No add plans yet — set one with 'fund paper-add-plan'.")
 
 
+@cli.command("account-list")
+def account_list():
+    """List the broker accounts (/accounts) and when each was last synced."""
+    from fundmgr import accounts
+    from fundmgr.paper import open_portfolio
+    metas = accounts.list_accounts()
+    if not metas:
+        click.echo("No broker accounts yet — add one on the web at /accounts, or "
+                   "'fund account-create NAME snapshot.json'.")
+        return
+    for meta in metas:
+        _, store = open_portfolio(meta["slug"])
+        synced = (store.get_meta(accounts.LAST_SYNC_KEY) or "never")[:16]
+        click.echo(f"  {meta['slug']:<24} {meta['name']:<28} "
+                   f"{len(store.get_positions()):>3} holdings  last sync {synced}")
+
+
+@cli.command("account-create")
+@click.argument("name")
+@click.argument("snapshot_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--benchmark", default="URTH", show_default=True,
+              help="Yahoo symbol to compare against (e.g. ^OMXSPI for a Swedish account).")
+@click.option("--no-plans", is_flag=True, help="Don't write monitoring plans yet.")
+def account_create(name: str, snapshot_file: str, benchmark: str, no_plans: bool):
+    """Create a broker account mirror from a holdings snapshot (JSON), booked at
+    the broker's cost basis, then write a monitoring plan for every holding."""
+    from fundmgr import accounts
+    try:
+        slug, log = accounts.create_account(name, Path(snapshot_file).read_text(),
+                                            benchmark=benchmark)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    for line in log:
+        click.echo(f"  {line}")
+    if not no_plans:
+        _account_write_plans(slug, None, overwrite=False)
+
+
+@cli.command("account-sync")
+@click.argument("slug")
+@click.argument("snapshot_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--dry-run", is_flag=True, help="Show what changed without writing anything.")
+@click.option("--no-plans", is_flag=True, help="Don't write plans for newly opened names.")
+@click.option("--quiet", is_flag=True, help="Don't send the Telegram summary.")
+def account_sync(slug: str, snapshot_file: str, dry_run: bool, no_plans: bool, quiet: bool):
+    """Bring an account in line with a holdings snapshot: whatever changed since
+    the last sync is booked as your trade, new names get a monitoring plan, and
+    the summary goes to Telegram."""
+    from fundmgr import accounts
+    try:
+        result = accounts.sync_account(slug, Path(snapshot_file).read_text(),
+                                       notify=not quiet and not dry_run,
+                                       write_plans=not no_plans, dry_run=dry_run)
+    except (KeyError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(html.unescape(_strip_tags(result["message"])))
+
+
+def _strip_tags(text: str) -> str:
+    import re
+    return re.sub(r"</?[a-z]+>", "", text)
+
+
+def _account_write_plans(slug: str, tickers: list[str] | None, overwrite: bool) -> None:
+    from fundmgr.engine import account_plan
+    from fundmgr.engine.client import LLMError
+    try:
+        plans = account_plan.write_plans(slug, tickers, overwrite=overwrite)
+    except LLMError as e:
+        raise click.ClickException(f"Plan call failed: {e}") from e
+    for p in plans:
+        written = ", ".join(p["written"]) or "nothing new (already planned)"
+        click.echo(f"  {p['ticker']:<12} {p['stance']:<5} {p['stance_reason']}")
+        click.echo(f"  {'':<12} wrote: {written}")
+
+
+@cli.command("account-plan")
+@click.argument("slug", required=False)
+@click.option("--ticker", "tickers", multiple=True, help="Only these holdings (repeatable).")
+@click.option("--overwrite", is_flag=True,
+              help="Replace existing criteria, targets and lines, including hand edits.")
+def account_plan_cmd(slug: str | None, tickers: tuple[str, ...], overwrite: bool):
+    """Write monitoring plans and refresh the hold/add/trim/exit view for an
+    account (all accounts when SLUG is omitted — the weekly cron form).
+
+    Only empty fields are filled unless --overwrite. Results go to Telegram."""
+    if slug:
+        _account_write_plans(slug, [t.upper() for t in tickers] or None, overwrite)
+        return
+    from fundmgr.engine.account_plan import refresh_all
+    for line in refresh_all(overwrite=overwrite):
+        click.echo(f"  {line}")
+
+
 @cli.command("paper-list")
 def paper_list():
     """List the paper portfolios and their current state."""

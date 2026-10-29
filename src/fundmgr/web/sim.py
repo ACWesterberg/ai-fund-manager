@@ -17,6 +17,7 @@ from jinja2 import Environment, FileSystemLoader
 from fundmgr.config import load_config, load_universe
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 from fundmgr.state.store import Store
+from fundmgr.web import nav
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _PRICE_TTL = 300  # seconds
@@ -48,7 +49,7 @@ def make_sim_router(config_filename: str, prefix: str, sim_label: str, sim_accen
     _sim_store = None
     _price_cache: dict[frozenset, tuple[float, dict[str, float]]] = {}
 
-    jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
+    jinja_env = nav.install(Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True))
 
     router = APIRouter(prefix=prefix)
 

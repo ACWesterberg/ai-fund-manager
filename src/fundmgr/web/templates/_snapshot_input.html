@@ -1,0 +1,68 @@
+{# Holdings snapshot input: paste JSON, or read a screenshot into it.
+   Expects `snap_id` (element id prefix) and `extract_url` in context. The
+   screenshot path only fills the textarea; nothing is written until the form
+   that contains this is submitted, so a misread is always visible first. #}
+<div class="flex flex-wrap items-center gap-3 mb-2">
+  <label for="{{ snap_id }}-files"
+         class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-xs font-semibold text-slate-200 cursor-pointer flex items-center gap-2">
+    <span class="material-symbols-outlined" style="font-size:15px">add_a_photo</span>
+    Read from screenshots
+  </label>
+  <input id="{{ snap_id }}-files" type="file" accept="image/*" multiple class="hidden" />
+  <span id="{{ snap_id }}-status" class="text-xs text-slate-500">or paste the broker's holdings as JSON below</span>
+</div>
+<textarea id="{{ snap_id }}-text" name="snapshot_text" rows="10" required
+          placeholder='{"cash_sek": 12500, "holdings": [{"name": "Volvo B", "isin": "SE0000115446", "ticker": "VOLV B", "shares": 120, "avg_cost_sek": 231.4, "currency": "SEK"}, …]}'
+          class="w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-teal-500/60">{{ snapshot_text or '' }}</textarea>
+<p class="text-[11px] text-slate-600 mt-1">
+  Per holding: <code>shares</code> plus an identifier (<code>isin</code> is best; broker <code>ticker</code>,
+  <code>yahoo_ticker</code> or <code>name</code> also work) and the SEK cost basis (<code>avg_cost_sek</code>
+  or <code>cost_value_sek</code>). <code>market_value_sek</code> or <code>price_sek</code> prices a sale.
+  Top-level <code>cash_sek</code> keeps cash in step — anything the trades don't explain is booked as a deposit or withdrawal.
+</p>
+<script>
+(() => {
+  const files = document.getElementById('{{ snap_id }}-files');
+  const status = document.getElementById('{{ snap_id }}-status');
+  const text = document.getElementById('{{ snap_id }}-text');
+  const KEEP = ['ticker', 'raw_ticker', 'isin', 'name', 'currency', 'shares',
+                'avg_cost_sek', 'cost_value_sek', 'market_value_sek'];
+  files.addEventListener('change', async () => {
+    if (!files.files.length) return;
+    status.textContent = 'Reading the screenshot…';
+    status.className = 'text-xs text-slate-500';
+    const body = new FormData();
+    for (const f of files.files) body.append('photos', f);
+    let payload;
+    try {
+      const resp = await fetch('{{ extract_url }}', {method: 'POST', body});
+      payload = await resp.json();
+    } catch (e) {
+      payload = {ok: false, error: 'Upload failed: ' + e};
+    }
+    files.value = '';
+    if (!payload || !payload.ok) {
+      status.textContent = (payload && payload.error) || 'Could not read the screenshot.';
+      status.className = 'text-xs text-red-400';
+      return;
+    }
+    const holdings = payload.holdings.map(h => {
+      const row = {};
+      KEEP.forEach(k => { if (h[k] !== null && h[k] !== undefined && h[k] !== '') row[k] = h[k]; });
+      return row;
+    });
+    const snap = {holdings};
+    if (payload.cash_sek !== null && payload.cash_sek !== undefined) snap.cash_sek = payload.cash_sek;
+    if (payload.account_name) snap.account_name = payload.account_name;
+    text.value = JSON.stringify(snap, null, 2);
+    const nameBox = document.getElementById('{{ snap_id }}-name');
+    if (nameBox && !nameBox.value && payload.account_name) nameBox.value = payload.account_name;
+    const unresolved = holdings.filter(h => !h.ticker).length;
+    status.textContent = `${holdings.length} holdings read` +
+      (unresolved ? ` — ${unresolved} without a ticker match; add a "yahoo_ticker" to those rows` : '') +
+      ((payload.warnings || []).length ? ` · ${payload.warnings.length} warning(s): ` + payload.warnings.join(' · ') : '') +
+      '. Check the numbers against the broker before submitting.';
+    status.className = 'text-xs ' + (unresolved || (payload.warnings || []).length ? 'text-amber-400' : 'text-teal-400');
+  });
+})();
+</script>

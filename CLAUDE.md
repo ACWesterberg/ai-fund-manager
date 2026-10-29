@@ -111,6 +111,19 @@ See **[docs/MONITORING.md](docs/MONITORING.md)** for the full monitoring model �
 
 ---
 
+## Broker accounts (`/accounts`)
+
+Your own Montrose accounts (e.g. *Svenska aktier*, *Utländska aktier*): **you** decide every trade; the app mirrors the account, notices what changed, writes the monitoring plan the trade arrived without, and alerts on Telegram. It never places or proposes an order to the broker. The Nordic real-money fund (the *Simulering* account) is listed first and links to `/`.
+
+- **A book of kind `account`** on the paper engine (`accounts.py`), so every daily watch `fund paper-track` runs on live sleeves — kill text, numeric kill lines, horizons, add signals, earnings, drift — covers it unchanged.
+- **Synced from a holdings snapshot**, whatever produced it: a screenshot through the photo reader, pasted JSON, `fund account-sync`, or a JSON `POST /accounts/<slug>/sync` (Basic auth like every route). `sync_account` diffs it against the book: new name → buy at the broker's cost basis; more shares → buy priced from the change in total cost (believed only within 0.5–2× of market); fewer/gone → sell at the snapshot price, else live. Sells book before buys. The snapshot is the truth, cash included: anything the fills don't explain is a **deposit/withdrawal and moves contributed capital**, never P&L. A closed name's plan is retired so it stops alerting. ISINs map back to the listing first booked, so a re-listed ISIN can't read as close + open.
+- **Plans** (`engine/account_plan.py`): one call per account on the default config's model, all names together. Each holding gets kill and add criteria, a target price (installed as both the take-profit line and the add-plan target), a max drop anchored to today, a horizon, and a hold/add/trim/exit **stance** recorded as the account's latest decision. Only empty fields are filled unless `--overwrite` — hand edits survive regeneration. Written for names a sync opens, for a buy recorded by hand, on the dashboard button, and weekly (`fund account-plan`, Saturday cron).
+- **Target reached is a take-profit, not a max drop.** A kill-rule row whose only reason is `price_above` alerts under 🎯 *target price reached, consider taking profit*; it used to share the 🟡 max-drop headline, which says the opposite.
+
+The sidebar shows Nordic real money → Accounts → What-If Lab. The model-comparison sims, paper portfolios and live sleeves are still served but off the sidebar; `FUND_WEB_SHOW_ARCHIVED=1` lists them again.
+
+---
+
 ## Risk limits (`RiskConfig`, enforced in `guardrails/rules.py`)
 
 | Limit | Default | Notes |
@@ -185,6 +198,8 @@ src/fundmgr/data/market_hours.py   Exchange calendars: is_exchange_open, dominan
 src/fundmgr/data/prices.py         TickerFeatures + feature build
 src/fundmgr/data/release.py        Statement/report reading (gpt-4o-mini)
 src/fundmgr/paper.py               Sleeves: create_portfolio, parse_structured_portfolio, kill judging
+src/fundmgr/accounts.py            Broker accounts: snapshot parse, sync_account (diff → fills), Telegram summary
+src/fundmgr/engine/account_plan.py Plans + stances for account holdings; weekly refresh_all
 src/fundmgr/watchplan.py           Kill/add criteria plumbing
 src/fundmgr/state/store.py         SQLite — positions, cash, transactions, recommendations,
                                    decision_outcomes, learnings, caches, stops, alerts, reviews

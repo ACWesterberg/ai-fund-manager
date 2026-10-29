@@ -124,6 +124,12 @@ if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ];
     fi
 fi
 
+# Cron jobs owned by the code (deploy/managed_cron.sh): a marked block only,
+# the rest of the crontab stays hand-maintained. Advisory — never fails a deploy.
+if [ -f "$REPO_DIR/deploy/managed_cron.sh" ]; then
+    bash "$REPO_DIR/deploy/managed_cron.sh" "$REPO_DIR" 2>&1 | while read -r line; do log "  $line"; done || true
+fi
+
 log "Restarting services…"
 sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
 

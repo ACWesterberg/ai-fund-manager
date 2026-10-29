@@ -107,14 +107,15 @@
 # season, so keep this running every weekday. 22:15 CET = after NYSE close.
 
 15 22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-track >> data/logs/paper.log 2>&1
+# Installed by deploy/managed_cron.sh on every deploy — don't paste these two.
 # Broker accounts (/accounts): read each Montrose-linked account every 30 min in
 # trading hours and book what changed. Read-only; an LLM call only when a new
 # name appears; Telegram only on a change.
-*/30 9-22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund account-sync --all >> data/logs/accounts.log 2>&1
+# */30 9-22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund account-sync --all >> data/logs/accounts.log 2>&1
 # Broker accounts (/accounts): refresh every holding's hold/add/trim/exit view and fill
 # any missing plan, Saturday morning — one call per account, results to Telegram.
 # The daily watches above (paper-track) already cover accounts.
-41 8 * * 6 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund account-plan >> data/logs/accounts.log 2>&1
+# 41 8 * * 6 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund account-plan >> data/logs/accounts.log 2>&1
 
 
 # ═══ LIVE SLEEVE REVIEWS — re-decide each sleeve against what it holds ═══════

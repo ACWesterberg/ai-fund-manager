@@ -163,8 +163,12 @@ Everything is cron on the Pi; there is no in-process scheduler.
 | `fund paper-watch` | hourly, trading hours | cheap `gpt-4o-mini` only |
 | `fund montrose-reconcile --notify` | weekdays 21:45 | no — broker check; offers new rows to book |
 | `fund paper-track` | weekdays 22:15 | yes, gated |
+| `fund account-sync --all` | every 30 min, 09–22 weekdays | no — Montrose read; LLM only for a newly bought name |
+| `fund account-plan` | Sat 08:41 | yes — one call per account |
 | `fund optimize` × 5 | Sun 02:00–04:00 | yes — **gated, see below** |
 | `deploy/backup.sh` | daily 03:00 + post-run | no |
+
+The two account jobs are installed by `deploy/managed_cron.sh` on every deploy, as a marked block in the crontab; everything else is pasted by hand from `deploy/cron.example`.
 
 Run times are staggered so the funds don't collide, and each is placed 30 min after its market's open. `fund run` gates itself on holidays; the others don't need to.
 

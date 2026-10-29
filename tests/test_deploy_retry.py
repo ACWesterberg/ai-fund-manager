@@ -82,3 +82,24 @@ def test_deploy_ref_must_match_tested_revision(deployment):
     assert result.returncode != 0
     assert not (repo / "data/events").exists()
     assert not (repo / "data/deployed-revision").exists()
+
+
+def test_a_changed_deploy_script_runs_its_new_steps_in_the_same_deploy(deployment):
+    """git reset swaps deploy.sh for a new file while bash still reads the old
+    one, so a step added to the script used to skip the deploy that shipped it."""
+    repo, env = deployment
+    script = repo / "deploy/deploy.sh"
+    old = script.read_text()
+    marker = 'log "Restarting services…"'
+    script.write_text(old.replace(marker, 'echo new-step >> "$FUND_DIR/data/events"\n' + marker))
+    run("git", "commit", "-qam", "add a deploy step", cwd=repo)
+    run("git", "push", "-q", "origin", "deploy", cwd=repo)
+    run("git", "reset", "-q", "--hard", "HEAD~1", cwd=repo)          # the Pi, one deploy behind
+    assert script.read_text() == old
+
+    run("bash", str(script), env=env)
+    events = (repo / "data/events").read_text().split()
+    assert events.count("new-step") == 1
+    assert events.count("install") == 1          # one deploy, not two
+    assert (repo / "data/deployed-revision").read_text().strip() == \
+        run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()

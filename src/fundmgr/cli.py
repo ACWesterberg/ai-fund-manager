@@ -2783,6 +2783,141 @@ def paper_adds(slug):
         click.echo("No add plans yet — set one with 'fund paper-add-plan'.")
 
 
+@cli.command("account-list")
+def account_list():
+    """List the broker accounts (/accounts) and when each was last synced."""
+    from fundmgr import accounts
+    from fundmgr.paper import open_portfolio
+    metas = accounts.list_accounts()
+    if not metas:
+        click.echo("No broker accounts yet — add one on the web at /accounts, or "
+                   "'fund account-create NAME snapshot.json'.")
+        return
+    for meta in metas:
+        _, store = open_portfolio(meta["slug"])
+        synced = (store.get_meta(accounts.LAST_SYNC_KEY) or "never")[:16]
+        click.echo(f"  {meta['slug']:<24} {meta['name']:<28} "
+                   f"{len(store.get_positions()):>3} holdings  last sync {synced}")
+
+
+@cli.command("account-montrose")
+def account_montrose():
+    """List your Montrose accounts and which ones are mirrored here."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    try:
+        rows = accounts.montrose_accounts()
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(f"{e} (log in with 'fund montrose-login' or /montrose_login)") from e
+    for r in rows:
+        value = f"{r['value_sek']:>12,.0f} SEK" if r["value_sek"] else f"{'':>16}"
+        what = ("the Nordic fund (/)" if r["is_fund"]
+                else f"mirrored as {r['linked_slug']}" if r["linked_slug"] else "not mirrored")
+        click.echo(f"  {r['name']:<28} {str(r['type'] or ''):<6} "
+                   f"{r['positions'] if r['positions'] is not None else '?':>3} holdings {value}  {what}")
+
+
+@cli.command("account-create")
+@click.argument("name")
+@click.argument("snapshot_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--montrose", "montrose_account", default=None,
+              help="Read the holdings from this Montrose account and keep it linked "
+                   "(NAME is then the name shown here; pass '' to use Montrose's).")
+@click.option("--benchmark", default=None,
+              help="Yahoo symbol to compare against (default: ^OMX for a mostly-Swedish "
+                   "account, URTH otherwise).")
+@click.option("--no-plans", is_flag=True, help="Don't write monitoring plans yet.")
+def account_create(name: str, snapshot_file: str | None, montrose_account: str | None,
+                   benchmark: str | None, no_plans: bool):
+    """Create a broker account mirror, booked at the broker's cost basis — from
+    Montrose (--montrose ACCOUNT) or a holdings snapshot file — then write a
+    monitoring plan for every holding."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    try:
+        if montrose_account:
+            slug, log = accounts.create_from_montrose(montrose_account, name=name or None,
+                                                      benchmark=benchmark)
+        elif snapshot_file:
+            slug, log = accounts.create_account(name, Path(snapshot_file).read_text(),
+                                                benchmark=benchmark or accounts.paper.DEFAULT_BENCHMARK)
+        else:
+            raise click.ClickException("Give a snapshot file or --montrose ACCOUNT.")
+    except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(str(e)) from e
+    for line in log:
+        click.echo(f"  {line}")
+    if not no_plans:
+        _account_write_plans(slug, None, overwrite=False)
+
+
+@cli.command("account-sync")
+@click.argument("slug", required=False)
+@click.argument("snapshot_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--all", "sync_all", is_flag=True, help="Every Montrose-linked account (cron form).")
+@click.option("--dry-run", is_flag=True, help="Show what changed without writing anything.")
+@click.option("--no-plans", is_flag=True, help="Don't write plans for newly opened names.")
+@click.option("--quiet", is_flag=True, help="Don't send the Telegram summary.")
+def account_sync(slug: str | None, snapshot_file: str | None, sync_all: bool, dry_run: bool,
+                 no_plans: bool, quiet: bool):
+    """Bring an account in line with its broker: whatever changed since the last
+    sync is booked as your trade, new names get a monitoring plan, and the
+    summary goes to Telegram. Reads the linked Montrose account unless a
+    snapshot file is given."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    if sync_all:
+        for line in accounts.sync_all(notify=not quiet):
+            click.echo(f"  {line}")
+        return
+    if not slug:
+        raise click.ClickException("Give an account slug, or --all.")
+    try:
+        snapshot = Path(snapshot_file).read_text() if snapshot_file else None
+        result = accounts.sync_account(slug, snapshot,
+                                       notify=not quiet and not dry_run,
+                                       write_plans=not no_plans, dry_run=dry_run)
+    except (KeyError, ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(html.unescape(_strip_tags(result["message"])))
+
+
+def _strip_tags(text: str) -> str:
+    import re
+    return re.sub(r"</?[a-z]+>", "", text)
+
+
+def _account_write_plans(slug: str, tickers: list[str] | None, overwrite: bool) -> None:
+    from fundmgr.engine import account_plan
+    from fundmgr.engine.client import LLMError
+    try:
+        plans = account_plan.write_plans(slug, tickers, overwrite=overwrite)
+    except LLMError as e:
+        raise click.ClickException(f"Plan call failed: {e}") from e
+    for p in plans:
+        written = ", ".join(p["written"]) or "nothing new (already planned)"
+        click.echo(f"  {p['ticker']:<12} {p['stance']:<5} {p['stance_reason']}")
+        click.echo(f"  {'':<12} wrote: {written}")
+
+
+@cli.command("account-plan")
+@click.argument("slug", required=False)
+@click.option("--ticker", "tickers", multiple=True, help="Only these holdings (repeatable).")
+@click.option("--overwrite", is_flag=True,
+              help="Replace existing criteria, targets and lines, including hand edits.")
+def account_plan_cmd(slug: str | None, tickers: tuple[str, ...], overwrite: bool):
+    """Write monitoring plans and refresh the hold/add/trim/exit view for an
+    account (all accounts when SLUG is omitted — the weekly cron form).
+
+    Only empty fields are filled unless --overwrite. Results go to Telegram."""
+    if slug:
+        _account_write_plans(slug, [t.upper() for t in tickers] or None, overwrite)
+        return
+    from fundmgr.engine.account_plan import refresh_all
+    for line in refresh_all(overwrite=overwrite):
+        click.echo(f"  {line}")
+
+
 @cli.command("paper-list")
 def paper_list():
     """List the paper portfolios and their current state."""
@@ -3269,11 +3404,15 @@ def paper_scopes(config_name: str | None):
 @click.option("--min-cash", type=float, default=None,
               help="Minimum cash %, overriding the profile.")
 @click.option("--dry-run", is_flag=True, help="Decide but don't write into the sleeve.")
+@click.option("--ideas", "ideas_sek", type=float, default=None,
+              help="Ideas only: SEK of new money to place in names not already held. "
+                   "Nothing held is traded; ideas join the plan only once bought.")
 def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
                  country: str | None, provider: str | None, model_id: str | None,
                  samples: int, max_candidates: int | None, no_macro: bool,
                  no_refresh: bool, turnover: float | None, max_position: float | None,
-                 max_positions: int | None, min_cash: float | None, dry_run: bool):
+                 max_positions: int | None, min_cash: float | None, dry_run: bool,
+                 ideas_sek: float | None):
     """Re-decide a live sleeve against its CURRENT positions.
 
     Reviews every holding (hold / trim / exit) and proposes add-ons from the
@@ -3327,6 +3466,7 @@ def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
                 refresh_prices=not no_refresh,
                 risk=risk or None,
                 dry_run=dry_run,
+                ideas_sek=ideas_sek,
             )
         except KeyError:
             click.echo(f"✗ No paper portfolio '{one}'. See 'fund paper-list'.", err=True)

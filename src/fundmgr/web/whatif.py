@@ -18,6 +18,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 
 from fundmgr import regions, styles
+from fundmgr.web import nav
 from fundmgr.engine.whatif import (
     MAX_RUNS, MAX_STYLE_BRIEF, MODEL_OPTIONS, generate_whatif, list_profiles,
     list_results, promote_to_sleeve,
@@ -25,6 +26,7 @@ from fundmgr.engine.whatif import (
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
+nav.install(_jinja_env)
 
 router = APIRouter(prefix="/whatif")
 

@@ -30,6 +30,7 @@ from starlette.concurrency import run_in_threadpool
 
 from fundmgr import paper, regions, styles, watchplan
 from fundmgr.engine import sleeve_review
+from fundmgr.web import nav
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
 # Largest single upload accepted for photo import. Phone photos of a holdings
@@ -80,6 +81,9 @@ class ReviewRequest(BaseModel):
     style_targets: dict[str, float] = Field(default_factory=dict)
     style_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
     style_brief: str = Field(default="", max_length=1000)
+    # Ideas only: new money to place in names not already held. Nothing held is
+    # traded and nothing is installed until a sync sees an idea bought.
+    ideas_sek: float | None = Field(default=None, gt=0, le=100_000_000)
 
 
 def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
@@ -104,6 +108,7 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
                 "tolerance_pct": req.style_tolerance_pct,
                 "brief": req.style_brief,
             },
+            ideas_sek=req.ideas_sek,
         )
         with _review_lock:
             if _review_job and _review_job["id"] == job_id:
@@ -115,6 +120,7 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
 
 
 jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
+nav.install(jinja_env)
 
 
 def _render(template_name: str, context: dict) -> HTMLResponse:
@@ -149,7 +155,9 @@ def _portfolio_summaries(kind: str) -> list[dict]:
         _, store = paper.open_portfolio(meta["slug"])
         navs = store.get_nav_history()
         nav = navs[-1].portfolio_nav_sek if navs else meta["capital_sek"]
-        pnl_pct = (nav / meta["capital_sek"] - 1) * 100 if meta["capital_sek"] else 0.0
+        # Net of deposits, so a top-up never reads as profit on the list.
+        from fundmgr.reporting.dashboard import gain
+        _, pnl_pct = gain(nav, meta["capital_sek"], store.get_cash_flows())
         last = store.get_transactions(limit=1)
         out.append({
             **meta,
@@ -349,6 +357,53 @@ def _not_found() -> HTMLResponse:
     return HTMLResponse("<h1>Portfolio not found</h1>", status_code=404)
 
 
+# Plan writing for broker accounts: one LLM call of a minute or two, so it runs
+# in a daemon thread and reports on Telegram. One job per account at a time.
+_plan_jobs: set[str] = set()
+_plan_lock = threading.Lock()
+
+
+def _start_plan_job(slug: str, tickers: list[str] | None = None,
+                    overwrite: bool = False) -> bool:
+    with _plan_lock:
+        if slug in _plan_jobs:
+            return False
+        _plan_jobs.add(slug)
+
+    def _work() -> None:
+        from fundmgr.engine import account_plan
+        try:
+            account_plan.write_plans(slug, tickers, overwrite=overwrite)
+        except Exception as e:
+            try:
+                from fundmgr.notify.send import send_telegram
+                send_telegram(f"⚠ Monitoring plan for {slug} failed: {e}")
+            except Exception:
+                pass
+        finally:
+            with _plan_lock:
+                _plan_jobs.discard(slug)
+
+    threading.Thread(target=_work, daemon=True).start()
+    return True
+
+
+def _account_ctx(store, slug: str) -> dict:
+    from fundmgr import accounts
+    notes = json.loads(store.get_meta("paper_position_notes") or "{}")
+    held = [p.ticker for p in store.get_positions()]
+    kill = watchplan.get_kill_text(store)
+    with _plan_lock:
+        running = slug in _plan_jobs
+    return {
+        "last_sync": (store.get_meta(accounts.LAST_SYNC_KEY) or "")[:16].replace("T", " "),
+        "montrose": store.get_meta(accounts.MONTROSE_KEY) or "",
+        "unplanned": [t for t in held if not kill.get(t)],
+        "stances": {t: notes[t] for t in held if (notes.get(t) or {}).get("stance")},
+        "plan_running": running,
+    }
+
+
 def make_portfolio_router(prefix: str, kind: str, section_label: str,
                           accent: str, real: bool, home_template: str) -> APIRouter:
     """Build a portfolio dashboard router for one section.
@@ -365,7 +420,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
     def _base_ctx(meta: dict) -> dict:
         book_prefix = f"{prefix}/{meta['slug']}"
         model = meta.get("model_label")
-        if real:
+        if kind == "account":
+            banner = (f"BROKER ACCOUNT — {meta['name']} · Real money · You trade, "
+                      "the app watches: kill criteria · targets · earnings · drift")
+        elif real:
             banner = (f"LIVE SLEEVE — {meta['name']}"
                       + (f" · picks by {model}" if model else "")
                       + " · Real positions · Monitored: kill criteria · earnings · drift")
@@ -723,6 +781,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             pass
         verb = "Bought" if side == "buy" else "Sold"
         tail = f" ({snap_note})" if snap_note else ""
+        if kind == "account" and side == "buy" and not watchplan.plan_for(store, tkr).get(
+                "kill_criterion"):
+            if _start_plan_job(slug, tickers=[tkr]):
+                tail += " Writing its monitoring plan — it arrives on Telegram."
         return _back(f"{verb} {n_shares:g} × {tkr} @ {price:,.2f} SEK in {meta['name']}.{tail}", 1)
 
     @router.post("/{slug}/watchplan")
@@ -1029,6 +1091,167 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "error": _review_job["error"],
             }
 
+    # ── Broker accounts: snapshot sync + monitoring plans ───────────────────
+
+    if kind == "account":
+        from fundmgr import accounts
+
+        @router.post("/create-from-snapshot")
+        async def create_from_snapshot(
+            request: Request,
+            name: str = Form(...),
+            snapshot_text: str = Form(...),
+            benchmark: str = Form(paper.DEFAULT_BENCHMARK),
+        ):
+            """Create an account from a holdings snapshot (pasted JSON, or the
+            rows a screenshot was read into), then write its plans in the
+            background — they arrive on Telegram when done."""
+            try:
+                slug, log = await run_in_threadpool(
+                    accounts.create_account, name, snapshot_text,
+                    benchmark=benchmark.strip() or paper.DEFAULT_BENCHMARK)
+            except ValueError as e:
+                return _render(home_template, _home_ctx(
+                    request, error=str(e),
+                    form={"name": name, "snapshot_text": snapshot_text}))
+            started = _start_plan_job(slug)
+            skipped = sum(1 for line in log if line.startswith("⚠"))
+            msg = f"Created {name}."
+            if skipped:
+                msg += f" {skipped} row(s) skipped: " + "; ".join(
+                    line[2:] for line in log if line.startswith("⚠"))
+            if started:
+                msg += " Writing a monitoring plan for every holding — it arrives on Telegram."
+            from urllib.parse import urlencode
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}), status_code=303)
+
+        @router.get("/montrose/accounts")
+        async def montrose_list():
+            """Your Montrose accounts, for the Add-from-Montrose list. JSON so the
+            page renders at once even when Montrose is slow or the login lapsed."""
+            from fundmgr.broker import montrose
+            try:
+                rows = await run_in_threadpool(accounts.montrose_accounts)
+            except montrose.LoginRequired as e:
+                return {"ok": False, "login": True, "error": str(e)}
+            except Exception as e:
+                return {"ok": False, "login": False, "error": str(e)}
+            return {"ok": True, "accounts": rows}
+
+        @router.post("/create-from-montrose")
+        async def create_from_montrose(request: Request, montrose_account: str = Form(...)):
+            from urllib.parse import urlencode
+
+            from fundmgr.broker import montrose
+            try:
+                slug, log = await run_in_threadpool(
+                    accounts.create_from_montrose, montrose_account)
+            except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+                return _render(home_template, _home_ctx(request, error=str(e)))
+            started = _start_plan_job(slug)
+            warn = [line[2:] for line in log if line.startswith("⚠")]
+            msg = f"Now mirroring {montrose_account} from Montrose."
+            if warn:
+                msg += " ⚠ " + "; ".join(warn)
+            if started:
+                msg += " Writing a monitoring plan for every holding — it arrives on Telegram."
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}), status_code=303)
+
+        @router.post("/{slug}/sync-montrose")
+        async def sync_montrose(slug: str):
+            from urllib.parse import urlencode
+
+            from fundmgr.broker import montrose
+            try:
+                paper.open_portfolio(slug)
+            except KeyError:
+                return _not_found()
+            try:
+                result = await run_in_threadpool(accounts.sync_account, slug)
+                n = len(result["changes"])
+                msg = (f"{n} change(s) from Montrose: " + ", ".join(
+                    f"{c['kind']} {c['ticker']}" for c in result["changes"])
+                    if n else "In step with Montrose — no trades since the last sync.")
+                if result["warnings"]:
+                    msg += " ⚠ " + "; ".join(result["warnings"])
+                ok = 1
+            except montrose.LoginRequired:
+                msg, ok = "Montrose login has lapsed — send /montrose_login in Telegram.", 0
+            except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+                msg, ok = f"Montrose sync failed: {e}", 0
+            _price_cache.pop(slug, None)
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": ok}) + "#sync",
+                status_code=303)
+
+        @router.post("/{slug}/sync")
+        async def sync(request: Request, slug: str):
+            """Bring the account in line with a holdings snapshot.
+
+            Form posts (the dashboard) carry `snapshot_text`; anything else is
+            read as a JSON snapshot body and answered in JSON, so a script or a
+            scheduled job can push the broker's holdings straight in.
+            """
+            from urllib.parse import urlencode
+            is_form = "form" in (request.headers.get("content-type") or "")
+            try:
+                paper.open_portfolio(slug)
+            except KeyError:
+                if is_form:
+                    return _not_found()
+                raise HTTPException(status_code=404, detail=f"No account {slug!r}") from None
+            if is_form:
+                form = await request.form()
+                snapshot = str(form.get("snapshot_text") or "")
+                dry_run = bool(form.get("dry_run"))
+            else:
+                try:
+                    snapshot = await request.json()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Body must be JSON") from None
+                dry_run = request.query_params.get("dry_run") == "1"
+            try:
+                result = await run_in_threadpool(
+                    lambda: accounts.sync_account(slug, snapshot, dry_run=dry_run))
+            except ValueError as e:
+                if is_form:
+                    return RedirectResponse(
+                        url=f"{prefix}/{slug}?" + urlencode({"msg": str(e), "ok": 0}) + "#sync",
+                        status_code=303)
+                raise HTTPException(status_code=400, detail=str(e)) from None
+            _price_cache.pop(slug, None)
+            if not is_form:
+                return result
+            n = len(result["changes"])
+            msg = ("Preview: " if dry_run else "") + (
+                f"{n} change(s): " + ", ".join(
+                    f"{c['kind']} {c['ticker']}" for c in result["changes"])
+                if n else "No trades since the last sync.")
+            if result["warnings"]:
+                msg += " ⚠ " + "; ".join(result["warnings"])
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": 1}) + "#sync",
+                status_code=303)
+
+        @router.post("/{slug}/plans")
+        def plans(slug: str, overwrite: str = Form("")):
+            """Write (or with `overwrite`, rewrite) every holding's plan and
+            refresh its stance — in the background, reported on Telegram."""
+            from urllib.parse import urlencode
+            try:
+                paper.open_portfolio(slug)
+            except KeyError:
+                return _not_found()
+            started = _start_plan_job(slug, overwrite=bool(overwrite))
+            msg = ("Writing monitoring plans — the result lands on Telegram and on this "
+                   "page in a minute or two." if started
+                   else "A plan for this account is already being written.")
+            return RedirectResponse(
+                url=f"{prefix}/{slug}?" + urlencode({"msg": msg, "ok": int(started)}),
+                status_code=303)
+
     # ── Per-book dashboard ──────────────────────────────────────────────────
 
     @router.get("/{slug}", response_class=HTMLResponse)
@@ -1148,6 +1371,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             with _review_lock:
                 job = dict(_review_job) if _review_job and _review_job["slug"] == slug else None
             review = {
+                "ideas": kind == "account",
                 "slug": slug,
                 "job": {
                     "id": job["id"],
@@ -1195,6 +1419,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "watch": _watch_status(store, positions_data) if real else None,
             "adds": _add_status(store) if real else None,
             "review": review,
+            "account": _account_ctx(store, slug) if kind == "account" else None,
             "flash": flash,
             "recent_fills": transaction_rows(store.get_transactions(limit=5)),
             "n_fills": store.count_transactions(),
@@ -1426,3 +1651,6 @@ router = make_portfolio_router(
     "/paper", "paper", "Paper Portfolios", "emerald", real=False, home_template="paper.html")
 live_router = make_portfolio_router(
     "/live", "live", "Live Sleeves", "sky", real=True, home_template="live.html")
+# Broker accounts — real books you trade yourself; the app syncs, plans and watches.
+account_router = make_portfolio_router(
+    "/accounts", "account", "Accounts", "sky", real=True, home_template="accounts.html")

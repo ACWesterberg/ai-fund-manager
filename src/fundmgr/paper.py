@@ -43,7 +43,10 @@ _SUFFIX_CURRENCY = {
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 def slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    # Fold accents first: "Utländska aktier" → utlandska-aktier, not utl-ndska-aktier.
+    import unicodedata
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
     return slug[:48] or "portfolio"
 
 
@@ -865,7 +868,7 @@ def create_portfolio(
         store.set_meta("paper_benchmark", benchmark)
         store.set_meta("paper_model_label", model_label.strip())
         store.set_meta("paper_created_at", now.strftime("%Y-%m-%d %H:%M"))
-        store.set_meta("paper_kind", kind if kind in ("paper", "live") else "paper")
+        store.set_meta("paper_kind", kind if kind in ("paper", "live", "account") else "paper")
         store.set_meta("paper_base_prompt", base_prompt.strip())
         store.set_meta("paper_currency_map", json.dumps(currency_map))
         store.set_meta("paper_pasted_text", holdings_text.strip())
@@ -991,7 +994,8 @@ def create_portfolio(
             summary = (f"Paper portfolio '{name}' seeded from "
                        f"{model_label.strip() or 'pasted'} picks at live market prices.")
         elif seed_holdings:
-            summary = (f"Live sleeve '{name}' — {len(actions)} holdings imported from "
+            summary = (f"{'Account' if kind == 'account' else 'Live sleeve'} '{name}' — "
+                       f"{len(actions)} holdings imported from "
                        f"{model_label.strip() or 'a portfolio photo'} at their recorded "
                        f"cost basis.")
         else:

@@ -1900,3 +1900,77 @@ def test_web_review_accepts_a_style_mix_and_a_brief(client, styled, monkeypatch)
     assert job["status"] == "done", job.get("error")
     assert job["result"]["styles"]["targets"] == {"quality": 50.0}
     assert job["result"]["styles"]["brief"] == "founder-led only"
+
+
+# ── Ideas only: new money, new names, nothing held is touched ─────────────────
+
+def test_ideas_keep_only_new_buys_and_leave_the_book_alone(env, sleeve, monkeypatch):
+    sent: list[str] = []
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: sent.append(text) or True)
+    capture: dict = {}
+    _stub_llm(monkeypatch, [
+        Action(ticker="ALFA.ST", side="sell", target_weight_pct=0,
+               sek_estimate=10_000, confidence=0.9, thesis="exit"),
+        Action(ticker="BETA.ST", side="buy", target_weight_pct=10, sek_estimate=12_000,
+               confidence=0.8, thesis="new idea", kill_criterion="EBIT margin below 10%",
+               add_criterion="organic growth above 8%", target_price=140.0),
+    ], capture)
+    _meta, store = paper.open_portfolio(sleeve)
+    cash_before = store.get_cash()
+
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False, ideas_sek=20_000)
+
+    assert "20,000 SEK of new money" in capture["user"]
+    assert capture["cfg"].risk.min_cash_pct == 0.0
+    assert [(a["ticker"], a["side"]) for a in result["actions"]] == [("BETA.ST", "buy")]
+    assert result["actions"][0]["approved"]
+    assert result["ideas_sek"] == 20_000
+
+    # The ledger and the watches are untouched; the idea waits on file.
+    assert store.get_cash() == cash_before
+    assert {p.ticker for p in store.get_positions()} == {"ALFA.ST"}
+    from fundmgr import watchplan
+    assert "BETA.ST" not in watchplan.get_kill_text(store)
+    assert "BETA.ST" not in json.loads(store.get_meta("paper_target_weights") or "{}")
+    idea = sleeve_review.ideas_for(store)["BETA.ST"]
+    assert idea["plan"]["kill_criterion"] == "EBIT margin below 10%"
+    assert store.get_last_recommendation().run_id == result["id"]
+    with store._conn() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decision_outcomes").fetchone()[0] == 0
+    assert len(sent) == 1 and "BETA.ST" in sent[0] and "ideas for 20,000 SEK" in sent[0]
+
+    # Bought later: the idea's plan goes in, and the idea is retired.
+    assert sleeve_review.take_idea(store, "BETA.ST")
+    assert watchplan.get_kill_text(store)["BETA.ST"] == "EBIT margin below 10%"
+    assert watchplan.get_add_text(store)["BETA.ST"] == "organic growth above 8%"
+    assert "BETA.ST" not in sleeve_review.ideas_for(store)
+    assert sleeve_review.take_idea(store, "BETA.ST") is None
+
+
+def test_ideas_work_on_an_empty_book(env, monkeypatch):
+    slug, _ = paper.create_portfolio(
+        name="Empty", capital_sek=1_000.0, holdings_text="",
+        holdings_override=[{"ticker": "ALFA.ST", "name": "Alfa", "weight_pct": 0}],
+        kind="account", execute_buys=False)
+    monkeypatch.setattr(paper, "plan_tickers", lambda store: set())
+    _stub_llm(monkeypatch, [Action(ticker="BETA.ST", side="buy", target_weight_pct=50,
+                                   sek_estimate=5_000, confidence=0.7, thesis="start")])
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: True)
+    result = sleeve_review.review_sleeve(slug, include_macro=False, ideas_sek=10_000)
+    assert result["buy_count"] == 1
+
+
+def test_ideas_reject_a_non_positive_amount(env, sleeve):
+    with pytest.raises(ValueError):
+        sleeve_review.review_sleeve(sleeve, include_macro=False, ideas_sek=-5)
+
+
+def test_ideas_never_add_to_a_name_already_held(env, sleeve, monkeypatch):
+    import fundmgr.notify.send as send_mod
+    monkeypatch.setattr(send_mod, "send_telegram", lambda text, **k: True)
+    _stub_llm(monkeypatch, [Action(ticker="ALFA.ST", side="buy", target_weight_pct=30,
+                                   sek_estimate=10_000, confidence=0.9, thesis="more")])
+    result = sleeve_review.review_sleeve(sleeve, include_macro=False, ideas_sek=20_000)
+    assert result["actions"] == [] and result["buy_count"] == 0

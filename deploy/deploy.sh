@@ -46,8 +46,11 @@ check_financedata_branch() {
 
 mkdir -p "$(dirname "$LOG_FILE")"
 # Serialize webhook, polling and SSH deployments.
-exec 9>"$REPO_DIR/data/deploy.lock"
-flock -n 9 || { log "Another deployment is running"; exit 0; }
+# A re-exec (below) inherits fd 9 and with it the lock already held.
+if [ -z "${DEPLOY_REEXEC:-}" ]; then
+    exec 9>"$REPO_DIR/data/deploy.lock"
+    flock -n 9 || { log "Another deployment is running"; exit 0; }
+fi
 SUCCESS_FILE="$REPO_DIR/data/deployed-revision"
 log "=== Deploy started (branch: $BRANCH) ==="
 
@@ -74,9 +77,18 @@ if [ -n "${EXPECTED_REVISION:-}" ] && [ "$TARGET" != "$EXPECTED_REVISION" ]; the
     log "Branch advanced beyond the tested revision — aborting; run checks again"
     exit 1
 fi
-BEFORE=$(git rev-parse HEAD)
+BEFORE="${DEPLOY_BEFORE:-$(git rev-parse HEAD)}"
 git reset --hard "origin/$BRANCH" --quiet
 AFTER=$(git rev-parse HEAD)
+
+# The reset replaces this file with a new one, but bash keeps reading the old
+# copy it has open — so a deploy that changes deploy.sh used to finish on the
+# previous version (the managed-cron step first shipped that way and did not
+# run). Carry on in the updated copy instead, once.
+if [ -z "${DEPLOY_REEXEC:-}" ] && ! git diff --quiet "$BEFORE" "$AFTER" -- deploy/deploy.sh; then
+    log "deploy.sh itself changed — continuing in the updated copy"
+    DEPLOY_REEXEC=1 DEPLOY_BEFORE="$BEFORE" exec bash "$REPO_DIR/deploy/deploy.sh"
+fi
 
 if [ -f "$SUCCESS_FILE" ] && [ "$(cat "$SUCCESS_FILE")" = "$AFTER" ]; then
     log "Already up to date ($AFTER). Nothing to do."

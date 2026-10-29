@@ -1,4 +1,8 @@
 name: "🤖 Global SIM — Claude"
+# Paused 2026-10-09 to save API cost while the real Nordic book is the focus.
+# Holdings are frozen (no runs, reviews, optimizer or stop trades) and still
+# valued daily by check-stops. Delete this line to resume.
+paused: true
 capital_sek: 150000
 cadence: weekly
 benchmark: "URTH"

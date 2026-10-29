@@ -136,6 +136,39 @@ class ShadowConfig:
     candidate: str | None = None
     benchmark_currency: str = ""
     benchmark_calendar: str = ""
+    # Named variants (experiments.VARIANTS), each a further pair per run, e.g.
+    # ["no_lessons"]. Created once with `fund shadow-variant NAME`.
+    variants: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ReportWatchConfig:
+    # The report-reaction experiment (engine/report_events.py). Off unless a
+    # fund opts in; it judges drops but never trades or touches the prompt.
+    enabled: bool = False
+    move_threshold_pct: float = 5.0     # |abnormal| reaction that counts as an event
+    judge_threshold_pct: float = 5.0    # drops at least this large get a verdict
+    max_judged_per_day: int = 10        # largest drops first; the rest stay unjudged
+    reasoning_effort: str = "medium"
+    max_tokens: int = 8000
+
+
+@dataclass
+class MontroseConfig:
+    # The real broker account this fund's ledger mirrors (phase 1: read and
+    # compare only). Empty means the fund has no broker account.
+    account_name: str = ""
+    lookback_days: int = 60          # transaction window the reconcile walks
+    cash_tolerance_sek: float = 25.0  # fee rounding across a month of fills
+    cost_tolerance_pct: float = 1.0
+    # Phase 2: Montrose rows dated on/after this are offered for booking into
+    # the ledger (one tap each). Earlier history was booked by hand — some of
+    # it folded into cash with /setcash — so it is never offered. Empty = off.
+    import_from: str = ""
+    # Phase 3: after each weekly run, send a pre-filled Montrose order ticket
+    # per approved trade. Off until the owner has tried /montrose_ticket once;
+    # the plan is saved either way, so /montrose_tickets works on demand.
+    tickets: bool = False
 
 
 @dataclass
@@ -151,6 +184,8 @@ class AppConfig:
     screener: ScreenerConfig = field(default_factory=ScreenerConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     shadow: ShadowConfig = field(default_factory=ShadowConfig)
+    report_watch: ReportWatchConfig = field(default_factory=ReportWatchConfig)
+    montrose: MontroseConfig = field(default_factory=MontroseConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -158,6 +193,11 @@ class AppConfig:
     fx_to_sek: bool = False  # convert foreign-currency holdings to SEK for cash/NAV
                              # (real fund). Sims run native-consistent; leave False.
     name: str = ""           # display name for notifications (which fund this is)
+    # Paused: the book stays as it is and keeps being valued, but nothing that
+    # costs money runs for it — no decision runs, reviews, optimizer searches or
+    # news-triggered runs — and nothing trades, mechanical stops included.
+    # Un-pausing is deleting the line.
+    paused: bool = False
     # Model that distils evaluated outcomes into learnings. None → this fund's
     # provider's heavy model. Pin the same id across every fund's config to keep
     # one lesson-writer system-wide, so the GPT-vs-Claude comparison is a
@@ -200,6 +240,11 @@ class AppConfig:
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
+_SUFFIX_CURRENCY: dict[str, str] = {
+    "ST": "SEK", "CO": "DKK", "OL": "NOK", "HE": "EUR", "IC": "ISK",
+    "WA": "PLN", "MC": "EUR", "DE": "EUR", "PA": "EUR", "AS": "EUR", "L": "GBP",
+}
+
 _EXCHANGE_CURRENCY: dict[str, str] = {
     # Nordic
     "OMXS": "SEK",
@@ -211,6 +256,11 @@ _EXCHANGE_CURRENCY: dict[str, str] = {
     "OSLO": "NOK",
     "OMXH": "EUR",
     "OMXI": "ISK",
+    "STOCKHOLM": "SEK",
+    "HELSINKI": "EUR",
+    "COPENHAGEN": "DKK",
+    "WSE": "PLN",
+    "BME": "EUR",
     # Global
     "NYSE": "USD",
     "NASDAQ": "USD",
@@ -238,7 +288,17 @@ class UniverseTicker:
 
     @property
     def currency(self) -> str:
-        return _EXCHANGE_CURRENCY.get(self.exchange, "SEK")
+        """Quote currency: the exchange's, else the Yahoo suffix's, else SEK.
+
+        The SEK default used to apply to any exchange code missing from the
+        table, which priced Orion Oyj (ORNBV.HE, EUR, listed as "HELSINKI")
+        at an eleventh of its value in the real fund's SEK maths.
+        """
+        known = _EXCHANGE_CURRENCY.get((self.exchange or "").upper())
+        if known:
+            return known
+        suffix = self.yahoo_ticker.rsplit(".", 1)[-1].upper() if "." in self.yahoo_ticker else ""
+        return _SUFFIX_CURRENCY.get(suffix, "SEK")
 
     @property
     def needs_fx(self) -> bool:
@@ -266,6 +326,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.mandate_path = ROOT / mandate
     if universe := raw.get("universe_path"):
         cfg.universe_path = ROOT / universe
+    if "paused" in raw:
+        cfg.paused = bool(raw["paused"])
     if "auto_fill" in raw:
         cfg.auto_fill = bool(raw["auto_fill"])
     if "fx_to_sek" in raw:
@@ -321,6 +383,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.optimizer = OptimizerConfig(**opt_raw)
         if compiled:
             cfg.optimizer.compiled_dir = ROOT / compiled
+    if rw_raw := raw.get("report_watch"):
+        cfg.report_watch = ReportWatchConfig(**rw_raw)
+    if montrose_raw := raw.get("montrose"):
+        cfg.montrose = MontroseConfig(**montrose_raw)
     if shadow_raw := raw.get("shadow"):
         cfg.shadow = ShadowConfig(**shadow_raw)
         if cfg.shadow.candidate:

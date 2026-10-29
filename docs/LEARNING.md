@@ -274,6 +274,34 @@ rounding or intraday execution simulation. Collection timestamps establish when
 this system retrieved evidence, not when the provider first published it. All
 forward results therefore remain **ineligible for automatic promotion**.
 
+## The traded decision is the incumbent arm
+
+A saved weekly run passes its own consensus (decision, votes, sampling) to
+`record_forward`, so the incumbent arm is what was actually traded rather than a
+second sample set of the same prompt. The first shadow week showed why: two
+re-asked incumbents bought IVSO on 2-of-3 votes while the traded run had bought
+BONEX on its own 2-of-3. Guardrails and allocation are recomputed identically for
+both arms; an incomplete production vote makes the pair unscoreable. The
+registration records `incumbent_source`, and `aggregate` groups by it, so
+re-run and traded incumbents never pool.
+
+## Variant arms: does each learning channel help?
+
+`shadow.variants` adds a further registered pair per saved run, using the same
+reservation, scoring and audit chain as the guidance candidate. A variant keeps
+the incumbent guidance and changes the frozen prompt in one named way
+(`experiments.VARIANTS`):
+
+- `no_lessons`: the incumbent user prompt with exactly the run's lessons block
+  (`fields["learnings"]`) removed. Its candidate arm is the prompt the run would
+  have had with no lessons, so `candidate_advantage_pp > 0` means the lessons
+  cost return. A run that carried no lessons is refused before reservation.
+
+Create the variant once, before the runs it is compared on:
+`fund shadow-variant no_lessons`. It pins the mandate and incumbent guidance;
+after either changes, registration refuses it until it is written again with
+`--replace`, which starts a separate evidence group.
+
 ## Aggregate evidence audit
 
 ```sh

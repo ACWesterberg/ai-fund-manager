@@ -13,7 +13,14 @@ Commands:
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
   /target [TICKER] — take-profit review (no ticker = every position at target)
   /setcash AMOUNT — correct the cash balance (SEK)
+  /deposit AMOUNT [note] — new money in (not profit); /withdraw for money out
   /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
+  /montrose_login — BankID login to Montrose MCP; paste back the callback URL
+  /montrose_probe — read-only Montrose call; replies with field names only
+  /montrose_reconcile — compare the Montrose account with the ledger (read-only)
+  /montrose_import — rows Montrose has and the ledger doesn't, with Book/Skip buttons
+  /montrose_tickets — pre-filled Montrose orders for the latest run's trades
+  /montrose_ticket TICKER buy|sell SHARES — one pre-filled Montrose order
   /help          — show this message
 
 Photo messages:
@@ -39,10 +46,12 @@ try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import (
         Application,
+        ApplicationHandlerStop,
         CallbackQueryHandler,
         CommandHandler,
         ContextTypes,
         MessageHandler,
+        TypeHandler,
         filters,
     )
     _TELEGRAM_AVAILABLE = True
@@ -62,6 +71,39 @@ _active_book: dict[int, str] = {}
 
 # Lazy-loaded ISIN -> yahoo_ticker map
 _isin_map: dict[str, str] | None = None
+
+
+def allowed_chat_ids() -> set[int]:
+    """Chats the bot obeys: TELEGRAM_CHAT_ID plus any in TELEGRAM_ALLOWED_CHAT_IDS.
+
+    The bot used to answer anyone who found its username, and its commands
+    move the real book's cash and fills. Unparseable entries are dropped, so a
+    typo narrows access rather than widening it.
+    """
+    raw = [os.getenv("TELEGRAM_CHAT_ID", "")]
+    raw += os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").split(",")
+    ids: set[int] = set()
+    for item in raw:
+        try:
+            ids.add(int(item.strip()))
+        except ValueError:
+            continue
+    return ids
+
+
+def is_authorised(update: object, allowed: set[int]) -> bool:
+    chat = getattr(update, "effective_chat", None)
+    return chat is not None and chat.id in allowed
+
+
+def _make_gate(allowed: set[int]):
+    async def gate(update: object, context: "ContextTypes.DEFAULT_TYPE") -> None:
+        if is_authorised(update, allowed):
+            return
+        chat = getattr(update, "effective_chat", None)
+        log.warning("Ignored update from unauthorised chat %s", getattr(chat, "id", None))
+        raise ApplicationHandlerStop
+    return gate
 
 
 def _get_isin_map() -> dict[str, str]:
@@ -360,6 +402,32 @@ async def cmd_setcash(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     await _send(update, output)
 
 
+async def _cash_flow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", verb: str) -> None:
+    """/deposit or /withdraw AMOUNT [note…] — money in or out, not profit or loss."""
+    args = context.args or []
+    try:
+        amount = float(args[0].replace(",", "").replace(" ", "")) if args else 0.0
+    except ValueError:
+        amount = 0.0
+    if amount <= 0:
+        await update.message.reply_text(
+            f"Usage: /{verb} AMOUNT [note]\nExample: /{verb} 50000 monthly top-up")
+        return
+    note = " ".join(args[1:])
+    output = _run_cli(verb, f"{amount:.2f}", *(["--note", note] if note else []), timeout=30)
+    await _send(update, output)
+
+
+async def cmd_deposit(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/deposit AMOUNT [note] — new money into the account; not counted as profit."""
+    await _cash_flow(update, context, "deposit")
+
+
+async def cmd_withdraw(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/withdraw AMOUNT [note] — money taken out; not counted as a loss."""
+    await _cash_flow(update, context, "withdraw")
+
+
 # ── Paper / mirror portfolio commands ─────────────────────────────────────────
 
 def _all_books() -> dict[str, str]:
@@ -625,15 +693,120 @@ async def cmd_target(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
 
 
 async def cmd_decisions(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    """/decisions [all] — review verdicts still waiting on an order from you.
+    """/decisions [all | done TICKER | dismiss TICKER] — verdicts still owed an order.
 
     A stop or target review's alert scrolls away; the instruction in it does not
-    stop being owed. This reads the same list back on demand.
+    stop being owed. This reads the same list back on demand, and ticks one off —
+    the alert's ACTION NEEDED banner repeats until it is.
     """
     args = context.args or []
-    extra = ["--all"] if args and args[0].lower() in ("all", "--all") else []
+    verb = args[0].lower() if args else ""
+    if verb in ("done", "dismiss"):
+        if len(args) < 2:
+            await update.message.reply_text(f"Usage: /decisions {verb} TICKER")
+            return
+        extra = [f"--{verb}", args[1]]
+    else:
+        extra = ["--all"] if verb in ("all", "--all") else []
     output = _run_cli("decisions", *extra, timeout=30)
     await _send(update, output)
+
+
+async def cmd_montrose_login(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    import asyncio
+
+    from fundmgr.broker import montrose
+    try:
+        url = await asyncio.to_thread(montrose.start_login)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not start the Montrose login: {e}")
+        return
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Log in with BankID", url=url)]])
+    await update.message.reply_text(
+        "🔐 Montrose login\n\n"
+        "1. Tap the button and log in with BankID on this phone.\n"
+        "2. You'll land on a page that won't load (localhost:8765/callback). "
+        "That's expected.\n"
+        "3. Copy that page's full address and paste it here within 10 minutes.",
+        reply_markup=keyboard,
+    )
+
+
+async def montrose_callback_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    import asyncio
+
+    from fundmgr.broker import montrose
+    try:
+        status = await asyncio.to_thread(montrose.complete_login, update.message.text or "")
+        reply = (
+            "✅ Logged in to Montrose.\n"
+            f"Access token valid until: {status.get('access_expires_at') or 'not stated'}\n"
+            f"Refresh token: {'yes' if status.get('refresh_token') else 'NO'}"
+            + (f" (until {status['refresh_expires_at']})" if status.get("refresh_expires_at") else "")
+            + "\n\nNext: /montrose_reconcile"
+        )
+    except Exception as e:
+        reply = f"❌ Montrose login failed: {e}"
+    # The code is single-use and already spent, but keep it out of chat history anyway.
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await update.effective_chat.send_message(reply)
+
+
+async def cmd_montrose_probe(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Reading Montrose (read-only tools)…")
+    await _run_cli_bg(update, context, "montrose-probe", timeout=300)
+
+
+async def cmd_montrose_reconcile(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Comparing Montrose with the ledger (read-only)…")
+    await _run_cli_bg(update, context, "montrose-reconcile", timeout=300)
+
+
+async def cmd_montrose_import(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Looking for Montrose rows the ledger doesn't have…")
+    await _run_cli_bg(update, context, "montrose-import", "--notify", timeout=300)
+
+
+async def montrose_import_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Book / Skip on a Montrose row. The CLI re-reads Montrose and re-runs the
+    reconcile before writing, so a stale or repeated tap can't double a fill."""
+    import asyncio
+
+    query = update.callback_query
+    await query.answer()
+    m = re.fullmatch(r"mi:(book|skip):(\d+)", query.data or "")
+    if not m:
+        return
+    action, broker_id = m.groups()
+    await query.edit_message_reply_markup(reply_markup=None)
+    ok, output = await asyncio.to_thread(_run_cli_ok, "montrose-import", f"--{action}", broker_id,
+                                         timeout=120)
+    original = query.message.text if query.message else ""
+    result = output if ok else f"❌ Nothing written.\n{output}\n\n/montrose_import shows it again."
+    await query.edit_message_text(f"{original}\n\n{result}"[:4000])
+
+
+async def cmd_montrose_tickets(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text("⏳ Making Montrose tickets for the latest run…")
+    await _run_cli_bg(update, context, "montrose-tickets", "--notify", timeout=300,
+                      done_msg="🎫 Done — tickets are in the message above.")
+
+
+async def cmd_montrose_ticket(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/montrose_ticket TICKER buy|sell SHARES — one pre-filled order in Montrose."""
+    args = context.args or []
+    if (len(args) != 3 or args[1].lower() not in ("buy", "sell")
+            or not re.fullmatch(r"[1-9][0-9]{0,6}", args[2])
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,15}", args[0])):
+        await update.message.reply_text("Usage: /montrose_ticket TICKER buy|sell SHARES\n"
+                                        "e.g. /montrose_ticket KCC.OL sell 36")
+        return
+    await update.message.reply_text("⏳ Making the Montrose ticket…")
+    await _run_cli_bg(update, context, "montrose-ticket", args[0].upper(), args[1].lower(), args[2],
+                      "--notify", timeout=120, done_msg="🎫 Done — the ticket is in the message above.")
 
 
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -651,7 +824,10 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
         "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
         "/decisions [all] — review verdicts still waiting on an order from you\n"
-        "/setcash AMOUNT — correct the cash balance (SEK)\n"
+        "/decisions done TICKER — you placed it (dismiss TICKER: not acting on it)\n"
+        "/deposit AMOUNT [note] — new money into the account (not profit)\n"
+        "/withdraw AMOUNT [note] — money taken out (not a loss)\n"
+        "/setcash AMOUNT — correct the cash balance (SEK); not for top-ups\n"
         "\n— Mirror portfolios (e.g. the KF Chokepoint sleeve) —\n"
         "/plist — list paper/mirror portfolios\n"
         "/ptarget SLUG — route fills + screenshots into that book (off to stop)\n"
@@ -661,6 +837,13 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/psetcost TICKER AVGCOST — set SEK cost basis to match the broker\n"
         "/pstatus — snapshot of the active book\n"
         "/proof [SLUG] TICKER yes|no — answer the post-earnings proof question\n"
+        "\n— Montrose connection —\n"
+        "/montrose_login — log in with BankID, then paste the address you land on\n"
+        "/montrose_probe — read holdings + transactions once; shows field names only\n"
+        "/montrose_reconcile — Montrose vs ledger: shares, cash, trades (writes nothing)\n"
+        "/montrose_import — Montrose rows the ledger lacks, each with Book / Skip\n"
+        "/montrose_tickets — order tickets for the latest run (you approve in the app)\n"
+        "/montrose_ticket TICKER buy|sell SHARES — one order ticket\n"
         "/help — this message\n\n"
         "📸 Send a screenshot of a Montrose confirmation to auto-record a fill\n"
         "   (into the active mirror book if one is set with /ptarget)."
@@ -975,6 +1158,27 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _formatted_command(commands: dict):
+    """Run a command that arrived as formatted text rather than as a command.
+
+    A command pasted from a message that showed it as `code` keeps its
+    formatting, and Telegram then sends it without the bot_command marker — so
+    no CommandHandler matched and /montrose_ticket fell through to the plain
+    text handler and did nothing at all. Same command, same arguments; the
+    chat gate in group -1 has already run.
+    """
+    async def handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+        parts = (update.message.text or "").split()
+        name = parts[0].lstrip("/").split("@", 1)[0].lower()
+        fn = commands.get(name)
+        if fn is None:
+            await update.message.reply_text(f"Unknown command /{name} — /help lists them.")
+            return
+        context.args = parts[1:]
+        await fn(update, context)
+    return handler
+
+
 def main() -> None:
     if not _TELEGRAM_AVAILABLE:
         log.error("python-telegram-bot not installed. Run: uv pip install python-telegram-bot")
@@ -988,36 +1192,67 @@ def main() -> None:
         log.error("TELEGRAM_BOT_TOKEN not set in .env")
         sys.exit(1)
 
+    allowed = allowed_chat_ids()
+    if not allowed:
+        log.error("TELEGRAM_CHAT_ID not set in .env — refusing to start an unrestricted bot")
+        sys.exit(1)
+
     log.info("Starting AI Fund Manager bot…")
 
     app = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler("run",      cmd_run))
-    app.add_handler(CommandHandler("run_full", cmd_run_full))
-    app.add_handler(CommandHandler("fill",     cmd_fill))
-    app.add_handler(CommandHandler("status",   cmd_status))
-    app.add_handler(CommandHandler("report",   cmd_report))
-    app.add_handler(CommandHandler("stops",    cmd_stops))
-    app.add_handler(CommandHandler("universe", cmd_universe))
-    app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
-    app.add_handler(CommandHandler("review",   cmd_review))
-    app.add_handler(CommandHandler("target",   cmd_target))
-    app.add_handler(CommandHandler("decisions", cmd_decisions))
-    app.add_handler(CommandHandler("setcash",  cmd_setcash))
-    app.add_handler(CommandHandler("plist",    cmd_plist))
-    app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
-    app.add_handler(CommandHandler("prun",     cmd_prun))
-    app.add_handler(CommandHandler("pfill",    cmd_pfill))
-    app.add_handler(CommandHandler("pretag",   cmd_pretag))
-    app.add_handler(CommandHandler("psetcost", cmd_psetcost))
-    app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
-    app.add_handler(CommandHandler("proof",    cmd_proof))
-    app.add_handler(CommandHandler("help",     cmd_help))
-    app.add_handler(CommandHandler("start",    cmd_help))
+    # Group -1 runs before every handler below; raising ApplicationHandlerStop
+    # there drops the update, so no command, photo or button escapes the check.
+    app.add_handler(TypeHandler(Update, _make_gate(allowed)), group=-1)
+
+    commands = {
+        "run": cmd_run,
+        "run_full": cmd_run_full,
+        "fill": cmd_fill,
+        "status": cmd_status,
+        "report": cmd_report,
+        "stops": cmd_stops,
+        "universe": cmd_universe,
+        "reject_rates": cmd_reject_rates,
+        "review": cmd_review,
+        "target": cmd_target,
+        "decisions": cmd_decisions,
+        "setcash": cmd_setcash,
+        "deposit": cmd_deposit,
+        "withdraw": cmd_withdraw,
+        "plist": cmd_plist,
+        "ptarget": cmd_ptarget,
+        "prun": cmd_prun,
+        "pfill": cmd_pfill,
+        "pretag": cmd_pretag,
+        "psetcost": cmd_psetcost,
+        "pstatus": cmd_pstatus,
+        "proof": cmd_proof,
+        "montrose_login": cmd_montrose_login,
+        "montrose_probe": cmd_montrose_probe,
+        "montrose_reconcile": cmd_montrose_reconcile,
+        "montrose_import": cmd_montrose_import,
+        "montrose_tickets": cmd_montrose_tickets,
+        "montrose_ticket": cmd_montrose_ticket,
+        "help": cmd_help,
+        "start": cmd_help,
+    }
+    for name, fn in commands.items():
+        app.add_handler(CommandHandler(name, fn))
 
     # Screenshot fill extraction
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(fill_callback, pattern="^fill_"))
+    app.add_handler(CallbackQueryHandler(montrose_import_callback, pattern=r"^mi:(book|skip):\d+$"))
+    # Before text_handler: within a group only the first matching handler runs.
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.Regex(r"(localhost|127\.0\.0\.1):8765/callback"),
+        montrose_callback_handler,
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.Regex(r"^\s*/[A-Za-z_]+"),
+        _formatted_command(commands),
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     log.info("Bot polling… (Ctrl+C to stop)")

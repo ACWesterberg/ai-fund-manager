@@ -26,6 +26,11 @@
 */15 9-17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
+# ═══ SIMULATIONS PAUSED (2026-10-09) ═════════════════════════════════════════
+# The four sim configs carry `paused: true`. Their lines below can stay: run,
+# optimize and check-news exit at once without calling anything, and
+# check-stops only records the day's NAV (no trades). Remove them if you like.
+#
 # ═══ GLOBAL SIMULATION FUND (OpenAI GPT-5.6-sol) — NYSE/NASDAQ + European overlap ══
 #
 # Best execution window: 16:00 CET
@@ -74,6 +79,17 @@
 0 14,18,21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund check-news >> data/logs/news_buffett_claude.log 2>&1
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_buffett_claude.log 2>&1
 
+
+# ═══ REPORT-REACTION EXPERIMENT (Nordic) ══════════════════════════════════════
+# After the OMX close: log yesterday's report reactions, judge up to 10 of the
+# biggest drops (one model call each), score older events, Telegram digest of
+# overreaction calls. `fund report-results` shows how the verdicts are doing.
+15 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-watch >> data/logs/report_watch.log 2>&1
+
+# Montrose ↔ ledger reconcile (phase 1, read-only, no LLM). Telegram only when
+# shares, cash, trades or deposits disagree — or the Montrose login lapsed, so
+# this doubles as the token keep-alive. After the close, before paper-track.
+45 21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund montrose-reconcile --notify >> data/logs/montrose.log 2>&1
 
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #

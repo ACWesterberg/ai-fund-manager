@@ -3371,11 +3371,15 @@ def paper_scopes(config_name: str | None):
 @click.option("--min-cash", type=float, default=None,
               help="Minimum cash %, overriding the profile.")
 @click.option("--dry-run", is_flag=True, help="Decide but don't write into the sleeve.")
+@click.option("--ideas", "ideas_sek", type=float, default=None,
+              help="Ideas only: SEK of new money to place in names not already held. "
+                   "Nothing held is traded; ideas join the plan only once bought.")
 def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
                  country: str | None, provider: str | None, model_id: str | None,
                  samples: int, max_candidates: int | None, no_macro: bool,
                  no_refresh: bool, turnover: float | None, max_position: float | None,
-                 max_positions: int | None, min_cash: float | None, dry_run: bool):
+                 max_positions: int | None, min_cash: float | None, dry_run: bool,
+                 ideas_sek: float | None):
     """Re-decide a live sleeve against its CURRENT positions.
 
     Reviews every holding (hold / trim / exit) and proposes add-ons from the
@@ -3429,6 +3433,7 @@ def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
                 refresh_prices=not no_refresh,
                 risk=risk or None,
                 dry_run=dry_run,
+                ideas_sek=ideas_sek,
             )
         except KeyError:
             click.echo(f"✗ No paper portfolio '{one}'. See 'fund paper-list'.", err=True)

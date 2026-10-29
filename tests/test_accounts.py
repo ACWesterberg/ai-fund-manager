@@ -507,3 +507,27 @@ def test_web_montrose_list_and_add(client, fake_montrose):
     assert "Sync from Montrose now" in page
     r = client.post("/accounts/svenska-aktier/sync-montrose", follow_redirects=False)
     assert r.status_code == 303 and "In+step+with+Montrose" in r.headers["location"]
+
+
+def test_buying_an_idea_installs_its_plan_at_sync(paper_dir, mock_market, sent, no_plans):
+    from fundmgr.engine import sleeve_review
+    slug = _account()
+    _meta, store = paper.open_portfolio(slug)
+    from datetime import datetime
+    store.set_meta(sleeve_review.IDEAS_KEY, json.dumps({"MSFT": {
+        "at": datetime.utcnow().strftime("%Y-%m-%d"), "thesis": "cloud margins",
+        "plan": {"kill_criterion": "Azure growth below 15%", "target_price": 600.0}}}))
+    accounts.sync_account(slug, {"holdings": SNAPSHOT["holdings"] + [
+        {"name": "Microsoft", "yahoo_ticker": "MSFT", "shares": 1, "avg_cost_sek": 5000}]})
+    assert watchplan.get_kill_text(store)["MSFT"] == "Azure growth below 15%"
+    assert addsignal.get_plan(store, "MSFT")["target_price"] == 600.0
+    assert sleeve_review.ideas_for(store) == {}
+    assert "from your ideas" in sent[0]
+
+
+def test_account_page_offers_ideas(client):
+    client.post("/accounts/create-from-snapshot", data={
+        "name": "Svenska aktier", "snapshot_text": json.dumps(SNAPSHOT)})
+    page = client.get("/accounts/svenska-aktier").text
+    assert "Suggest new stocks" in page and 'id="rv-ideas"' in page
+    assert 'id="rv-ideas"' not in client.get("/live/").text

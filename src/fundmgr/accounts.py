@@ -442,6 +442,14 @@ def sync_account(slug: str, snapshot=None, *, notify: bool = True,
     store.set_meta(LAST_SYNC_KEY, now.isoformat(timespec="seconds"))
 
     opened = [c["ticker"] for c in changes if c["kind"] == "opened"]
+    # A name bought off an ideas run already has the plan it was suggested
+    # with; install that first, so the plan writer only fills what it left.
+    from fundmgr.engine.sleeve_review import take_idea
+    for t in opened:
+        if take_idea(store, t):
+            for ch in changes:
+                if ch["ticker"] == t:
+                    ch["from_idea"] = True
     if write_plans and opened:
         from fundmgr.engine import account_plan
         try:
@@ -531,6 +539,8 @@ def format_sync_message(name: str, changes: list[dict], cash_note: float | None,
             line += f" ({realised:+.1f}% on cost)"
         if ch["basis"] and ch["basis"] != "broker cost":
             line += f" <i>· {_esc(ch['basis'])}</i>"
+        if ch.get("from_idea"):
+            line += " · 💡 from your ideas — its plan is installed"
         lines.append(line)
         if t in plan_by:
             lines += ["  " + s for s in plan_lines(plan_by[t])]

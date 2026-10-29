@@ -638,6 +638,152 @@ def _task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot, cfg: App
     )
 
 
+# ── Ideas: new money, new names, nothing held is touched ──────────────────────
+
+MAX_IDEAS = 5
+IDEAS_KEY = "account_ideas"      # {ticker: {plan, thesis, sizing, run_id, at}}
+IDEAS_TTL_DAYS = 60
+
+
+def _ideas_task_block(run_id: str, scope_label: str, snap: PortfolioSnapshot,
+                      cfg: AppConfig, ideas_sek: float) -> str:
+    return (
+        "## Your Task\n"
+        f"The investor is adding {ideas_sek:,.0f} SEK of new money to this account and "
+        f"asks one question: which stocks should it go into? Suggest up to {MAX_IDEAS} "
+        f"names from the candidate universe below ({scope_label}).\n\n"
+        "Rules for this run:\n"
+        "  - Every position above stays exactly as it is. Do not sell, trim or add to "
+        "anything already held; the investor decides those separately. Use the book "
+        "only as context — what it is already exposed to, and what would diversify it.\n"
+        "  - Only buys of names NOT already held. A new name must earn its place "
+        "against simply leaving the money in cash.\n"
+        f"  - Size each buy as a target weight of the account including the new money "
+        f"(NAV {snap.nav_sek:,.0f} SEK); together they should not exceed the new money. "
+        "Fewer, better ideas beat filling the list.\n"
+        "  - Every idea arrives with its monitoring plan: kill_criterion, add_criterion, "
+        "target_price (in the stock's own trading currency, at the level the thesis "
+        "implies), max_weight_pct and tranche_pct, plus next_earnings where you know it. "
+        "Write both criteria so they can be checked against a report or a headline: name "
+        "the metric and the level.\n"
+        "  - If nothing in the universe is worth buying now, return no buys and say why "
+        "in the notes.\n\n"
+        f"Return a DecisionRun JSON. Run ID must be: {run_id}"
+    )
+
+
+def ideas_for(store: Store) -> dict[str, dict]:
+    """Ideas still on file, newest per ticker, older than IDEAS_TTL_DAYS dropped."""
+    try:
+        ideas = json.loads(store.get_meta(IDEAS_KEY) or "{}")
+    except (ValueError, TypeError):
+        return {}
+    cutoff = (datetime.utcnow() - timedelta(days=IDEAS_TTL_DAYS)).strftime("%Y-%m-%d")
+    return {t: v for t, v in ideas.items() if (v.get("at") or "") >= cutoff}
+
+
+def take_idea(store: Store, ticker: str) -> dict | None:
+    """Install a stored idea's plan on a name you just bought, and retire the idea.
+
+    Fills only what is still empty, like every other plan writer here, so a
+    criterion already written for the name wins. Returns the idea, or None."""
+    from fundmgr import addsignal, watchplan
+
+    ideas = ideas_for(store)
+    idea = ideas.pop(ticker, None)
+    if idea is None:
+        return None
+    plan = idea.get("plan") or {}
+    try:
+        if plan.get("kill_criterion") and not watchplan.get_kill_text(store).get(ticker):
+            watchplan.set_position_plan(store, ticker, kill_criterion=plan["kill_criterion"])
+        if plan.get("add_criterion") and not watchplan.get_add_text(store).get(ticker):
+            watchplan.set_add_text(store, ticker, plan["add_criterion"])
+        existing = addsignal.get_plan(store, ticker)
+        fields = {k: plan.get(k) for k in ("target_price", "max_weight_pct", "tranche_pct")
+                  if plan.get(k) and not existing.get(k)}
+        if fields:
+            addsignal.set_plan(store, ticker, **fields)
+        notes = json.loads(store.get_meta("paper_position_notes") or "{}")
+        note = notes.setdefault(ticker, {})
+        if idea.get("thesis") and not note.get("thesis"):
+            note["thesis"] = idea["thesis"]
+        if plan.get("next_earnings"):
+            note["next_earnings"] = plan["next_earnings"]
+        store.set_meta("paper_position_notes", json.dumps(notes))
+    finally:
+        store.set_meta(IDEAS_KEY, json.dumps(ideas))
+    return idea
+
+
+def _save_ideas(store: Store, slug: str, meta: dict, run_id: str, guardrails, sizing: dict,
+                names: dict, snap: PortfolioSnapshot, system_msg: str, user_msg: str,
+                fields: dict, cfg: AppConfig, raw_response: str, sampling: dict,
+                ideas_sek: float, result: dict) -> None:
+    """Record an ideas run: the decision log (so the page shows it) and the
+    ideas themselves. No outcomes seeded, no stops, no plan installed — these
+    are suggestions until a sync sees one bought."""
+    now = datetime.utcnow()
+    stored_actions, ideas = [], ideas_for(store)
+    for a in guardrails.approved_actions:
+        row = a.model_dump()
+        row.update(sizing.get(a.ticker) or {})
+        stored_actions.append(row)
+        ideas[a.ticker] = {
+            "run_id": run_id, "at": now.strftime("%Y-%m-%d"),
+            "name": names.get(a.ticker, a.ticker), "thesis": a.thesis,
+            "confidence": a.confidence, "target_weight_pct": a.target_weight_pct,
+            **(sizing.get(a.ticker) or {}),
+            "plan": {k: getattr(a, k) for k in ("kill_criterion", "add_criterion",
+                                                "target_price", "max_weight_pct",
+                                                "tranche_pct", "next_earnings")},
+        }
+    store.save_recommendation(RecommendationLog(
+        run_id=run_id, timestamp=now,
+        prompt_snapshot=snapshot_to_dict(snap, system_msg, user_msg, fields, cfg),
+        llm_response=raw_response,
+        guardrail_log=json.dumps(guardrails.to_log()),
+        actions_json=json.dumps(stored_actions),
+        sampling_log=json.dumps(sampling),
+    ))
+    store.set_meta(IDEAS_KEY, json.dumps(ideas))
+    try:
+        from fundmgr.notify.send import send_telegram
+        send_telegram(_ideas_message(meta["name"], ideas_sek, result))
+    except Exception:
+        pass        # the ideas are on the page either way
+
+
+def _ideas_message(name: str, ideas_sek: float, result: dict) -> str:
+    import html
+    esc = lambda t: html.escape(str(t or ""), quote=False)  # noqa: E731
+    buys = [r for r in result["actions"] if r["approved"] and r["side"] == "buy"]
+    lines = [f"<b>💡 {esc(name)} — ideas for {ideas_sek:,.0f} SEK</b>",
+             f"Scope: {esc(result['scope']['label'])}"]
+    if not buys:
+        lines.append("\nNothing worth buying right now.")
+        if result.get("notes"):
+            lines.append(esc(result["notes"]))
+    for r in buys:
+        size = (f"{r['shares']:g} sh ≈ {r['sek_estimate']:,.0f} SEK" if r.get("shares")
+                else f"≈ {r['sek_estimate']:,.0f} SEK")
+        lines.append(f"\n<b>{esc(r['ticker'])}</b> {esc(r['name'])} — {size} "
+                     f"({r['target_weight_pct']:g}%)")
+        lines.append(f"  {esc(r['thesis'])}")
+        plan = r.get("plan") or {}
+        if plan.get("kill_criterion"):
+            lines.append(f"  Kill: {esc(plan['kill_criterion'])}")
+        if plan.get("target_price"):
+            lines.append(f"  🎯 target {plan['target_price']:,.2f}")
+    rejected = [r for r in result["actions"] if not r["approved"]]
+    if rejected:
+        lines.append("\nHeld back by the limits: " + ", ".join(
+            f"{esc(r['ticker'])} ({esc(r['reason'])})" for r in rejected))
+    lines.append("\nSuggestions only. Buy one in Montrose and its plan is installed "
+                 "at the next sync.")
+    return "\n".join(lines)
+
+
 # ── Undoing a decision you didn't act on ──────────────────────────────────────
 
 # Book state a review writes, all of it {ticker: value} maps in app_meta. The
@@ -1029,8 +1175,16 @@ def review_sleeve(
     region_mix: dict | None = None,
     style_mix: dict | None = None,
     dry_run: bool = False,
+    ideas_sek: float | None = None,
 ) -> dict:
     """Re-decide one sleeve against its current book and a scoped universe.
+
+    `ideas_sek` switches to ideas-only: "here is this much new money — what
+    would you add?" Holdings are context and never traded, only buys of names
+    not already held survive, and the money is added for this run alone (the
+    ledger is untouched). Nothing is written to the plan or the watches: each
+    idea's plan is kept under IDEAS_KEY and installed when a sync sees you
+    actually bought it, so a suggestion you pass on never alerts as "plan only".
 
     Writes the result into the sleeve's own store as a recommendation (so the
     dashboard's decision panel renders it) and seeds outcomes so the sleeve's
@@ -1092,7 +1246,19 @@ def review_sleeve(
     )
 
     snap = _sek_snapshot(meta, store)
-    if not snap.positions and not paper.plan_tickers(store):
+    if ideas_sek:
+        ideas_sek = float(ideas_sek)
+        if not ideas_sek > 0:
+            raise ValueError("New money for ideas must be a positive SEK amount.")
+        # The money exists for this question only. The limits move with it: a
+        # cash floor would hold back part of money you asked to place, and the
+        # position cap would refuse every idea in a book already at its limit
+        # — an account you run yourself, not a mandate.
+        snap = PortfolioSnapshot(positions=snap.positions, cash_sek=snap.cash_sek + ideas_sek)
+        cfg.risk.min_cash_pct = 0.0
+        cfg.risk.max_positions = max(cfg.risk.max_positions, len(snap.positions) + MAX_IDEAS)
+        cfg.risk.max_turnover_pct = min(100.0, ideas_sek / snap.nav_sek * 100 + 1.0)
+    elif not snap.positions and not paper.plan_tickers(store):
         raise ValueError(
             f"Sleeve {slug!r} has no positions and no plan to review — "
             "record a fill or import a plan first."
@@ -1163,7 +1329,8 @@ def review_sleeve(
         cfg, snap, screened, store, run_id,
         macro_block=macro_block,
         extra_context=_sleeve_block(meta, store, snap),
-        task_override=_task_block(run_id, scope_label, snap, cfg),
+        task_override=(_ideas_task_block(run_id, scope_label, snap, cfg, ideas_sek)
+                       if ideas_sek else _task_block(run_id, scope_label, snap, cfg)),
         heading=f"Live Sleeve Review — {meta['name']}",
     )
     if style_brief:
@@ -1171,6 +1338,11 @@ def review_sleeve(
         user_msg += _STYLE_BRIEF_HEADER + style_brief
 
     decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, cfg)
+    if ideas_sek:
+        # Whatever the model said about the book, ideas mode trades nothing held.
+        decision.actions = sorted(
+            [a for a in decision.actions if a.side == "buy" and a.ticker not in held_tickers],
+            key=lambda a: -a.confidence)[:MAX_IDEAS]
 
     # The shared guardrails settle accepted trades against the original book.
     # Pre-settling proposed sells here would count their proceeds twice.
@@ -1262,6 +1434,7 @@ def review_sleeve(
         "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         "elapsed_s": None,
         "dry_run": dry_run,
+        "ideas_sek": ideas_sek,
         "scope": {
             "config": config_name,
             "profile": cfg.display_name,
@@ -1327,7 +1500,13 @@ def review_sleeve(
     }
     result["elapsed_s"] = round(time.time() - started, 1)
 
-    if not dry_run:
+    if not dry_run and ideas_sek:
+        _save_ideas(store, slug, meta, run_id, guardrails, sizing, name_by_ticker, snap,
+                    system_msg, user_msg, fields, cfg, raw_response, sampling, ideas_sek,
+                    result)
+        store.set_meta(META_CONFIG, config_name)
+        store.set_meta(META_COUNTRY, (country or "").upper())
+    elif not dry_run:
         # Share counts ride along in the stored decision rather than being
         # re-derived when it is read back: they depend on the book as it stood
         # at decision time, and a later reader would compute them against a

@@ -81,6 +81,9 @@ class ReviewRequest(BaseModel):
     style_targets: dict[str, float] = Field(default_factory=dict)
     style_tolerance_pct: float | None = Field(default=None, ge=0, le=100)
     style_brief: str = Field(default="", max_length=1000)
+    # Ideas only: new money to place in names not already held. Nothing held is
+    # traded and nothing is installed until a sync sees an idea bought.
+    ideas_sek: float | None = Field(default=None, gt=0, le=100_000_000)
 
 
 def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
@@ -105,6 +108,7 @@ def _run_review(job_id: str, slug: str, req: ReviewRequest) -> None:
                 "tolerance_pct": req.style_tolerance_pct,
                 "brief": req.style_brief,
             },
+            ideas_sek=req.ideas_sek,
         )
         with _review_lock:
             if _review_job and _review_job["id"] == job_id:
@@ -1367,6 +1371,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             with _review_lock:
                 job = dict(_review_job) if _review_job and _review_job["slug"] == slug else None
             review = {
+                "ideas": kind == "account",
                 "slug": slug,
                 "job": {
                     "id": job["id"],

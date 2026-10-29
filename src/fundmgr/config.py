@@ -154,6 +154,16 @@ class ReportWatchConfig:
 
 
 @dataclass
+class EarningsWatchConfig:
+    # Reads each held name's report against the thesis it was bought on
+    # (engine/earnings_watch.py). Advice only: it never trades.
+    enabled: bool = False
+    reasoning_effort: str = "medium"
+    max_tokens: int = 8000
+    max_checks_per_report: int = 3      # report-day morning, evening, next morning
+
+
+@dataclass
 class MontroseConfig:
     # The real broker account this fund's ledger mirrors (phase 1: read and
     # compare only). Empty means the fund has no broker account.
@@ -186,6 +196,7 @@ class AppConfig:
     shadow: ShadowConfig = field(default_factory=ShadowConfig)
     report_watch: ReportWatchConfig = field(default_factory=ReportWatchConfig)
     montrose: MontroseConfig = field(default_factory=MontroseConfig)
+    earnings_watch: EarningsWatchConfig = field(default_factory=EarningsWatchConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -385,6 +396,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             cfg.optimizer.compiled_dir = ROOT / compiled
     if rw_raw := raw.get("report_watch"):
         cfg.report_watch = ReportWatchConfig(**rw_raw)
+    if ew_raw := raw.get("earnings_watch"):
+        cfg.earnings_watch = EarningsWatchConfig(**ew_raw)
     if montrose_raw := raw.get("montrose"):
         cfg.montrose = MontroseConfig(**montrose_raw)
     if shadow_raw := raw.get("shadow"):

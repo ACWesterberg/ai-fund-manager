@@ -1673,6 +1673,39 @@ def report_watch(dry_run: bool):
         click.echo("  Digest sent to Telegram.")
 
 
+@cli.command("earnings-watch")
+@click.option("--dry-run", is_flag=True, help="Find reports and say what would happen; no model call, no Telegram.")
+@click.option("--list", "list_", is_flag=True, help="Show the recorded checks and their verdicts. Free.")
+def earnings_watch_cmd(dry_run: bool, list_: bool):
+    """Read each held name's report against the thesis it was bought on.
+
+    \b
+    Weekdays 08:45 and 18:30 (cron). The evening before a holding reports: a
+    heads-up with its thesis. Once the report is out: one model call reads the
+    coverage published since — thesis held / broken / unclear, quotes checked
+    against the text — sent before the next open. Never trades.
+    """
+    from fundmgr.config import load_universe
+    from fundmgr.engine import earnings_watch as ew
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if list_:
+        for r in store.get_earnings_checks():
+            click.echo(f"  {r['report_date']}  {r['ticker']:<12} {r['verdict'] or 'open':<8} "
+                       f"{(r['confidence'] or 0):.0%}  attempts {r['attempts']}  ({r['found_by']})")
+        return
+    if _paused(cfg, "earnings watch"):
+        return
+    if not cfg.earnings_watch.enabled:
+        click.echo("earnings_watch is not enabled in this fund's config — nothing to do.")
+        return
+    names = {u.yahoo_ticker: u.name for u in load_universe(cfg.universe_path)}
+    sent = ew.run(store, cfg, send=send_telegram, names=names, dry_run=dry_run, echo=click.echo)
+    if not sent:
+        click.echo("  Nothing to report.")
+
+
 @cli.command("report-results")
 def report_results():
     """How the report-reaction verdicts have done so far. Free."""

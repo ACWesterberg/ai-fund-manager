@@ -94,6 +94,23 @@ CREATE TABLE IF NOT EXISTS cash_flows (
     created_at  TEXT NOT NULL
 );
 
+-- One row per held name's report (engine/earnings_watch.py): the heads-up the
+-- evening before, then the thesis verdict read off the report's coverage.
+-- Kept after the verdict so it can be scored against what the stock did next.
+CREATE TABLE IF NOT EXISTS earnings_checks (
+    ticker          TEXT NOT NULL,
+    report_date     TEXT NOT NULL,
+    found_by        TEXT NOT NULL,          -- calendar | headline
+    heads_up_at     TEXT,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    verdict         TEXT,                   -- held | broken | unclear; NULL = not final
+    confidence      REAL,
+    detail          TEXT,                   -- JSON: what changed, impact, quotes, model
+    price_at_check  REAL,
+    checked_at      TEXT,
+    PRIMARY KEY (ticker, report_date)
+);
+
 -- One row per Montrose transaction the owner has decided on (booked or
 -- skipped), keyed by Montrose's own id: the same broker row can never be
 -- offered or booked twice. A booked fill points at its ledger transaction, so
@@ -543,6 +560,55 @@ class Store:
                 "SELECT date, amount_sek, note, created_at FROM cash_flows ORDER BY date, id"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Earnings checks (engine/earnings_watch.py) ────────────────────────────
+
+    def get_earnings_check(self, ticker: str, report_date: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM earnings_checks WHERE ticker = ? AND report_date = ?",
+                               (ticker, report_date)).fetchone()
+        return dict(row) if row else None
+
+    def get_earnings_checks(self, open_only: bool = False) -> list[dict]:
+        sql = "SELECT * FROM earnings_checks"
+        if open_only:
+            sql += " WHERE verdict IS NULL"
+        with self._conn() as conn:
+            rows = conn.execute(sql + " ORDER BY report_date, ticker").fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_earnings_check(self, ticker: str, report_date: str, **fields) -> None:
+        """Create the row if new (found_by required then), then set `fields`."""
+        allowed = {"found_by", "heads_up_at", "attempts", "verdict", "confidence", "detail",
+                   "price_at_check", "checked_at"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"unknown earnings_checks fields: {sorted(bad)}")
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO earnings_checks (ticker, report_date, found_by) VALUES (?, ?, ?)",
+                (ticker, report_date, fields.get("found_by", "calendar")))
+            if fields:
+                cols = ", ".join(f"{k} = ?" for k in fields)
+                conn.execute(f"UPDATE earnings_checks SET {cols} WHERE ticker = ? AND report_date = ?",
+                             (*fields.values(), ticker, report_date))
+
+    def get_position_theses(self, ticker: str) -> dict:
+        """The reason a held name is held: its latest buy thesis and, if newer,
+        its latest hold rationale — each with the date it was written."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT o.action, o.thesis, COALESCE(o.decision_date, substr(r.timestamp, 1, 10)) AS d "
+                "FROM decision_outcomes o LEFT JOIN recommendations r ON r.run_id = o.run_id "
+                "WHERE o.ticker = ? AND o.action IN ('buy', 'hold') "
+                "AND o.thesis IS NOT NULL AND trim(o.thesis) != '' "
+                "ORDER BY d DESC, o.id DESC", (ticker,)).fetchall()
+        out: dict = {}
+        for r in rows:
+            out.setdefault(r["action"], {"date": r["d"], "thesis": r["thesis"]})
+        if "hold" in out and "buy" in out and (out["hold"]["date"] or "") <= (out["buy"]["date"] or ""):
+            out.pop("hold")
+        return out
 
     # ── Meta flags ────────────────────────────────────────────────────────────
 

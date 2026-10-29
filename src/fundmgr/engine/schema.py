@@ -230,6 +230,42 @@ class ReportReaction(BaseModel):
         return v.upper()
 
 
+class ReportThesisCheck(BaseModel):
+    """Does a held company's report confirm or break the reason the fund owns it?"""
+    ticker: str = Field(description="The company under review")
+    verdict: Literal["held", "broken", "unclear"] = Field(
+        description=(
+            "held = the report supports the thesis, or leaves it intact; broken = it "
+            "contradicts a claim the thesis rests on (guidance cut, the growth or margin "
+            "path it relied on not happening, balance-sheet stress); unclear = the coverage "
+            "given does not contain the results, or is too thin to tell."
+        ),
+    )
+    confidence: float = Field(ge=0, le=1, description="Conviction in the verdict, 0.0-1.0.")
+    what_changed: str = Field(
+        max_length=500,
+        description="What the report actually said: results vs a year ago, guidance, orders, "
+                    "margins, cash flow.",
+    )
+    thesis_impact: str = Field(
+        max_length=500,
+        description="Claim by claim, how the report bears on the thesis it was bought on.",
+    )
+    watch_next: str = Field(
+        max_length=300,
+        description="What would settle it, or what to watch from here. '' if nothing.",
+    )
+    quotes: list[ReportQuote] = Field(
+        default_factory=list, max_length=4,
+        description="Up to four verbatim sentences from the coverage supporting the verdict.",
+    )
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper_ticker(cls, v: str) -> str:
+        return v.upper()
+
+
 class StopReview(BaseModel):
     """Focused reassessment of a single position after its stop-loss is hit."""
     ticker: str = Field(description="The position under review")

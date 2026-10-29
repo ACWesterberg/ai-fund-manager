@@ -86,11 +86,11 @@
 # overreaction calls. `fund report-results` shows how the verdicts are doing.
 15 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-watch >> data/logs/report_watch.log 2>&1
 
-# Earnings watch (real fund): heads-up the evening before a holding reports, and
-# its report read against the thesis — 08:45 lands before the 09:00 open for the
-# usual 07:30 Nordic release; 18:30 catches midday reports. Never trades.
-45 8 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
-30 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
+# Earnings watch (real fund): installed by deploy/managed_cron.sh — don't paste.
+# Heads-up the evening before a holding reports, and its report read against the
+# thesis at 08:45 (before the open) and 18:30. Never trades.
+# 45 8 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
+# 30 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
 
 # Montrose ↔ ledger reconcile (phase 1, read-only, no LLM). Telegram only when
 # shares, cash, trades or deposits disagree — or the Montrose login lapsed, so

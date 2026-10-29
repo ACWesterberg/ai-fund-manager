@@ -170,7 +170,7 @@ Everything is cron on the Pi; there is no in-process scheduler.
 | `fund optimize` × 5 | Sun 02:00–04:00 | yes — **gated, see below** |
 | `deploy/backup.sh` | daily 03:00 + post-run | no |
 
-The two account jobs are installed by `deploy/managed_cron.sh` on every deploy, as a marked block in the crontab; everything else is pasted by hand from `deploy/cron.example`.
+The two account jobs and the two earnings-watch jobs are installed by `deploy/managed_cron.sh` on every deploy, as a marked block in the crontab; everything else is pasted by hand from `deploy/cron.example`.
 
 Run times are staggered so the funds don't collide, and each is placed 30 min after its market's open. `fund run` gates itself on holidays; the others don't need to.
 

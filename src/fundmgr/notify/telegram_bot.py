@@ -1158,6 +1158,27 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _formatted_command(commands: dict):
+    """Run a command that arrived as formatted text rather than as a command.
+
+    A command pasted from a message that showed it as `code` keeps its
+    formatting, and Telegram then sends it without the bot_command marker — so
+    no CommandHandler matched and /montrose_ticket fell through to the plain
+    text handler and did nothing at all. Same command, same arguments; the
+    chat gate in group -1 has already run.
+    """
+    async def handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+        parts = (update.message.text or "").split()
+        name = parts[0].lstrip("/").split("@", 1)[0].lower()
+        fn = commands.get(name)
+        if fn is None:
+            await update.message.reply_text(f"Unknown command /{name} — /help lists them.")
+            return
+        context.args = parts[1:]
+        await fn(update, context)
+    return handler
+
+
 def main() -> None:
     if not _TELEGRAM_AVAILABLE:
         log.error("python-telegram-bot not installed. Run: uv pip install python-telegram-bot")
@@ -1184,36 +1205,40 @@ def main() -> None:
     # there drops the update, so no command, photo or button escapes the check.
     app.add_handler(TypeHandler(Update, _make_gate(allowed)), group=-1)
 
-    app.add_handler(CommandHandler("run",      cmd_run))
-    app.add_handler(CommandHandler("run_full", cmd_run_full))
-    app.add_handler(CommandHandler("fill",     cmd_fill))
-    app.add_handler(CommandHandler("status",   cmd_status))
-    app.add_handler(CommandHandler("report",   cmd_report))
-    app.add_handler(CommandHandler("stops",    cmd_stops))
-    app.add_handler(CommandHandler("universe", cmd_universe))
-    app.add_handler(CommandHandler("reject_rates", cmd_reject_rates))
-    app.add_handler(CommandHandler("review",   cmd_review))
-    app.add_handler(CommandHandler("target",   cmd_target))
-    app.add_handler(CommandHandler("decisions", cmd_decisions))
-    app.add_handler(CommandHandler("setcash",  cmd_setcash))
-    app.add_handler(CommandHandler("deposit",  cmd_deposit))
-    app.add_handler(CommandHandler("withdraw", cmd_withdraw))
-    app.add_handler(CommandHandler("plist",    cmd_plist))
-    app.add_handler(CommandHandler("ptarget",  cmd_ptarget))
-    app.add_handler(CommandHandler("prun",     cmd_prun))
-    app.add_handler(CommandHandler("pfill",    cmd_pfill))
-    app.add_handler(CommandHandler("pretag",   cmd_pretag))
-    app.add_handler(CommandHandler("psetcost", cmd_psetcost))
-    app.add_handler(CommandHandler("pstatus",  cmd_pstatus))
-    app.add_handler(CommandHandler("proof",    cmd_proof))
-    app.add_handler(CommandHandler("montrose_login", cmd_montrose_login))
-    app.add_handler(CommandHandler("montrose_probe", cmd_montrose_probe))
-    app.add_handler(CommandHandler("montrose_reconcile", cmd_montrose_reconcile))
-    app.add_handler(CommandHandler("montrose_import", cmd_montrose_import))
-    app.add_handler(CommandHandler("montrose_tickets", cmd_montrose_tickets))
-    app.add_handler(CommandHandler("montrose_ticket", cmd_montrose_ticket))
-    app.add_handler(CommandHandler("help",     cmd_help))
-    app.add_handler(CommandHandler("start",    cmd_help))
+    commands = {
+        "run": cmd_run,
+        "run_full": cmd_run_full,
+        "fill": cmd_fill,
+        "status": cmd_status,
+        "report": cmd_report,
+        "stops": cmd_stops,
+        "universe": cmd_universe,
+        "reject_rates": cmd_reject_rates,
+        "review": cmd_review,
+        "target": cmd_target,
+        "decisions": cmd_decisions,
+        "setcash": cmd_setcash,
+        "deposit": cmd_deposit,
+        "withdraw": cmd_withdraw,
+        "plist": cmd_plist,
+        "ptarget": cmd_ptarget,
+        "prun": cmd_prun,
+        "pfill": cmd_pfill,
+        "pretag": cmd_pretag,
+        "psetcost": cmd_psetcost,
+        "pstatus": cmd_pstatus,
+        "proof": cmd_proof,
+        "montrose_login": cmd_montrose_login,
+        "montrose_probe": cmd_montrose_probe,
+        "montrose_reconcile": cmd_montrose_reconcile,
+        "montrose_import": cmd_montrose_import,
+        "montrose_tickets": cmd_montrose_tickets,
+        "montrose_ticket": cmd_montrose_ticket,
+        "help": cmd_help,
+        "start": cmd_help,
+    }
+    for name, fn in commands.items():
+        app.add_handler(CommandHandler(name, fn))
 
     # Screenshot fill extraction
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
@@ -1223,6 +1248,10 @@ def main() -> None:
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r"(localhost|127\.0\.0\.1):8765/callback"),
         montrose_callback_handler,
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.Regex(r"^\s*/[A-Za-z_]+"),
+        _formatted_command(commands),
     ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 

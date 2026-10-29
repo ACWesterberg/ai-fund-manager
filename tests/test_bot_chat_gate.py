@@ -59,3 +59,36 @@ def test_gate_stops_strangers_and_passes_owner():
         asyncio.run(gate(_update(999), None))
     with pytest.raises(tb.ApplicationHandlerStop):
         asyncio.run(gate(_update(None), None))
+
+
+# ── Commands that arrive as formatted text ───────────────────────────────────
+# A command pasted from a message that showed it as `code` reaches the bot
+# without its bot_command marker; /montrose_ticket did nothing at all.
+
+class _Msg:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.replies: list[str] = []
+
+    async def reply_text(self, text: str, **kw) -> None:
+        self.replies.append(text)
+
+
+def test_a_formatted_command_runs_with_its_arguments():
+    seen = []
+
+    async def cmd(update, context):
+        seen.append(context.args)
+
+    msg = _Msg("/montrose_ticket IVSO.ST sell 1")
+    ctx = types.SimpleNamespace(args=None)
+    handler = tb._formatted_command({"montrose_ticket": cmd})
+    asyncio.run(handler(types.SimpleNamespace(message=msg), ctx))
+    assert seen == [["IVSO.ST", "sell", "1"]]
+
+
+def test_an_unknown_formatted_command_says_so():
+    msg = _Msg("/nope@expert_fund_manager_bot x")
+    asyncio.run(tb._formatted_command({})(types.SimpleNamespace(message=msg),
+                                          types.SimpleNamespace(args=None)))
+    assert msg.replies and "/nope" in msg.replies[0]

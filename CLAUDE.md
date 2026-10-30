@@ -40,7 +40,7 @@ The two Global and two Buffett funds are deliberately **paired across providers 
 
 ## Key design decisions (don't re-litigate these)
 
-- **The model proposes, guardrails dispose.** `guardrails/rules.py` re-checks every action against the mandate mechanically: universe membership, stale-data block on buys, min trade size, max position weight (clipped, not rejected), sector concentration, max open positions, cash floor, and a turnover cap that drops lowest-confidence trades until the run fits. Nothing reaches the book without passing. A rejected action is logged with its reason, so `guardrail_log` is the audit trail of what the model wanted versus what it got.
+- **The model proposes, guardrails dispose.** `guardrails/rules.py` re-checks every action against the mandate mechanically: universe membership (for buys — a holding is always sellable, even once its row is disabled), stale-data block on buys, min trade size, max position weight (clipped, not rejected), sector concentration, max open positions, cash floor, and a turnover cap. Sells are checked before buys, each side highest confidence first, so a swap's buy sees the slot and cash its sell frees; the turnover cap drops whatever no longer fits in that order. Nothing reaches the book without passing. A rejected action is logged with its reason, so `guardrail_log` is the audit trail of what the model wanted versus what it got.
 - **Consensus sampling, not one shot.** `n_samples` (5 on the real fund, 3 on the sims) runs the decision call in parallel and majority-votes each ticker. Unanimous and majority-only actions are labelled separately in the report and on Telegram. A ticker needs more than half the runs to survive.
 - **Reasoning effort is `high` everywhere it decides.** Weekly runs are ~9 heavy calls a week in total — a rounding error — and a weekly real-money allocation across a whole portfolio with 3-way voting is exactly where deep reasoning earns its price. The small extraction jobs (release reading, kill-criterion judging, OCR fill parsing) sit on `gpt-4o-mini` with tight `max_tokens` and no reasoning at all. Don't collapse those two tiers into one.
 - **`fund run` refuses to run into a shut market.** Cron fires on a fixed weekly schedule and knows nothing about holidays, while the only calendar check in the pipeline sits down in `auto_fill`, per ticker, *after* the model has been paid for — so on US Labor Day a US-dominant fund bought a full consensus run and then skipped every fill one at a time. Skipped fills are not queued for the next open either: they wait for the next *weekly* run. `_skip_on_market_holiday` resolves the universe's **dominant calendar** and returns before fetching anything, naming the next session on stdout and Telegram. `--force` overrides.
@@ -140,7 +140,7 @@ The sidebar shows Nordic real money → Accounts → What-If Lab. The model-comp
 | `max_sector_pct` | 35 | NAV weight in any one GICS sector |
 | `min_cash_pct` / `max_cash_pct` | 12 / 25 | per-fund — the real book runs **5 / 10** (ISK is taxed on total balance) |
 | `min_trade_sek` | 2,500 | below this, fees eat the edge |
-| `max_turnover_pct` | 25 | per run; excess dropped lowest-confidence first |
+| `max_turnover_pct` | 25 | per run; sells take turnover before buys, each side by confidence |
 | `stale_after_days` | 5 | stale data blocks **buys** only |
 | `cold_start_*` | 80 / 50 | lift the turnover cap when deploying from cash |
 | `region_targets` | `{}` | % of NAV per region; only the ceiling (target + tolerance) is enforced |
@@ -264,8 +264,8 @@ Useful flags: `--force` (ignore the holiday gate), `--force-refresh` (re-fetch p
 Guardrails derive each trade's `sek_estimate` from target weight minus the current
 position value; model estimates are advisory input only. Accepted trades reserve
 cash (including fees), turnover, position slots and bucket exposure against a
-projected book, in confidence order. Duplicate tickers are rejected. Turnover
-rejections appear in the verdict log. No later pruning removes a funding sell.
+projected book, sells before buys and each side in confidence order. Duplicate
+tickers are rejected. Turnover rejections appear in the verdict log. No later pruning removes a funding sell.
 Simulated fills never exceed an approved budget and recheck cash at execution;
 mechanical full exits from `check-stops` omit the budget deliberately. NAV and
 sizing use marked prices; incomplete valuations block sizing and never overwrite

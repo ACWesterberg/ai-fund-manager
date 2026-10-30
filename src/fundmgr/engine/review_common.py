@@ -109,13 +109,20 @@ def live_price_sek(
     live_price: float | None,
     tech_live: float | None,
 ) -> float:
-    """Resolve the position's live price in SEK, to compare against SEK cost basis."""
+    """Resolve the position's live price in SEK, to compare against SEK cost basis.
+
+    Raises ValueError when the FX rate is missing: a native price read as SEK
+    would hand the review a −90% loss on a EUR holding that hasn't moved.
+    """
     if live_price is not None:
         return live_price                      # already SEK (caller converted)
     live = tech_live or pos.avg_cost_sek
     if cfg.fx_to_sek and tech_live is not None and currency != "SEK":
         from fundmgr.data.fx import rate_to_sek
-        live = tech_live * (rate_to_sek(currency, store) or 1.0)  # native→SEK
+        rate = rate_to_sek(currency, store)
+        if not rate:
+            raise ValueError(f"no {currency}/SEK rate — can't value {ticker} in SEK")
+        live = tech_live * rate  # native→SEK
     return live
 
 

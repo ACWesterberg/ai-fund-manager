@@ -61,7 +61,10 @@ def find_target_hits(store: Store, cfg: AppConfig | None = None) -> dict:
             continue
         cur = cur_by_ticker.get(p.ticker, "SEK")
         if fx_on and cur != "SEK":  # native→SEK to compare with SEK cost basis
-            rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                skipped.append({"ticker": p.ticker, "reason": f"no {cur}/SEK rate"})
+                continue
             fx_cache[cur] = rate
             live = live * rate
         chg = (live / p.avg_cost_sek - 1) * 100

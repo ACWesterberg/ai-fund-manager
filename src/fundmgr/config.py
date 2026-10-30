@@ -437,6 +437,23 @@ def get_enabled_tickers(universe_path: Path | None = None) -> list[UniverseTicke
     return [t for t in load_universe(universe_path) if t.enabled]
 
 
+def holding_rows(universe_path: Path | None, held: set[str]) -> list[UniverseTicker]:
+    """A universe row for every held ticker, enabled or not.
+
+    A position outlives its row: a name disabled in the CSV (Hemnet) or pinned
+    with `montrose-map` to a symbol the CSV never listed still has to be priced,
+    converted and sold. Built from enabled rows only, such a holding had no
+    price, which blocked every trade in the book, and no currency but SEK. A
+    symbol with no row gets a bare one whose currency comes from its suffix.
+    """
+    by_yahoo = {t.yahoo_ticker: t for t in load_universe(universe_path)}
+    return [
+        by_yahoo.get(t) or UniverseTicker(name=t, yahoo_ticker=t, isin="", country="",
+                                          exchange="", sector="", enabled=False)
+        for t in sorted(held)
+    ]
+
+
 def get_isin_map(universe_path: Path | None = None) -> dict[str, str]:
     """Return ISIN -> yahoo_ticker for all tickers (enabled and disabled)."""
     return {t.isin: t.yahoo_ticker for t in load_universe(universe_path) if t.isin}

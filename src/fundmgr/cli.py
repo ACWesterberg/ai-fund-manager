@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -10,7 +11,7 @@ from pathlib import Path
 import click
 
 from fundmgr import regions, styles
-from fundmgr.config import load_config, get_enabled_tickers
+from fundmgr.config import load_config, get_enabled_tickers, holding_rows
 from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
@@ -194,6 +195,11 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
 
     tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}
+    # Only enabled rows are buyable, but every holding is priced and shown so it
+    # can be valued and sold — a disabled or unlisted holding used to freeze the book.
+    universe_tickers = {t.yahoo_ticker for t in tickers}
+    tickers += [t for t in holding_rows(cfg.universe_path, held_tickers)
+                if t.yahoo_ticker not in universe_tickers]
     fetch_tickers, fetch_note = select_tickers_for_price_fetch(tickers, held_tickers, cfg.screener)
     click.echo(f"\n{'═'*56}")
     click.echo(f"  AI Fund Manager — Weekly Run")
@@ -334,16 +340,36 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     fx_cache: dict[str, float] = {}
     cur_by_ticker = {t.yahoo_ticker: t.currency for t in tickers}
     positions = store.get_positions()
+    unvalued: list[str] = []
     for p in positions:
         feat = features.get(p.ticker)
-        if feat:
-            price = feat.last_price
-            cur = cur_by_ticker.get(p.ticker, "SEK")
-            if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
-                rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
-                fx_cache[cur] = rate
-                price *= rate
-            p.current_price_sek = price
+        if feat is None or not math.isfinite(feat.last_price) or feat.last_price <= 0:
+            unvalued.append(f"{p.ticker} (no price)")
+            continue
+        price = feat.last_price
+        cur = cur_by_ticker.get(p.ticker, "SEK")
+        if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                unvalued.append(f"{p.ticker} (no {cur}/SEK rate)")
+                continue
+            fx_cache[cur] = rate
+            price *= rate
+        p.current_price_sek = price
+    if unvalued:
+        # Before the model is paid for: the guardrails reject every trade in a
+        # book they can't value, and a NAV with a hole in it reads as a loss.
+        # A missing rate used to be read as 1.0, pricing a EUR holding at an
+        # eleventh of its worth for the model, the sizing and the NAV history.
+        click.echo(f"\n⛔ {cfg.display_name}: can't value {', '.join(unvalued)} — "
+                   "run skipped before calling the model; no NAV written.", err=True)
+        from fundmgr.notify.send import send_telegram
+        send_telegram(
+            f"<b>{html.escape(cfg.display_name)}</b>\n⛔ Run skipped — can't value the book\n"
+            f"{html.escape(', '.join(unvalued))}\nThe decision model wasn't called. Re-run with "
+            "/run once prices and FX are back."
+        )
+        sys.exit(1)
     snap = PortfolioSnapshot(positions=positions, cash_sek=store.get_cash())
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
@@ -398,7 +424,6 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"      ✓ Got {len(decision.actions)} action(s)")
 
     # ── Step 9: Apply guardrails ──────────────────────────────────────────────
-    universe_tickers = {t.yahoo_ticker for t in tickers}
     guardrail_result = apply_guardrails(decision, snap, features, universe_tickers, effective_cfg)
 
     rejected_count = sum(1 for v in guardrail_result.verdicts if not v.approved)
@@ -998,7 +1023,6 @@ def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
     current. Writes nothing when a holding has no price: a NAV with a hole in it
     reads as a loss, and filling the hole with cost basis would invent a value.
     """
-    from fundmgr.config import load_universe
     from fundmgr.data.fx import rate_to_sek
     from fundmgr.data.quotes import live_prices
 
@@ -1009,7 +1033,8 @@ def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
         click.echo(f"  ⚠ NAV not marked — no price for {', '.join(missing)}.")
         return None
 
-    cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+    cur_by_ticker = {t.yahoo_ticker: t.currency
+                     for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
     fx_cache: dict[str, float] = {}
     for p in positions:
         price = prices[p.ticker]
@@ -1102,14 +1127,18 @@ def check_stops(quiet: bool):
 
     # Native→SEK for comparing live prices against the SEK cost basis.
     from fundmgr.data.fx import rate_to_sek
-    cur_by_ticker = {t.yahoo_ticker: t.currency for t in get_enabled_tickers(cfg.universe_path)}
+    cur_by_ticker = {t.yahoo_ticker: t.currency
+                     for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
     fx_cache: dict[str, float] = {}
 
-    def _to_sek(price: float, ticker: str) -> float:
+    def _to_sek(price: float, ticker: str) -> float | None:
+        """None without a rate: a EUR close read as SEK is a −90% stop hit."""
         cur = cur_by_ticker.get(ticker, "SEK")
         if not cfg.fx_to_sek or cur == "SEK":
             return price
-        rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+        rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+        if not rate:
+            return None
         fx_cache[cur] = rate
         return price * rate
 
@@ -1139,6 +1168,11 @@ def check_stops(quiet: bool):
 
         live_native = float(hist["Close"].iloc[-1])
         live_price = _to_sek(live_native, p.ticker)  # SEK, for cost-basis comparison & display
+        if live_price is None:
+            if not quiet:
+                click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}  "
+                           f"no {cur_by_ticker.get(p.ticker)}/SEK rate")
+            continue
         live_by_ticker[p.ticker] = live_price
 
         # % change since entry — the metric stop/take-profit levels are measured against.
@@ -1460,7 +1494,7 @@ def review_stop(ticker: str | None, notify: bool):
         click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
         try:
             result = review_position(tk, store, cfg, live_price=t.get("live"))
-        except LLMError as e:
+        except (LLMError, ValueError) as e:
             click.echo(f"  Review failed for {tk}: {e}", err=True)
             continue
         if result is None:
@@ -1533,7 +1567,7 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
         click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
         try:
             result = review_target(tk, store, cfg, live_price=t.get("live"))
-        except LLMError as e:
+        except (LLMError, ValueError) as e:
             click.echo(f"  Review failed for {tk}: {e}", err=True)
             continue
         if result is None:

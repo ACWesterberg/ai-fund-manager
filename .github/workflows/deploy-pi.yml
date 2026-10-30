@@ -34,7 +34,7 @@ jobs:
           tags: tag:ci
 
       - name: Deploy to Pi via SSH
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
           host: ${{ secrets.PI_TAILSCALE_IP }}
           username: ${{ secrets.PI_SSH_USER }}
@@ -46,7 +46,7 @@ jobs:
 
       - name: Notify Telegram on success
         if: success()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master as of 30 Oct
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -58,7 +58,7 @@ jobs:
 
       - name: Notify Telegram on failure
         if: failure()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master as of 30 Oct
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}

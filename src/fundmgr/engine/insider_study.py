@@ -122,6 +122,9 @@ def format_study(result: dict) -> str:
             lines.append(_fmt_row(label, summarize(vals)))
     lines.append(
         "\n  Read: a positive mean on the buy rows, with an interval clear of zero, is the"
-        "\n  edge the research describes. One year is a short window; --years 3 widens it."
+        "\n  edge the research describes."
+        + (" One year is a short window; --years 3 widens it."
+           if date.fromisoformat(result["end"]) - date.fromisoformat(result["start"])
+           <= timedelta(days=366) else "")
     )
     return "\n".join(lines)

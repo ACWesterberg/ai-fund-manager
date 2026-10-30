@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -1378,10 +1379,14 @@ def check_stops(quiet: bool):
         if not banner and not alert_stops and not alert_profits:
             lines.append("\nℹ️ No action needed — for information only.")
         msg = "\n".join(lines)
+        payload = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+        # The owed orders in the banner, each as a pre-filled Montrose ticket.
+        buttons = _owed_ticket_buttons(cfg, store, [r["ticker"] for r in owed]) if banner else []
+        if buttons:
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [
+                [{"text": label, "url": url} for label, url in row] for row in buttons]})
         try:
-            data = urllib.parse.urlencode({
-                "chat_id": chat_id, "text": msg, "parse_mode": "HTML",
-            }).encode()
+            data = urllib.parse.urlencode(payload).encode()
             _req.urlopen(
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 data, timeout=10,
@@ -1393,6 +1398,66 @@ def check_stops(quiet: bool):
             click.echo("  Telegram alert sent.")
         except Exception as e:
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
+
+
+def _owed_ticket_buttons(cfg, store, tickers) -> list:
+    """Montrose ticket buttons for the review orders still owed on `tickers`.
+
+    Tickets first came only with the Monday run, so the stop review that said
+    "TRIM IVSO — sell 15 shares" left the order to be typed into the app by
+    hand. A trim or exit has a size and gets a ticket for exactly it; an add has
+    none and gets none. One ticket per review, reused on every later alert that
+    repeats the same owed order. Advisory: a failure costs the button only.
+    """
+    if not (cfg.montrose.tickets and cfg.montrose.account_name):
+        return []
+    try:
+        from fundmgr.broker import tickets as tk
+        from fundmgr.engine.review_common import needs_trade
+        from fundmgr.web.views import _shares_to_trade
+
+        held = {p.ticker: p.shares for p in store.get_positions()}
+        wanted = set(tickers)
+        buttons, fresh = [], []
+        for r in store.get_open_reviews(tickers=list(held)):
+            if r["ticker"] not in wanted or not needs_trade(r["verdict"]) or r["verdict"] == "add":
+                continue
+            wanted.discard(r["ticker"])          # newest open review per name only
+            size = _shares_to_trade(r["verdict"], held[r["ticker"]], r.get("trim_pct"))
+            shares = min(int(round(size or 0)), math.floor(held[r["ticker"]]))
+            if shares <= 0:
+                continue
+            line = tk.TicketLine(ticker=r["ticker"], side="sell", shares=shares,
+                                 kind=r["verdict"].upper())
+            cached = store.get_meta(f"review_ticket:{r['review_id']}:{shares}")
+            if cached:
+                buttons.append([(line.label(), cached)])
+            else:
+                fresh.append((r["review_id"], line))
+        if fresh:
+            lines = [ln for _, ln in fresh]
+            tk.create_tickets(_montrose_account(cfg), lines, _ticket_symbols(cfg, store))
+            for (review_id, ln) in fresh:
+                if ln.url:
+                    store.set_meta(f"review_ticket:{review_id}:{ln.shares}", ln.url)
+                    buttons.append([(ln.label(), ln.url)])
+                else:
+                    click.echo(f"  ⚠ no Montrose ticket for {ln.label()}: {ln.problem}", err=True)
+        return buttons
+    except Exception as exc:
+        click.echo(f"  ⚠ Montrose ticket not made: {exc}", err=True)
+        return []
+
+
+def _send_review_tickets(cfg, store, tickers) -> None:
+    """Tickets for a review's order as their own message — the bot relays the
+    review's stdout as text, which cannot carry a button."""
+    from fundmgr.notify.send import send_telegram
+
+    buttons = _owed_ticket_buttons(cfg, store, tickers)
+    if buttons:
+        send_telegram("🎫 <b>Montrose ticket</b> for the review above — set the limit and "
+                      "approve it in the app; nothing is placed until you do.", buttons=buttons)
 
 
 @cli.command("review-stop")
@@ -1474,6 +1539,8 @@ def review_stop(ticker: str | None, notify: bool):
         body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+    if html_blocks:
+        _send_review_tickets(cfg, store, [t["ticker"] for t in targets])
 
 
 @cli.command("review-target")
@@ -1547,6 +1614,8 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
         body = "<b>🎯 Take-Profit Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+    if html_blocks:
+        _send_review_tickets(cfg, store, [t["ticker"] for t in targets])
 
 
 @cli.command("decisions")

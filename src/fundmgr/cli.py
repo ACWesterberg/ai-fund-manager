@@ -1460,6 +1460,25 @@ def _send_review_tickets(cfg, store, tickers) -> None:
                       "approve it in the app; nothing is placed until you do.", buttons=buttons)
 
 
+def _resolve_held(ticker: str, held: list[str]) -> str:
+    """A held ticker from what was typed, or exit with the reason.
+
+    Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
+    """
+    q = ticker.upper()
+    matches = [h for h in held if h == q] or \
+              [h for h in held if h.split(".")[0] == q] or \
+              [h for h in held if h.startswith(q + ".")]
+    matches = sorted(set(matches))
+    if not matches:
+        click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
+        sys.exit(1)
+    if len(matches) > 1:
+        click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+        sys.exit(1)
+    return matches[0]
+
+
 @cli.command("review-stop")
 @click.argument("ticker", required=False)
 @click.option("--notify/--no-notify", default=True, show_default=True,
@@ -1485,19 +1504,7 @@ def review_stop(ticker: str | None, notify: bool):
 
     # Decide which tickers to review.
     if ticker:
-        q = ticker.upper()
-        # Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
-        matches = [h for h in held if h == q] or \
-                  [h for h in held if h.split(".")[0] == q] or \
-                  [h for h in held if h.startswith(q + ".")]
-        matches = sorted(set(matches))
-        if not matches:
-            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
-            sys.exit(1)
-        if len(matches) > 1:
-            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
-            sys.exit(1)
-        targets = [{"ticker": matches[0], "live": None}]
+        targets = [{"ticker": _resolve_held(ticker, held), "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
         scan = find_stop_breaches(store, cfg)
@@ -1686,6 +1693,39 @@ def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | Non
         click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
 
 
+@cli.command("report-check")
+@click.argument("ticker", required=False)
+@click.option("--dry-run", is_flag=True, help="List the reports that would be read; call nothing.")
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+def report_check_cmd(ticker: str | None, dry_run: bool, notify: bool):
+    """Read held companies' new quarterly reports against their thesis (advisory).
+
+    With no argument: every holding that reported in the last few days and has
+    not been checked. With a TICKER: re-read that holding's latest report.
+    """
+    from fundmgr.engine import report_check as rc
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if _paused(cfg, "report check"):
+        return
+    held = [p.ticker for p in store.get_positions()]
+    only = _resolve_held(ticker, held) if ticker else None
+    click.echo(f"[report-check] {only or f'{len(held)} holdings'}"
+               f"{' (dry run)' if dry_run else ''}…")
+    out = rc.run_check(store, cfg, only=only, dry_run=dry_run, echo=click.echo)
+    for result in out["reviewed"]:
+        click.echo("\n" + rc.format_text(result))
+    if not dry_run and not any(out.values()):
+        click.echo("  No new reports on held positions.")
+    body = rc.format_html(out)
+    if notify and body and send_telegram(body):
+        click.echo("\n  (sent to Telegram)")
+    if out["reviewed"]:
+        _send_review_tickets(cfg, store, [r["review"].ticker for r in out["reviewed"]])
+
+
 @cli.command("report-study")
 @click.option("--years", default=2, show_default=True, type=click.IntRange(1, 5),
               help="How far back to look for reports.")
@@ -1743,16 +1783,14 @@ def report_watch(dry_run: bool):
 
 
 @cli.command("earnings-watch")
-@click.option("--dry-run", is_flag=True, help="Find reports and say what would happen; no model call, no Telegram.")
-@click.option("--list", "list_", is_flag=True, help="Show the recorded checks and their verdicts. Free.")
+@click.option("--dry-run", is_flag=True, help="Say which heads-ups would go out; send nothing.")
+@click.option("--list", "list_", is_flag=True, help="Show the reports a heads-up was sent for.")
 def earnings_watch_cmd(dry_run: bool, list_: bool):
-    """Read each held name's report against the thesis it was bought on.
+    """Heads-up the evening before a holding reports, with the thesis it is held on.
 
     \b
-    Weekdays 08:45 and 18:30 (cron). The evening before a holding reports: a
-    heads-up with its thesis. Once the report is out: one model call reads the
-    coverage published since — thesis held / broken / unclear, quotes checked
-    against the text — sent before the next open. Never trades.
+    Weekdays 18:30 (cron); Friday covers a Monday report. The report itself is
+    read by `fund report-check` (08:45 and 18:30). No model calls.
     """
     from fundmgr.config import load_universe
     from fundmgr.engine import earnings_watch as ew
@@ -1761,8 +1799,8 @@ def earnings_watch_cmd(dry_run: bool, list_: bool):
     cfg, store = _get_store()
     if list_:
         for r in store.get_earnings_checks():
-            click.echo(f"  {r['report_date']}  {r['ticker']:<12} {r['verdict'] or 'open':<8} "
-                       f"{(r['confidence'] or 0):.0%}  attempts {r['attempts']}  ({r['found_by']})")
+            click.echo(f"  {r['report_date']}  {r['ticker']:<12} heads-up "
+                       f"{(r['heads_up_at'] or 'not sent')[:16]}")
         return
     if _paused(cfg, "earnings watch"):
         return
@@ -1772,7 +1810,7 @@ def earnings_watch_cmd(dry_run: bool, list_: bool):
     names = {u.yahoo_ticker: u.name for u in load_universe(cfg.universe_path)}
     sent = ew.run(store, cfg, send=send_telegram, names=names, dry_run=dry_run, echo=click.echo)
     if not sent:
-        click.echo("  Nothing to report.")
+        click.echo("  No holding reports on the next weekday.")
 
 
 @cli.command("report-results")

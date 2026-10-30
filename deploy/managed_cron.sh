@@ -19,11 +19,13 @@ $BEGIN
 */30 9-22 * * 1-5 cd $REPO_DIR && .venv/bin/fund account-sync --all >> data/logs/accounts.log 2>&1
 # Refresh every account holding's hold/add/trim/exit view, Saturday morning.
 41 8 * * 6 cd $REPO_DIR && .venv/bin/fund account-plan >> data/logs/accounts.log 2>&1
-# Earnings watch (real fund): heads-up the evening before a holding reports, and
-# its report read against the thesis — 08:45 lands before the 09:00 open for the
-# usual 07:30 Nordic release; 18:30 catches midday reports. Never trades.
-45 8 * * 1-5 cd $REPO_DIR && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
+# Held positions' reports (real fund). Evening before: a heads-up with the thesis
+# (earnings-watch, no model). Once out: report-check reads it against the thesis
+# — 08:45 lands before the 09:00 open for the usual 07:30 Nordic release; 18:30
+# catches midday reports. Advisory; never trades.
 30 18 * * 1-5 cd $REPO_DIR && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
+45 8 * * 1-5 cd $REPO_DIR && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
+30 18 * * 1-5 cd $REPO_DIR && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
 $END
 CRON
 }
@@ -36,7 +38,7 @@ rest="$(printf '%s\n' "$current" | awk -v b="$BEGIN" -v e="$END" '
     !skip')"
 # A job already added by hand outside the block would run twice — say so, and
 # leave it to the operator rather than guess which copy to keep.
-if printf '%s\n' "$rest" | grep -v '^[[:space:]]*#' | grep -qE 'fund (account-(sync --all|plan)|earnings-watch)'; then
+if printf '%s\n' "$rest" | grep -v '^[[:space:]]*#' | grep -qE 'fund (account-(sync --all|plan)|earnings-watch|report-check)'; then
     echo "managed_cron: managed jobs already in the crontab outside the managed block — not adding them again"
     exit 0
 fi

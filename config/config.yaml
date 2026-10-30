@@ -72,13 +72,10 @@ reporting:
   output_dir: "data/reports"
 
 # Earnings watch (`fund earnings-watch`, engine/earnings_watch.py): the evening
-# before a holding reports, a heads-up with its thesis; once the report is out,
-# one medium-reasoning read of the coverage against that thesis (held / broken /
-# unclear), sent before the next open. Never trades.
+# before a holding reports, a heads-up with the thesis it is held on. The report
+# itself is read by `fund report-check` (08:45 and 18:30). No model calls.
 earnings_watch:
   enabled: true
-  reasoning_effort: medium
-  max_checks_per_report: 3
 
 # Report-reaction experiment (`fund report-watch`, engine/report_events.py):
 # logs each report that moves a stock ±5% vs the index, has the model judge the

@@ -1441,10 +1441,14 @@ def check_stops(quiet: bool):
         if not banner and not alert_stops and not alert_profits:
             lines.append("\nℹ️ No action needed — for information only.")
         msg = "\n".join(lines)
+        payload = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+        # The owed orders in the banner, each as a pre-filled Montrose ticket.
+        buttons = _owed_ticket_buttons(cfg, store, [r["ticker"] for r in owed]) if banner else []
+        if buttons:
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [
+                [{"text": label, "url": url} for label, url in row] for row in buttons]})
         try:
-            data = urllib.parse.urlencode({
-                "chat_id": chat_id, "text": msg, "parse_mode": "HTML",
-            }).encode()
+            data = urllib.parse.urlencode(payload).encode()
             _req.urlopen(
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 data, timeout=10,
@@ -1456,6 +1460,85 @@ def check_stops(quiet: bool):
             click.echo("  Telegram alert sent.")
         except Exception as e:
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
+
+
+def _owed_ticket_buttons(cfg, store, tickers) -> list:
+    """Montrose ticket buttons for the review orders still owed on `tickers`.
+
+    Tickets first came only with the Monday run, so the stop review that said
+    "TRIM IVSO — sell 15 shares" left the order to be typed into the app by
+    hand. A trim or exit has a size and gets a ticket for exactly it; an add has
+    none and gets none. One ticket per review, reused on every later alert that
+    repeats the same owed order. Advisory: a failure costs the button only.
+    """
+    if not (cfg.montrose.tickets and cfg.montrose.account_name):
+        return []
+    try:
+        from fundmgr.broker import tickets as tk
+        from fundmgr.engine.review_common import needs_trade
+        from fundmgr.web.views import _shares_to_trade
+
+        held = {p.ticker: p.shares for p in store.get_positions()}
+        wanted = set(tickers)
+        buttons, fresh = [], []
+        for r in store.get_open_reviews(tickers=list(held)):
+            if r["ticker"] not in wanted or not needs_trade(r["verdict"]) or r["verdict"] == "add":
+                continue
+            wanted.discard(r["ticker"])          # newest open review per name only
+            size = _shares_to_trade(r["verdict"], held[r["ticker"]], r.get("trim_pct"))
+            shares = min(int(round(size or 0)), math.floor(held[r["ticker"]]))
+            if shares <= 0:
+                continue
+            line = tk.TicketLine(ticker=r["ticker"], side="sell", shares=shares,
+                                 kind=r["verdict"].upper())
+            cached = store.get_meta(f"review_ticket:{r['review_id']}:{shares}")
+            if cached:
+                buttons.append([(line.label(), cached)])
+            else:
+                fresh.append((r["review_id"], line))
+        if fresh:
+            lines = [ln for _, ln in fresh]
+            tk.create_tickets(_montrose_account(cfg), lines, _ticket_symbols(cfg, store))
+            for (review_id, ln) in fresh:
+                if ln.url:
+                    store.set_meta(f"review_ticket:{review_id}:{ln.shares}", ln.url)
+                    buttons.append([(ln.label(), ln.url)])
+                else:
+                    click.echo(f"  ⚠ no Montrose ticket for {ln.label()}: {ln.problem}", err=True)
+        return buttons
+    except Exception as exc:
+        click.echo(f"  ⚠ Montrose ticket not made: {exc}", err=True)
+        return []
+
+
+def _send_review_tickets(cfg, store, tickers) -> None:
+    """Tickets for a review's order as their own message — the bot relays the
+    review's stdout as text, which cannot carry a button."""
+    from fundmgr.notify.send import send_telegram
+
+    buttons = _owed_ticket_buttons(cfg, store, tickers)
+    if buttons:
+        send_telegram("🎫 <b>Montrose ticket</b> for the review above — set the limit and "
+                      "approve it in the app; nothing is placed until you do.", buttons=buttons)
+
+
+def _resolve_held(ticker: str, held: list[str]) -> str:
+    """A held ticker from what was typed, or exit with the reason.
+
+    Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
+    """
+    q = ticker.upper()
+    matches = [h for h in held if h == q] or \
+              [h for h in held if h.split(".")[0] == q] or \
+              [h for h in held if h.startswith(q + ".")]
+    matches = sorted(set(matches))
+    if not matches:
+        click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
+        sys.exit(1)
+    if len(matches) > 1:
+        click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+        sys.exit(1)
+    return matches[0]
 
 
 @cli.command("review-stop")
@@ -1483,19 +1566,7 @@ def review_stop(ticker: str | None, notify: bool):
 
     # Decide which tickers to review.
     if ticker:
-        q = ticker.upper()
-        # Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
-        matches = [h for h in held if h == q] or \
-                  [h for h in held if h.split(".")[0] == q] or \
-                  [h for h in held if h.startswith(q + ".")]
-        matches = sorted(set(matches))
-        if not matches:
-            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
-            sys.exit(1)
-        if len(matches) > 1:
-            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
-            sys.exit(1)
-        targets = [{"ticker": matches[0], "live": None}]
+        targets = [{"ticker": _resolve_held(ticker, held), "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
         scan = find_stop_breaches(store, cfg)
@@ -1537,6 +1608,8 @@ def review_stop(ticker: str | None, notify: bool):
         body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+    if html_blocks:
+        _send_review_tickets(cfg, store, [t["ticker"] for t in targets])
 
 
 @cli.command("review-target")
@@ -1610,6 +1683,8 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
         body = "<b>🎯 Take-Profit Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+    if html_blocks:
+        _send_review_tickets(cfg, store, [t["ticker"] for t in targets])
 
 
 @cli.command("decisions")
@@ -1678,6 +1753,39 @@ def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | Non
             click.echo(f"    Why: {r['rationale']}")
     if not show_all:
         click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
+
+
+@cli.command("report-check")
+@click.argument("ticker", required=False)
+@click.option("--dry-run", is_flag=True, help="List the reports that would be read; call nothing.")
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+def report_check_cmd(ticker: str | None, dry_run: bool, notify: bool):
+    """Read held companies' new quarterly reports against their thesis (advisory).
+
+    With no argument: every holding that reported in the last few days and has
+    not been checked. With a TICKER: re-read that holding's latest report.
+    """
+    from fundmgr.engine import report_check as rc
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if _paused(cfg, "report check"):
+        return
+    held = [p.ticker for p in store.get_positions()]
+    only = _resolve_held(ticker, held) if ticker else None
+    click.echo(f"[report-check] {only or f'{len(held)} holdings'}"
+               f"{' (dry run)' if dry_run else ''}…")
+    out = rc.run_check(store, cfg, only=only, dry_run=dry_run, echo=click.echo)
+    for result in out["reviewed"]:
+        click.echo("\n" + rc.format_text(result))
+    if not dry_run and not any(out.values()):
+        click.echo("  No new reports on held positions.")
+    body = rc.format_html(out)
+    if notify and body and send_telegram(body):
+        click.echo("\n  (sent to Telegram)")
+    if out["reviewed"]:
+        _send_review_tickets(cfg, store, [r["review"].ticker for r in out["reviewed"]])
 
 
 @cli.command("report-study")
@@ -1778,16 +1886,14 @@ def report_watch(dry_run: bool):
 
 
 @cli.command("earnings-watch")
-@click.option("--dry-run", is_flag=True, help="Find reports and say what would happen; no model call, no Telegram.")
-@click.option("--list", "list_", is_flag=True, help="Show the recorded checks and their verdicts. Free.")
+@click.option("--dry-run", is_flag=True, help="Say which heads-ups would go out; send nothing.")
+@click.option("--list", "list_", is_flag=True, help="Show the reports a heads-up was sent for.")
 def earnings_watch_cmd(dry_run: bool, list_: bool):
-    """Read each held name's report against the thesis it was bought on.
+    """Heads-up the evening before a holding reports, with the thesis it is held on.
 
     \b
-    Weekdays 08:45 and 18:30 (cron). The evening before a holding reports: a
-    heads-up with its thesis. Once the report is out: one model call reads the
-    coverage published since — thesis held / broken / unclear, quotes checked
-    against the text — sent before the next open. Never trades.
+    Weekdays 18:30 (cron); Friday covers a Monday report. The report itself is
+    read by `fund report-check` (08:45 and 18:30). No model calls.
     """
     from fundmgr.config import load_universe
     from fundmgr.engine import earnings_watch as ew
@@ -1796,8 +1902,8 @@ def earnings_watch_cmd(dry_run: bool, list_: bool):
     cfg, store = _get_store()
     if list_:
         for r in store.get_earnings_checks():
-            click.echo(f"  {r['report_date']}  {r['ticker']:<12} {r['verdict'] or 'open':<8} "
-                       f"{(r['confidence'] or 0):.0%}  attempts {r['attempts']}  ({r['found_by']})")
+            click.echo(f"  {r['report_date']}  {r['ticker']:<12} heads-up "
+                       f"{(r['heads_up_at'] or 'not sent')[:16]}")
         return
     if _paused(cfg, "earnings watch"):
         return
@@ -1807,7 +1913,7 @@ def earnings_watch_cmd(dry_run: bool, list_: bool):
     names = {u.yahoo_ticker: u.name for u in load_universe(cfg.universe_path)}
     sent = ew.run(store, cfg, send=send_telegram, names=names, dry_run=dry_run, echo=click.echo)
     if not sent:
-        click.echo("  Nothing to report.")
+        click.echo("  No holding reports on the next weekday.")
 
 
 @cli.command("report-results")

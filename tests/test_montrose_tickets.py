@@ -258,3 +258,58 @@ def test_a_montrose_outage_never_breaks_the_run(env, fake, monkeypatch):
                           PortfolioSnapshot(positions=[], cash_sek=20_000.0),
                           {"TRUE-B.ST": _feat("TRUE-B.ST", 25.0)})
     assert sent and "not sent" in sent[0][0] and "/montrose_tickets" in sent[0][0]
+
+
+# ── Tickets for review orders (stop / target reviews) ────────────────────────
+# The 30 Oct stop review said "TRIM IVSO.ST — sell 15 shares" and came with no
+# ticket: tickets were only wired to the Monday run.
+
+def _review_env(env, fake, tickets_on=True):
+    from fundmgr.config import load_config
+
+    store, sent = env
+    cfg = load_config()
+    cfg.montrose.tickets = tickets_on
+    store.apply_fill(Transaction("TRUE-B.ST", "buy", 30, 25.0, 1.0, "fill", datetime(2026, 10, 5, 12)))
+    return cfg, store, sent
+
+
+def test_a_trim_review_gets_a_ticket_for_exactly_its_size(env, fake):
+    from fundmgr import cli as commands
+
+    cfg, store, _ = _review_env(env, fake)
+    store.record_review(ticker="TRUE-B.ST", source="stop_review", verdict="trim", trim_pct=50)
+    buttons = commands._owed_ticket_buttons(cfg, store, ["TRUE-B.ST"])
+    assert buttons == [[("SELL 15 TRUE-B.ST", TICKET_URL)]]
+    assert _tickets(fake) == [{"side": "Sell", "orderbookId": 1757, "quantity": 15,
+                               "accountId": ACCOUNT_ID}]
+    # The 11:00 alert repeating the same owed order reuses the ticket.
+    assert commands._owed_ticket_buttons(cfg, store, ["TRUE-B.ST"]) == buttons
+    assert len(_tickets(fake)) == 1
+
+
+def test_an_exit_sells_everything_and_an_add_gets_no_ticket(env, fake):
+    from fundmgr import cli as commands
+
+    cfg, store, _ = _review_env(env, fake)
+    store.record_review(ticker="TRUE-B.ST", source="target_review", verdict="exit")
+    assert commands._owed_ticket_buttons(cfg, store, ["TRUE-B.ST"]) == [[("SELL 30 TRUE-B.ST", TICKET_URL)]]
+    store.record_review(ticker="TRUE-B.ST", source="stop_review", verdict="add")
+    assert commands._owed_ticket_buttons(cfg, store, ["TRUE-B.ST"]) == []
+
+
+def test_no_review_tickets_when_tickets_are_off(env, fake):
+    from fundmgr import cli as commands
+
+    cfg, store, _ = _review_env(env, fake, tickets_on=False)
+    store.record_review(ticker="TRUE-B.ST", source="stop_review", verdict="trim", trim_pct=50)
+    assert commands._owed_ticket_buttons(cfg, store, ["TRUE-B.ST"]) == [] and _tickets(fake) == []
+
+
+def test_review_tickets_go_out_as_their_own_message(env, fake):
+    from fundmgr import cli as commands
+
+    cfg, store, sent = _review_env(env, fake)
+    store.record_review(ticker="TRUE-B.ST", source="stop_review", verdict="trim", trim_pct=50)
+    commands._send_review_tickets(cfg, store, ["TRUE-B.ST"])
+    assert sent[-1][1] == [[("SELL 15 TRUE-B.ST", TICKET_URL)]] and "review above" in sent[-1][0]

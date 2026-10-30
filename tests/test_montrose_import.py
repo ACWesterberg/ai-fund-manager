@@ -267,3 +267,31 @@ def test_booking_is_off_without_import_from(env, tmp_path):
     cfg.write_text(cfg.read_text().replace("  import_from: '2026-10-05'\n", ""))
     res = _cli("montrose-import")
     assert res.exit_code != 0 and "off" in res.output
+
+
+# ── A booked fill ticks off the review order it carried out ──────────────────
+# 30 Oct: IVSO's stop review said TRIM 50%; the sale went through at Montrose,
+# but a trim leaves the name held, so the ACTION NEEDED banner kept repeating.
+
+def test_booking_a_sell_closes_the_open_trim_review_but_not_a_later_one(store):
+    store.book_broker_fill(4, _fill(), "Buy", "2026-10-05", -7_287.28)
+    review_id = store.record_review(ticker="INWI.ST", source="stop_review", verdict="trim",
+                                    trim_pct=50, review_date="2026-10-08")
+    p = imp.Proposal(broker_id=9, kind="fill", category="Sell", trade_date="2026-10-09",
+                     amount_sek=3_600.0, ticker="INWI.ST", side="sell", shares=20,
+                     price_sek=180.5, fee_sek=10.0)
+    msg = imp.book(store, p)
+    assert "Closed the open trim review" in msg
+    assert store.get_open_reviews(tickers=["INWI.ST"]) == []
+    assert review_id
+
+
+def test_a_buy_does_not_close_a_trim_and_a_newer_review_stays_open(store):
+    store.book_broker_fill(4, _fill(), "Buy", "2026-10-05", -7_287.28)
+    store.record_review(ticker="INWI.ST", source="stop_review", verdict="trim",
+                        trim_pct=50, review_date="2026-10-12")
+    sell = imp.Proposal(broker_id=9, kind="fill", category="Sell", trade_date="2026-10-09",
+                        amount_sek=3_600.0, ticker="INWI.ST", side="sell", shares=20,
+                        price_sek=180.5, fee_sek=10.0)
+    assert "Closed" not in imp.book(store, sell)
+    assert len(store.get_open_reviews(tickers=["INWI.ST"])) == 1

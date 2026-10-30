@@ -155,12 +155,9 @@ class ReportWatchConfig:
 
 @dataclass
 class EarningsWatchConfig:
-    # Reads each held name's report against the thesis it was bought on
-    # (engine/earnings_watch.py). Advice only: it never trades.
+    # The evening-before heads-up for a holding's report (engine/earnings_watch.py);
+    # report-check reads the report itself. No model calls.
     enabled: bool = False
-    reasoning_effort: str = "medium"
-    max_tokens: int = 8000
-    max_checks_per_report: int = 3      # report-day morning, evening, next morning
 
 
 @dataclass

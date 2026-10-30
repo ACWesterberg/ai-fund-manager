@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
     outperformed        INTEGER,            -- 1=yes, 0=no, NULL=not yet evaluated
     evaluation_date     TEXT,
     thesis              TEXT,               -- LLM's stated thesis at time of decision
-    source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review'
+    source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review' | 'report_review'
     decision_date       TEXT,               -- set for review rows; run rows read it off the recommendation
     -- Did the reasoning hold, independently of whether the price obliged?
     thesis_verdict      TEXT,               -- held | broke | unresolved | NULL=not checked
@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS position_alerts (
 CREATE TABLE IF NOT EXISTS position_reviews (
     review_id       TEXT PRIMARY KEY,   -- {date}-{source}-{TICKER}: one per name per day
     ticker          TEXT NOT NULL,
-    source          TEXT NOT NULL,      -- stop_review | target_review
+    source          TEXT NOT NULL,      -- stop_review | target_review | report_review
     verdict         TEXT NOT NULL,      -- exit | sell | trim | raise | hold | add
     confidence      REAL,
     trim_pct        REAL,               -- % of the position the verdict says to sell

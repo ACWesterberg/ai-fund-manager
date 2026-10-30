@@ -194,11 +194,39 @@ def book(store: Any, p: Proposal) -> str:
                           fee_sek=p.fee_sek, source="montrose",
                           timestamp=datetime.fromisoformat(p.trade_date + "T12:00:00"))
         store.book_broker_fill(p.broker_id, txn, p.category, p.trade_date, p.amount_sek, _note(p))
+        closed = close_owed_reviews(store, p.ticker, p.side, p.trade_date)
         return (f"✓ Booked {p.side} {rec._sh(p.shares)} × {p.ticker} @ {p.price_sek:.4f} SEK "
-                f"(fee {p.fee_sek:.2f}) — cash now {store.get_cash():,.2f} SEK")
+                f"(fee {p.fee_sek:.2f}) — cash now {store.get_cash():,.2f} SEK"
+                + (f"\n✓ Closed the open {', '.join(closed)} on {p.ticker}" if closed else ""))
     cash = store.book_broker_cash(p.broker_id, p.category, p.trade_date, p.amount_sek,
                                   _note(p), flow=p.kind == "flow")
     return f"✓ Booked {p.category} {p.amount_sek:+,.2f} SEK — cash now {cash:,.2f} SEK"
+
+
+_ORDER_SIDE = {"trim": "sell", "exit": "sell", "sell": "sell", "add": "buy"}
+
+
+def close_owed_reviews(store: Any, ticker: str, side: str, trade_date: str) -> list[str]:
+    """Tick off the review orders a booked broker fill carried out.
+
+    A trim leaves the name held, so its stop review stayed 'open' and the
+    ACTION NEEDED banner — and its ticket — kept repeating after the sale had
+    gone through (30 Oct, IVSO). A Montrose fill on the same side, on or after
+    the day the review asked for it, is that order done. Reviews written after
+    the fill are a new instruction and are left alone.
+    """
+    closed = []
+    for r in store.get_open_reviews(tickers=[ticker]):
+        if r["ticker"] != ticker or _ORDER_SIDE.get(r["verdict"]) != side:
+            continue
+        # The review's day leads its id (review_run_id); created_at is only when
+        # the row was last written.
+        asked_on = r["review_id"][:10] if r["review_id"][:4].isdigit() else (r.get("created_at") or "")[:10]
+        if asked_on > trade_date:
+            continue
+        if store.resolve_review(r["review_id"], "done"):
+            closed.append(f"{r['verdict']} review")
+    return closed
 
 
 def skip(store: Any, p: Proposal) -> str:

@@ -11,6 +11,7 @@ Commands:
   /universe      — list enabled tickers
   /reject_rates  — malformed-sample & guardrail drop rates (Refine gate)
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
+  /reportcheck [TICKER] — read a holding's latest report against its thesis
   /target [TICKER] — take-profit review (no ticker = every position at target)
   /setcash AMOUNT — correct the cash balance (SEK)
   /deposit AMOUNT [note] — new money in (not profit); /withdraw for money out
@@ -672,6 +673,24 @@ async def cmd_review(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
     await _run_cli_bg(update, context, "review-stop", "--no-notify", timeout=REVIEW_TIMEOUT)
 
 
+async def cmd_reportcheck(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/reportcheck [TICKER] — read a holding's quarterly report against its thesis.
+
+    With a ticker: re-read that holding's latest report. With no ticker: every
+    holding with a new report not yet checked (what the daily job does).
+    """
+    args = context.args or []
+    if args:
+        await update.message.reply_text(f"⏳ Reading {args[0].upper()}'s latest report (consensus)… ~1–2 min")
+        output = _run_cli("report-check", args[0], "--no-notify", timeout=300)
+        await _send(update, output)
+        return
+    await update.message.reply_text(
+        "⏳ Checking holdings for new reports… I'll post the result here when it's done."
+    )
+    await _run_cli_bg(update, context, "report-check", "--no-notify", timeout=REVIEW_TIMEOUT)
+
+
 async def cmd_target(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     """/target [TICKER] — take-profit review; no ticker = every position at target.
 
@@ -822,6 +841,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/universe — list all enabled tickers\n"
         "/reject_rates — malformed-sample & guardrail drop rates (Refine gate)\n"
         "/review [TICKER] — stop-loss review; no ticker = scan all breaches\n"
+        "/reportcheck [TICKER] — read a holding's latest report against its thesis\n"
         "/target [TICKER] — take-profit review (SELL/TRIM/RAISE/HOLD)\n"
         "/decisions [all] — review verdicts still waiting on an order from you\n"
         "/decisions done TICKER — you placed it (dismiss TICKER: not acting on it)\n"
@@ -1215,6 +1235,7 @@ def main() -> None:
         "universe": cmd_universe,
         "reject_rates": cmd_reject_rates,
         "review": cmd_review,
+        "reportcheck": cmd_reportcheck,
         "target": cmd_target,
         "decisions": cmd_decisions,
         "setcash": cmd_setcash,

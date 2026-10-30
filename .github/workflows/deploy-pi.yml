@@ -16,19 +16,25 @@ jobs:
     needs: test
     if: github.ref_name == 'deploy'
     name: SSH deploy to Pi
-    runs-on: ubuntu-latest
+    # Pinned: on 30 Oct ubuntu-latest became 26.04, whose sudo ignores -E, and
+    # every deploy failed at "Connect to Tailscale". The deploy runner should
+    # change only on purpose.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
+      # v2 ran Tailscale 1.42, which accepts an OAuth secret only with
+      # TS_EXPERIMENT_OAUTH_AUTHKEY set, passed through `sudo -E`. v4 runs a
+      # current Tailscale that needs no such variable.
       - name: Set up Tailscale
-        uses: tailscale/github-action@v2
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
           tags: tag:ci
 
       - name: Deploy to Pi via SSH
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
           host: ${{ secrets.PI_TAILSCALE_IP }}
           username: ${{ secrets.PI_SSH_USER }}
@@ -40,7 +46,7 @@ jobs:
 
       - name: Notify Telegram on success
         if: success()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master as of 30 Oct
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -52,7 +58,7 @@ jobs:
 
       - name: Notify Telegram on failure
         if: failure()
-        uses: appleboy/telegram-action@master
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master as of 30 Oct
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}

@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 
 from fundmgr import regions, styles
-from fundmgr.config import load_config, get_enabled_tickers
+from fundmgr.config import load_config, get_enabled_tickers, holding_rows
 from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
@@ -137,6 +137,29 @@ def reset(capital: float | None, purge_cache: bool, yes: bool):
     click.echo("\nNext step: run 'fund run' to generate the first decision of the fresh sim.")
 
 
+# check-news may start a run on a held name's headline; not within this long of
+# a saved one, or a Monday headline re-buys the whole consensus the run just made.
+AUTO_RUN_MIN_GAP_HOURS = 24
+
+
+def _run_lock(cfg):
+    """An exclusive per-fund lock for `fund run`, or None when one is running.
+
+    Nothing stopped two runs of one fund at once: a check-news auto-run could
+    start while Monday's run (consensus, shadow pairs, tickets) was still going,
+    and both seeded outcomes and sent tickets. Held until the process exits.
+    """
+    import fcntl
+
+    handle = (cfg.db_path.parent / f"{cfg.db_path.stem}.run.lock").open("a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
 def _skip_on_market_holiday(cfg) -> bool:
     """True when this profile's main market holds no session today.
 
@@ -190,11 +213,22 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
 
+    lock = _run_lock(cfg)
+    if lock is None:
+        click.echo(f"⏸ {cfg.display_name}: another run of this fund is still going — "
+                   "not starting a second one.")
+        return
+
     if not force and _skip_on_market_holiday(cfg):
         return
 
     tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}
+    # Only enabled rows are buyable, but every holding is priced and shown so it
+    # can be valued and sold — a disabled or unlisted holding used to freeze the book.
+    universe_tickers = {t.yahoo_ticker for t in tickers}
+    tickers += [t for t in holding_rows(cfg.universe_path, held_tickers)
+                if t.yahoo_ticker not in universe_tickers]
     fetch_tickers, fetch_note = select_tickers_for_price_fetch(tickers, held_tickers, cfg.screener)
     click.echo(f"\n{'═'*56}")
     click.echo(f"  AI Fund Manager — Weekly Run")
@@ -335,16 +369,36 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     fx_cache: dict[str, float] = {}
     cur_by_ticker = {t.yahoo_ticker: t.currency for t in tickers}
     positions = store.get_positions()
+    unvalued: list[str] = []
     for p in positions:
         feat = features.get(p.ticker)
-        if feat:
-            price = feat.last_price
-            cur = cur_by_ticker.get(p.ticker, "SEK")
-            if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
-                rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
-                fx_cache[cur] = rate
-                price *= rate
-            p.current_price_sek = price
+        if feat is None or not math.isfinite(feat.last_price) or feat.last_price <= 0:
+            unvalued.append(f"{p.ticker} (no price)")
+            continue
+        price = feat.last_price
+        cur = cur_by_ticker.get(p.ticker, "SEK")
+        if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                unvalued.append(f"{p.ticker} (no {cur}/SEK rate)")
+                continue
+            fx_cache[cur] = rate
+            price *= rate
+        p.current_price_sek = price
+    if unvalued:
+        # Before the model is paid for: the guardrails reject every trade in a
+        # book they can't value, and a NAV with a hole in it reads as a loss.
+        # A missing rate used to be read as 1.0, pricing a EUR holding at an
+        # eleventh of its worth for the model, the sizing and the NAV history.
+        click.echo(f"\n⛔ {cfg.display_name}: can't value {', '.join(unvalued)} — "
+                   "run skipped before calling the model; no NAV written.", err=True)
+        from fundmgr.notify.send import send_telegram
+        send_telegram(
+            f"<b>{html.escape(cfg.display_name)}</b>\n⛔ Run skipped — can't value the book\n"
+            f"{html.escape(', '.join(unvalued))}\nThe decision model wasn't called. Re-run with "
+            "/run once prices and FX are back."
+        )
+        sys.exit(1)
     snap = PortfolioSnapshot(positions=positions, cash_sek=store.get_cash())
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
@@ -399,7 +453,6 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"      ✓ Got {len(decision.actions)} action(s)")
 
     # ── Step 9: Apply guardrails ──────────────────────────────────────────────
-    universe_tickers = {t.yahoo_ticker for t in tickers}
     guardrail_result = apply_guardrails(decision, snap, features, universe_tickers, effective_cfg)
 
     rejected_count = sum(1 for v in guardrail_result.verdicts if not v.approved)
@@ -999,7 +1052,6 @@ def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
     current. Writes nothing when a holding has no price: a NAV with a hole in it
     reads as a loss, and filling the hole with cost basis would invent a value.
     """
-    from fundmgr.config import load_universe
     from fundmgr.data.fx import rate_to_sek
     from fundmgr.data.quotes import live_prices
 
@@ -1010,7 +1062,8 @@ def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
         click.echo(f"  ⚠ NAV not marked — no price for {', '.join(missing)}.")
         return None
 
-    cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+    cur_by_ticker = {t.yahoo_ticker: t.currency
+                     for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
     fx_cache: dict[str, float] = {}
     for p in positions:
         price = prices[p.ticker]
@@ -1103,14 +1156,18 @@ def check_stops(quiet: bool):
 
     # Native→SEK for comparing live prices against the SEK cost basis.
     from fundmgr.data.fx import rate_to_sek
-    cur_by_ticker = {t.yahoo_ticker: t.currency for t in get_enabled_tickers(cfg.universe_path)}
+    cur_by_ticker = {t.yahoo_ticker: t.currency
+                     for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
     fx_cache: dict[str, float] = {}
 
-    def _to_sek(price: float, ticker: str) -> float:
+    def _to_sek(price: float, ticker: str) -> float | None:
+        """None without a rate: a EUR close read as SEK is a −90% stop hit."""
         cur = cur_by_ticker.get(ticker, "SEK")
         if not cfg.fx_to_sek or cur == "SEK":
             return price
-        rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+        rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+        if not rate:
+            return None
         fx_cache[cur] = rate
         return price * rate
 
@@ -1140,6 +1197,11 @@ def check_stops(quiet: bool):
 
         live_native = float(hist["Close"].iloc[-1])
         live_price = _to_sek(live_native, p.ticker)  # SEK, for cost-basis comparison & display
+        if live_price is None:
+            if not quiet:
+                click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}  "
+                           f"no {cur_by_ticker.get(p.ticker)}/SEK rate")
+            continue
         live_by_ticker[p.ticker] = live_price
 
         # % change since entry — the metric stop/take-profit levels are measured against.
@@ -1532,7 +1594,7 @@ def review_stop(ticker: str | None, notify: bool):
         click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
         try:
             result = review_position(tk, store, cfg, live_price=t.get("live"))
-        except LLMError as e:
+        except (LLMError, ValueError) as e:
             click.echo(f"  Review failed for {tk}: {e}", err=True)
             continue
         if result is None:
@@ -1607,7 +1669,7 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
         click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
         try:
             result = review_target(tk, store, cfg, live_price=t.get("live"))
-        except LLMError as e:
+        except (LLMError, ValueError) as e:
             click.echo(f"  Review failed for {tk}: {e}", err=True)
             continue
         if result is None:
@@ -1754,6 +1816,47 @@ def report_study(years: int, limit: int | None):
     click.echo(format_study(result))
 
 
+@cli.command("volume-study")
+@click.option("--ratio", default=2.5, show_default=True, type=click.FloatRange(1.0),
+              help="A day counts as heavy at this multiple of its 20-day average volume.")
+def volume_study_cmd(ratio: float):
+    """Free: what did heavy-volume days go on to do, up days vs down days?
+
+    Reads the price cache the weekly run keeps; no model calls, no price
+    fetches. The screener rewards heavy volume whichever way the price went —
+    this says whether it should.
+    """
+    from fundmgr.engine.volume_study import format_study, run_study
+    cfg, store = _get_store()
+    result = run_study(store, cfg, get_enabled_tickers(cfg.universe_path), ratio=ratio,
+                       echo=click.echo)
+    click.echo(format_study(result))
+
+
+@cli.command("insider-study")
+@click.option("--years", default=1, show_default=True, type=click.IntRange(1, 5),
+              help="How far back to read FI's insider register.")
+def insider_study_cmd(years: int):
+    """Free: did insider buys and sells in this universe precede outperformance?
+
+    Reads FI's insider register (Swedish issuers) two weeks at a time and the
+    named stocks' price history. No model calls. Slow-ish: one FI request per
+    fortnight and a price fetch for every name with an event.
+    """
+    import httpx
+
+    from fundmgr.data.insiders import InsiderDataError
+    from fundmgr.engine.insider_study import format_study, run_study
+    from fundmgr.config import load_universe
+    cfg, store = _get_store()
+    try:
+        result = run_study(store, cfg, load_universe(cfg.universe_path), years=years,
+                           echo=click.echo)
+    except (InsiderDataError, httpx.HTTPError) as exc:
+        raise click.ClickException(f"FI's insider register could not be read: {exc}") from exc
+    click.echo(format_study(result))
+
+
 @cli.command("report-watch")
 @click.option("--dry-run", is_flag=True,
               help="Detect and show what would be judged. No model calls, nothing written.")
@@ -1873,6 +1976,11 @@ def check_news(auto_run: bool, max_age_hours: int):
         click.echo(f"  {flag} {t['ticker']}  [{t['sentiment_label'].upper()} {t['sentiment_score']:.2f}]")
         click.echo(f"       {t['headline'][:100]}")
 
+    last_run = store.last_run_at()
+    hours_since = ((datetime.utcnow() - last_run).total_seconds() / 3600
+                   if last_run else None)
+    recently_run = hours_since is not None and hours_since < AUTO_RUN_MIN_GAP_HOURS
+
     # Send Telegram notification — held positions only
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -1882,7 +1990,9 @@ def check_news(auto_run: bool, max_age_hours: int):
             label = t["sentiment_label"].upper()
             lines.append(f"🔴 <b>{t['ticker']}</b> [{label} {t['sentiment_score']:.2f}]")
             lines.append(f"  {t['headline'][:120]}")
-        if auto_run:
+        if auto_run and recently_run:
+            lines.append(f"\nNo early run: the last one was {hours_since:.0f}h ago.")
+        elif auto_run:
             lines.append("\n▶ Triggering early decision run…")
         msg = "\n".join(lines)
         try:
@@ -1900,7 +2010,10 @@ def check_news(auto_run: bool, max_age_hours: int):
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
 
     # ── Trigger early run if a held position is affected ─────────────────────
-    if auto_run and held_triggers:
+    if auto_run and held_triggers and recently_run:
+        click.echo(f"\n  Held position affected, but a run was saved {hours_since:.0f}h ago — "
+                   f"no early run within {AUTO_RUN_MIN_GAP_HOURS}h of the last one.")
+    elif auto_run and held_triggers:
         click.echo("\n  Held position affected — triggering early 'fund run'…")
         tickers_affected = ", ".join(t["ticker"] for t in held_triggers)
         click.echo(f"  Affected: {tickers_affected}")
@@ -3163,17 +3276,9 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
                f"{gross:,.0f} SEK (fee {fee:.2f} SEK)")
     click.echo(f"  Cash remaining: {store.get_cash():,.0f} SEK")
 
-    # Cost-basis NAV snapshot so the chart reflects the fill event
+    # Today's NAV at market prices, so the chart reflects the fill; never cost basis.
     try:
-        bench_rows = store.get_benchmark()
-        positions_after = store.get_positions()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=ts.strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -3225,14 +3330,7 @@ def paper_retag(slug: str, old: str, new: str | None):
                    "price were set from the wrong instrument. Re-anchor after a "
                    "fresh look.")
     try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -3265,14 +3363,7 @@ def paper_setcost(slug: str, ticker: str, avg_sek: float):
                f"{res['new_avg']:,.2f} SEK/share ({res['shares']:g} sh). "
                f"Cash {res['cash_delta']:+,.0f} SEK.")
     try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 

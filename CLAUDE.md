@@ -40,7 +40,7 @@ The two Global and two Buffett funds are deliberately **paired across providers 
 
 ## Key design decisions (don't re-litigate these)
 
-- **The model proposes, guardrails dispose.** `guardrails/rules.py` re-checks every action against the mandate mechanically: universe membership, stale-data block on buys, min trade size, max position weight (clipped, not rejected), sector concentration, max open positions, cash floor, and a turnover cap that drops lowest-confidence trades until the run fits. Nothing reaches the book without passing. A rejected action is logged with its reason, so `guardrail_log` is the audit trail of what the model wanted versus what it got.
+- **The model proposes, guardrails dispose.** `guardrails/rules.py` re-checks every action against the mandate mechanically: universe membership (for buys — a holding is always sellable, even once its row is disabled), stale-data block on buys, min trade size, max position weight (clipped, not rejected), sector concentration, max open positions, cash floor, and a turnover cap. Sells are checked before buys, each side highest confidence first, so a swap's buy sees the slot and cash its sell frees; the turnover cap drops whatever no longer fits in that order. Nothing reaches the book without passing. A rejected action is logged with its reason, so `guardrail_log` is the audit trail of what the model wanted versus what it got.
 - **Consensus sampling, not one shot.** `n_samples` (5 on the real fund, 3 on the sims) runs the decision call in parallel and majority-votes each ticker. Unanimous and majority-only actions are labelled separately in the report and on Telegram. A ticker needs more than half the runs to survive.
 - **Reasoning effort is `high` everywhere it decides.** Weekly runs are ~9 heavy calls a week in total — a rounding error — and a weekly real-money allocation across a whole portfolio with 3-way voting is exactly where deep reasoning earns its price. The small extraction jobs (release reading, kill-criterion judging, OCR fill parsing) sit on `gpt-4o-mini` with tight `max_tokens` and no reasoning at all. Don't collapse those two tiers into one.
 - **`fund run` refuses to run into a shut market.** Cron fires on a fixed weekly schedule and knows nothing about holidays, while the only calendar check in the pipeline sits down in `auto_fill`, per ticker, *after* the model has been paid for — so on US Labor Day a US-dominant fund bought a full consensus run and then skipped every fill one at a time. Skipped fills are not queued for the next open either: they wait for the next *weekly* run. `_skip_on_market_holiday` resolves the universe's **dominant calendar** and returns before fetching anything, naming the next session on stdout and Telegram. `--force` overrides.
@@ -141,7 +141,7 @@ The sidebar shows Nordic real money → Accounts → What-If Lab. The model-comp
 | `max_sector_pct` | 35 | NAV weight in any one GICS sector |
 | `min_cash_pct` / `max_cash_pct` | 12 / 25 | per-fund — the real book runs **5 / 10** (ISK is taxed on total balance) |
 | `min_trade_sek` | 2,500 | below this, fees eat the edge |
-| `max_turnover_pct` | 25 | per run; excess dropped lowest-confidence first |
+| `max_turnover_pct` | 25 | per run; sells take turnover before buys, each side by confidence |
 | `stale_after_days` | 5 | stale data blocks **buys** only |
 | `cold_start_*` | 80 / 50 | lift the turnover cap when deploying from cash |
 | `region_targets` | `{}` | % of NAV per region; only the ceiling (target + tolerance) is enforced |
@@ -160,7 +160,7 @@ Everything is cron on the Pi; there is no in-process scheduler.
 | Job | When | LLM? |
 |---|---|---|
 | `fund run` × 5 funds | Mon, staggered 09:30–17:30 CET | yes — the main spend |
-| `fund check-news` | weekdays ×3–4 | no (local FinBERT); `--auto-run` can trigger a run |
+| `fund check-news` | weekdays ×3–4 | no (local FinBERT); `--auto-run` can trigger a run, never within 24 h of a saved one |
 | `fund check-stops` | every 15 min, trading hours | no |
 | `fund paper-watch` | hourly, trading hours | cheap `gpt-4o-mini` only |
 | `fund earnings-watch` | weekdays 18:30 | no — heads-up the evening before a holding reports |
@@ -174,7 +174,7 @@ Everything is cron on the Pi; there is no in-process scheduler.
 
 The account jobs, earnings-watch and report-check are installed by `deploy/managed_cron.sh` on every deploy, as a marked block in the crontab; everything else is pasted by hand from `deploy/cron.example`.
 
-Run times are staggered so the funds don't collide, and each is placed 30 min after its market's open. `fund run` gates itself on holidays; the others don't need to.
+Run times are staggered so the funds don't collide, and each is placed 30 min after its market's open. `fund run` gates itself on holidays; the others don't need to. Each fund's `run` also holds an exclusive lock (`<db>.run.lock`), so a second one started while it is still going exits without doing anything.
 
 ---
 
@@ -185,6 +185,7 @@ Run times are staggered so the funds don't collide, and each is placed 30 min af
 - **Two kinds of learning.** `generate_learnings` produces *calibration* lessons statistically (Wilson intervals over hit rates by confidence band); `generate_qualitative_learnings` distils *what happened and why* from a batch review of matured outcomes. `surviving_lessons` checks new lessons for minimum supporting tickers; it does not yet test their forward predictive value.
 - **Report-reaction experiment** (`engine/report_events.py`, Nordic only, since 2026-10-11). Tests whether the model can tell a report-day drop the report doesn't justify from one it does. Research says reactions usually *continue* (post-earnings drift), so buying every drop is not the hypothesis; the filter is. It can't be backtested honestly (the model may know how past reports went), so: `fund report-study` measures base rates from price history for free; `fund report-watch` (weekdays 18:15) logs each report moving a stock ±5% vs the index, judges up to `max_judged_per_day` of the biggest drops at medium reasoning (quotes checked against the coverage; no surviving quote → `unclear`; no coverage → no call), scores every event at +5/+20/+28 trading days, and sends a Telegram digest of overreaction calls; `fund report-results` compares verdicts. It never trades or touches the weekly prompt. Pinning flagged names into the run is a later, deliberate switch once verdicts mature.
 - **Held positions' reports: report-check + earnings watch** (real fund). `fund report-check` (`engine/report_check.py`, built 21 Oct, merged 30 Oct) finds a holding that just reported (Yahoo calendar, else report headlines), reads the coverage against the logged theses with an N-sample consensus at the fund's own model → thesis intact/strengthened/weakened/broken and EXIT/TRIM/HOLD/ADD, quotes checked (a sample with none surviving counts as unclear/hold), filed as a `report_review` — on the dashboard, scored like stop/target reviews, and a trim/exit gets a Montrose ticket. **Only coverage dated on/after the report day is read** (`dated_since`): on the report morning `find_coverage`'s ±10-day window is mostly the week's previews. It runs 08:45 (before the open) and 18:30. `fund earnings-watch` (`engine/earnings_watch.py`) is the evening-before heads-up with the thesis, from Yahoo's calendar (5 of 11 holdings at launch); it had its own one-call verdict for a day (29–30 Oct) until the duplicate was found and the verdict handed to report-check. Yahoo's news feed had **nothing** on Invisio's 30 Oct report, while MFN (`mfn.se/a/<company>.rss`) carried the full release tagged `sub:report:interim` — the obvious next coverage source for 7 of 11 holdings.
+- **Flow studies (free, no model calls).** Two base-rate studies decide whether a signal earns a place before anything reaches the screener or the prompt. `fund volume-study` reads the price cache and splits heavy-volume days (≥ 2.5× the 20-day average) into up and down days against every day, with abnormal returns at +5/+20/+28 trading days — the screener rewards heavy volume either way today. `fund insider-study` reads FI's insider register (`data/insiders.py`, its CSV export, matched by **ISIN**; Swedish issuers only) and scores any buy, cluster buy (2+ managers in 30 days) and any sell from the first close *after publication*. Programme grants, revised/cancelled filings and non-share instruments are dropped, and a manager's fills on one day must total ≥ 100k SEK. Being mechanical, it can be backtested honestly. financedata's own insider reader is dead (404, and it matched ticker text inside issuer names).
 - **Pooling.** `optimizer.pool_configs` lets a fund train on other funds' examples, sharing the trainset while each still compiles and applies its own guidance.
 
 ---
@@ -217,6 +218,8 @@ src/fundmgr/data/market_hours.py   Exchange calendars: is_exchange_open, dominan
                                    is_trading_day, next_session
 src/fundmgr/data/prices.py         TickerFeatures + feature build
 src/fundmgr/data/release.py        Statement/report reading (gpt-4o-mini)
+src/fundmgr/data/insiders.py       FI insider register (PDMR) export reader, matched by ISIN
+src/fundmgr/engine/volume_study.py / insider_study.py  Free base-rate studies for flow signals
 src/fundmgr/paper.py               Sleeves: create_portfolio, parse_structured_portfolio, kill judging
 src/fundmgr/accounts.py            Broker accounts: snapshot parse, sync_account (diff → fills), Telegram summary
 src/fundmgr/engine/account_plan.py Plans + stances for account holdings; weekly refresh_all
@@ -267,10 +270,11 @@ Useful flags: `--force` (ignore the holiday gate), `--force-refresh` (re-fetch p
 Guardrails derive each trade's `sek_estimate` from target weight minus the current
 position value; model estimates are advisory input only. Accepted trades reserve
 cash (including fees), turnover, position slots and bucket exposure against a
-projected book, in confidence order. Duplicate tickers are rejected. Turnover
-rejections appear in the verdict log. No later pruning removes a funding sell.
+projected book, sells before buys and each side in confidence order. Duplicate
+tickers are rejected. Turnover rejections appear in the verdict log. No later pruning removes a funding sell.
 Simulated fills never exceed an approved budget and recheck cash at execution;
-mechanical full exits from `check-stops` omit the budget deliberately. NAV and
+a full exit (target weight 0) sells every share held whatever its budget, so a
+price move since the run cannot leave a sliver behind. NAV and
 sizing use marked prices; incomplete valuations block sizing and never overwrite
 NAV with cost basis. The ledger rejects invalid numeric inputs, oversells and
 unfunded buys atomically; reconcile missing holdings/cash before recording a fill.

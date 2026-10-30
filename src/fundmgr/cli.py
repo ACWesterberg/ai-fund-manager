@@ -137,6 +137,29 @@ def reset(capital: float | None, purge_cache: bool, yes: bool):
     click.echo("\nNext step: run 'fund run' to generate the first decision of the fresh sim.")
 
 
+# check-news may start a run on a held name's headline; not within this long of
+# a saved one, or a Monday headline re-buys the whole consensus the run just made.
+AUTO_RUN_MIN_GAP_HOURS = 24
+
+
+def _run_lock(cfg):
+    """An exclusive per-fund lock for `fund run`, or None when one is running.
+
+    Nothing stopped two runs of one fund at once: a check-news auto-run could
+    start while Monday's run (consensus, shadow pairs, tickets) was still going,
+    and both seeded outcomes and sent tickets. Held until the process exits.
+    """
+    import fcntl
+
+    handle = (cfg.db_path.parent / f"{cfg.db_path.stem}.run.lock").open("a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
 def _skip_on_market_holiday(cfg) -> bool:
     """True when this profile's main market holds no session today.
 
@@ -189,6 +212,12 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if not store.is_initialised():
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
+
+    lock = _run_lock(cfg)
+    if lock is None:
+        click.echo(f"⏸ {cfg.display_name}: another run of this fund is still going — "
+                   "not starting a second one.")
+        return
 
     if not force and _skip_on_market_holiday(cfg):
         return
@@ -1800,6 +1829,11 @@ def check_news(auto_run: bool, max_age_hours: int):
         click.echo(f"  {flag} {t['ticker']}  [{t['sentiment_label'].upper()} {t['sentiment_score']:.2f}]")
         click.echo(f"       {t['headline'][:100]}")
 
+    last_run = store.last_run_at()
+    hours_since = ((datetime.utcnow() - last_run).total_seconds() / 3600
+                   if last_run else None)
+    recently_run = hours_since is not None and hours_since < AUTO_RUN_MIN_GAP_HOURS
+
     # Send Telegram notification — held positions only
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -1809,7 +1843,9 @@ def check_news(auto_run: bool, max_age_hours: int):
             label = t["sentiment_label"].upper()
             lines.append(f"🔴 <b>{t['ticker']}</b> [{label} {t['sentiment_score']:.2f}]")
             lines.append(f"  {t['headline'][:120]}")
-        if auto_run:
+        if auto_run and recently_run:
+            lines.append(f"\nNo early run: the last one was {hours_since:.0f}h ago.")
+        elif auto_run:
             lines.append("\n▶ Triggering early decision run…")
         msg = "\n".join(lines)
         try:
@@ -1827,7 +1863,10 @@ def check_news(auto_run: bool, max_age_hours: int):
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
 
     # ── Trigger early run if a held position is affected ─────────────────────
-    if auto_run and held_triggers:
+    if auto_run and held_triggers and recently_run:
+        click.echo(f"\n  Held position affected, but a run was saved {hours_since:.0f}h ago — "
+                   f"no early run within {AUTO_RUN_MIN_GAP_HOURS}h of the last one.")
+    elif auto_run and held_triggers:
         click.echo("\n  Held position affected — triggering early 'fund run'…")
         tickers_affected = ", ".join(t["ticker"] for t in held_triggers)
         click.echo(f"  Affected: {tickers_affected}")
@@ -3090,17 +3129,9 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
                f"{gross:,.0f} SEK (fee {fee:.2f} SEK)")
     click.echo(f"  Cash remaining: {store.get_cash():,.0f} SEK")
 
-    # Cost-basis NAV snapshot so the chart reflects the fill event
+    # Today's NAV at market prices, so the chart reflects the fill; never cost basis.
     try:
-        bench_rows = store.get_benchmark()
-        positions_after = store.get_positions()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=ts.strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -3152,14 +3183,7 @@ def paper_retag(slug: str, old: str, new: str | None):
                    "price were set from the wrong instrument. Re-anchor after a "
                    "fresh look.")
     try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -3192,14 +3216,7 @@ def paper_setcost(slug: str, ticker: str, avg_sek: float):
                f"{res['new_avg']:,.2f} SEK/share ({res['shares']:g} sh). "
                f"Cash {res['cash_delta']:+,.0f} SEK.")
     try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 

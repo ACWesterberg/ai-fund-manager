@@ -941,6 +941,12 @@ class Store:
             cur = conn.execute("DELETE FROM recommendations WHERE run_id = ?", (run_id,))
             return cur.rowcount > 0
 
+    def last_run_at(self) -> datetime | None:
+        """When the newest recommendation was saved (UTC), dismissed or not."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT MAX(timestamp) AS ts FROM recommendations").fetchone()
+        return datetime.fromisoformat(row["ts"]) if row and row["ts"] else None
+
     def get_last_recommendation(self) -> RecommendationLog | None:
         """The book's current decision — the newest one not dismissed."""
         with self._conn() as conn:

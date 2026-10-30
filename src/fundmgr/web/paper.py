@@ -717,7 +717,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
         Seeds pre-existing holdings (buy at your average cost) and trims (sell),
         the browser equivalent of `/pfill` / `fund paper-fill`."""
         from datetime import datetime as _dt, timezone as _tz
-        from fundmgr.state.models import NavPoint, Transaction
+        from fundmgr.state.models import Transaction
 
         def _back(msg: str, ok: int, refill: dict | None = None) -> RedirectResponse:
             from urllib.parse import urlencode
@@ -769,14 +769,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             return _back(str(exc), 0)
         _price_cache.pop(slug, None)
         try:
-            bench_rows = store.get_benchmark()
-            nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-            store.upsert_nav(NavPoint(
-                date=ts.strftime("%Y-%m-%d"),
-                portfolio_nav_sek=nav_cost,
-                benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-                cash_sek=store.get_cash(),
-            ))
+            paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
         except Exception:
             pass
         verb = "Bought" if side == "buy" else "Sold"

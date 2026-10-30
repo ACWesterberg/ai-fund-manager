@@ -34,7 +34,7 @@ import json
 from datetime import datetime, timezone
 
 from fundmgr import paper
-from fundmgr.state.models import NavPoint, Transaction
+from fundmgr.state.models import Transaction
 from fundmgr.state.store import Store
 
 KIND = "account"
@@ -500,16 +500,7 @@ def _retire_plan(store: Store, ticker: str) -> None:
 
 
 def _snapshot_nav(store: Store, market: dict[str, float]) -> None:
-    positions = store.get_positions()
-    nav = sum(p.shares * market.get(p.ticker, p.avg_cost_sek) for p in positions) \
-        + store.get_cash()
-    bench = store.get_benchmark()
-    store.upsert_nav(NavPoint(
-        date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        portfolio_nav_sek=round(nav, 2),
-        benchmark_value=bench[-1]["close"] if bench else 0.0,
-        cash_sek=store.get_cash(),
-    ))
+    paper.mark_nav(store, market)
 
 
 # ── Telegram ──────────────────────────────────────────────────────────────────

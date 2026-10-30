@@ -1708,6 +1708,47 @@ def report_study(years: int, limit: int | None):
     click.echo(format_study(result))
 
 
+@cli.command("volume-study")
+@click.option("--ratio", default=2.5, show_default=True, type=click.FloatRange(1.0),
+              help="A day counts as heavy at this multiple of its 20-day average volume.")
+def volume_study_cmd(ratio: float):
+    """Free: what did heavy-volume days go on to do, up days vs down days?
+
+    Reads the price cache the weekly run keeps; no model calls, no price
+    fetches. The screener rewards heavy volume whichever way the price went —
+    this says whether it should.
+    """
+    from fundmgr.engine.volume_study import format_study, run_study
+    cfg, store = _get_store()
+    result = run_study(store, cfg, get_enabled_tickers(cfg.universe_path), ratio=ratio,
+                       echo=click.echo)
+    click.echo(format_study(result))
+
+
+@cli.command("insider-study")
+@click.option("--years", default=1, show_default=True, type=click.IntRange(1, 5),
+              help="How far back to read FI's insider register.")
+def insider_study_cmd(years: int):
+    """Free: did insider buys and sells in this universe precede outperformance?
+
+    Reads FI's insider register (Swedish issuers) two weeks at a time and the
+    named stocks' price history. No model calls. Slow-ish: one FI request per
+    fortnight and a price fetch for every name with an event.
+    """
+    import httpx
+
+    from fundmgr.data.insiders import InsiderDataError
+    from fundmgr.engine.insider_study import format_study, run_study
+    from fundmgr.config import load_universe
+    cfg, store = _get_store()
+    try:
+        result = run_study(store, cfg, load_universe(cfg.universe_path), years=years,
+                           echo=click.echo)
+    except (InsiderDataError, httpx.HTTPError) as exc:
+        raise click.ClickException(f"FI's insider register could not be read: {exc}") from exc
+    click.echo(format_study(result))
+
+
 @cli.command("report-watch")
 @click.option("--dry-run", is_flag=True,
               help="Detect and show what would be judged. No model calls, nothing written.")

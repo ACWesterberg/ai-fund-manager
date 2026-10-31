@@ -313,10 +313,21 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if screened_out > 0:
         click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
                    f"({screened_out} filtered out, held positions always included)")
+    # The local pre-screen reads a wider slice of the same ranking (engine/prescreen.py).
+    prescreen_pool: dict = {}
+    if cfg.prescreen.enabled:
+        pool_n = max(cfg.prescreen.pool_size, cfg.screener.top_n)
+        prescreen_pool, _ = screen(
+            features, held_tickers, top_n=pool_n, pinned_tickers=pinned,
+            region_quotas=regions.candidate_quotas(cfg.risk.region_targets, pool_n),
+            excluded_regions=regions.excluded(cfg.risk.region_targets),
+            style_quotas=styles.candidate_quotas(cfg.risk.style_targets, pool_n),
+            excluded_styles=styles.excluded(cfg.risk.style_targets),
+        )
 
     # ── Step 6: News + FinBERT — screener candidates only (not full universe) ─
     if not skip_news and cfg.data.news_feeds:
-        news_symbols = set(screened_features.keys()) | held_tickers
+        news_symbols = set(screened_features.keys()) | held_tickers | set(prescreen_pool)
         news_tickers = [t for t in tickers if t.yahoo_ticker in news_symbols]
         click.echo(
             f"\n[6/6] Fetching news for {len(news_tickers)} screener candidates "
@@ -403,6 +414,10 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
     run_id = f"{datetime.utcnow().strftime('%Y-%m-%d')}-{__import__('uuid').uuid4().hex[:6]}"
+    if prescreen_pool:
+        screened_features = _apply_prescreen(
+            cfg, run_id, features, prescreen_pool, screened_features, held_tickers | pinned,
+            {t.yahoo_ticker: t for t in tickers}, dry_run)
     # ── Cold-start: lift turnover cap when deploying from near-100% cash ─────
     import copy
     effective_cfg = cfg
@@ -686,6 +701,56 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                            + (f" — {result['error']}" if result.get("error") else ""))
         except Exception as exc:
             click.echo(f"  Shadow collection unavailable: {exc}", err=True)
+
+
+def _apply_prescreen(cfg, run_id: str, features: dict, pool: dict, screened: dict,
+                     forced: set[str], rows_by_ticker: dict, dry_run: bool) -> dict:
+    """Run the local pre-screen and return the candidates the model should see.
+
+    In shadow mode (the default) that is still the mechanical list; the record
+    keeps both so they can be scored. Live, it is the pre-screen's selection —
+    unless the call failed outright, or a regional or style mix is set, which
+    the re-ranking does not honour yet. Advisory: any failure means the
+    mechanical list, said on stdout.
+    """
+    from datetime import timezone as _tz
+    from urllib.parse import urlsplit
+
+    from fundmgr.engine.prescreen import run_prescreen, write_record
+
+    pcfg = cfg.prescreen
+    under_mix = bool(cfg.risk.region_targets or cfg.risk.style_targets)
+    live = not pcfg.shadow and not under_mix
+    mode = "live" if live else "shadow"
+    note = ("a regional or style mix is set; the pre-screen does not re-rank under a mix yet"
+            if not pcfg.shadow and under_mix else "")
+    click.echo(f"\n[→] Pre-screen ({mode}): {len(pool)} candidates → "
+               f"{pcfg.model_id or '?'} at {urlsplit(pcfg.base_url).netloc or '?'}…")
+    try:
+        releases = {}
+        if pcfg.mfn:
+            from fundmgr.data import mfn
+            since = datetime.now(_tz.utc) - timedelta(days=pcfg.news_days)
+            releases = mfn.releases([rows_by_ticker[t] for t in pool if t in rows_by_ticker],
+                                    since, cfg.db_path.parent / "mfn_slugs.json")
+        result = run_prescreen(pool, list(screened), forced, pcfg, cfg.screener.top_n, releases)
+    except Exception as exc:
+        click.echo(f"      ⚠ Pre-screen failed; the mechanical list goes to the model: {exc}",
+                   err=True)
+        return screened
+    if not dry_run:
+        try:
+            path = write_record(cfg, run_id, mode, result, pool, list(screened), forced, note)
+            click.echo(f"      Recorded: {path}")
+        except OSError as exc:
+            click.echo(f"      ⚠ Pre-screen record not written: {exc}", err=True)
+    added = [t for t in result.selected if t not in screened]
+    click.echo(f"      {result.status}: {len(result.tags)} tagged"
+               + (f", {result.error}" if result.error else "")
+               + f"; its list differs from the screener's by {len(added)} name(s).")
+    if live and result.status != "unavailable":
+        return {t: features[t] for t in result.selected if t in features}
+    return screened
 
 
 def _print_feature_table(features, cfg):
@@ -1855,6 +1920,42 @@ def insider_study_cmd(years: int):
     except (InsiderDataError, httpx.HTTPError) as exc:
         raise click.ClickException(f"FI's insider register could not be read: {exc}") from exc
     click.echo(format_study(result))
+
+
+@cli.command("prescreen-check")
+def prescreen_check_cmd():
+    """Send one fixed sample batch to the local pre-screen model and show its tags.
+
+    For setting up the local server: checks that prescreen.base_url answers,
+    that the model returns valid JSON in the expected shape, and how long a
+    batch takes. Works while prescreen.enabled is still false. No fund data
+    is sent.
+    """
+    import time as _time
+
+    from fundmgr.engine.client import call_local_json
+    from fundmgr.engine.prescreen import SYSTEM, PrescreenBatch
+
+    cfg, _store = _get_store()
+    sample = (
+        "## ALFA-B.ST — Alfa Industrial AB (Industrials)\n"
+        "- 2026-10-28 press release (regulatory, report): Alfa Industrial Q3 2026: order intake "
+        "up 31%, operating margin 14.2% (11.0) — CEO: demand remained strong across segments.\n\n"
+        "## BETA.ST — Beta Health AB (Health Care)\n"
+        "- 2026-10-27 news: Beta Health holder sells 4% stake in overnight placement at a 6% discount\n\n"
+        "## GAMMA.ST — Gamma Software AB (Technology)\n(no news in the window)"
+    )
+    started = _time.monotonic()
+    try:
+        parsed, raw = call_local_json(SYSTEM, sample, cfg.prescreen, PrescreenBatch)
+    except LLMError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"✓ {cfg.prescreen.model_id} answered in {_time.monotonic() - started:.1f}s "
+               f"with {len(parsed.tags)} tag(s) (expected 3):")
+    for tag in parsed.tags:
+        click.echo(f"  {tag.ticker:<10} material={tag.material_news!s:<5} {tag.news_type:<14} "
+                   f"{tag.direction:<8} {tag.note}")
+    click.echo("  Expected roughly: ALFA report/positive, BETA index_or_flow, GAMMA none.")
 
 
 @cli.command("report-watch")

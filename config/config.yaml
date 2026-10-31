@@ -121,6 +121,21 @@ shadow:
   # `fund shadow-variant no_lessons` once on the Pi. Skipped on a run with no lessons.
   variants: [no_lessons]
 
+# Local pre-screen (engine/prescreen.py). A local model on the tailnet reads the
+# screener's top `pool_size` candidates' headlines and MFN press releases and
+# tags each (material news? what kind? which way?); a fixed rule adds `weights`
+# to the screener score and keeps the top screener.top_n, holdings always in.
+# `shadow: true` still sends the screener's list to the decision model and
+# records both (data/prescreen/fund/<run_id>.json) so they can be scored first.
+# Check the server with `fund prescreen-check` before enabling.
+prescreen:
+  enabled: false
+  shadow: true
+  base_url: ""          # e.g. http://mac-studio:11434/v1 (Ollama) or :1234/v1 (LM Studio)
+  model_id: ""
+  pool_size: 200
+  batch_size: 20
+
 # Prompt optimizer (`fund optimize`: bounded instruction search; MIPRO retired).
 optimizer:
   # Training examples are pooled across the funds: MIPRO searches for

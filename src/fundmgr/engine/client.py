@@ -224,6 +224,70 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
     return parsed, raw_text
 
 
+# ── Local OpenAI-compatible servers (pre-screen) ──────────────────────────────
+
+def _clean_local_json(text: str) -> str:
+    """The JSON object in a local model's reply.
+
+    Local reasoning models (Qwen, DeepSeek-R1 and kin) print a <think>…</think>
+    block before the answer, and many wrap the answer in a code fence, neither
+    of which a JSON parser accepts.
+    """
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    text = text.strip()
+    if text.startswith("```"):
+        text = "\n".join(text.split("\n")[1:])
+        if "```" in text:
+            text = text[: text.rfind("```")]
+    start, end = text.find("{"), text.rfind("}")
+    return text[start:end + 1] if start != -1 and end > start else text
+
+
+def call_local_json(system: str, user: str, pcfg, schema: type) -> tuple:
+    """One call to a local OpenAI-compatible server; (parsed `schema`, raw text).
+
+    Plain chat completions with JSON mode and validation, not structured
+    outputs: Ollama, LM Studio and llama.cpp all speak the chat API, but they
+    differ in how far they honour a JSON schema, and a hosted-API feature
+    failing quietly on one of them would read as a bad answer.
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise LLMError("openai package not installed. Run: uv pip install openai")
+    if not pcfg.base_url or not pcfg.model_id:
+        raise LLMError("prescreen.base_url and prescreen.model_id must be set")
+
+    key = os.getenv(pcfg.api_key_env, "") if pcfg.api_key_env else ""
+    client = OpenAI(base_url=pcfg.base_url, api_key=key or "local",
+                    timeout=pcfg.timeout_s, max_retries=0)
+    kwargs = dict(
+        model=pcfg.model_id,
+        messages=[{"role": "system", "content": system + _schema_hint(schema)},
+                  {"role": "user", "content": user}],
+        temperature=pcfg.temperature,
+        max_tokens=pcfg.max_tokens,
+    )
+    if pcfg.seed is not None:
+        kwargs["seed"] = pcfg.seed
+    if pcfg.json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception as e:
+        raise LLMError(f"Local model call failed: {e}") from e
+
+    choice = response.choices[0]
+    raw_text = choice.message.content or ""
+    if choice.finish_reason == "length":
+        raise LLMError("Local model reply hit max_tokens")
+    try:
+        return schema.model_validate_json(_clean_local_json(raw_text)), raw_text
+    except (ValidationError, json.JSONDecodeError) as e:
+        raise LLMError(f"Failed to parse local model reply: {e}\n\nRaw response:\n{raw_text}") from e
+
+
 # ── Consensus sampling ────────────────────────────────────────────────────────
 
 def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str, int]]:

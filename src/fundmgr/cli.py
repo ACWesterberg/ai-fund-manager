@@ -354,7 +354,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
     horizon = cfg.evaluation_horizon_days
-    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
+    currency_of = _outcome_currencies(cfg, store, horizon) if cfg.fx_to_sek else None
+    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon, currency_of=currency_of)
     if evaluated:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
@@ -701,6 +702,29 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                            + (f" — {result['error']}" if result.get("error") else ""))
         except Exception as exc:
             click.echo(f"  Shadow collection unavailable: {exc}", err=True)
+
+
+def _outcome_currencies(cfg, store, horizon: int) -> dict[str, str]:
+    """Quote currencies of the outcomes due for scoring, with their FX history cached.
+
+    Advisory: a rate that cannot be fetched leaves those outcomes pending.
+    """
+    from fundmgr.config import UniverseTicker
+    from fundmgr.engine.evaluator import fx_symbol
+
+    pending = store.get_pending_outcomes(older_than_days=horizon)
+    currency_of = {t.yahoo_ticker: t.currency
+                   for t in holding_rows(cfg.universe_path, {o.ticker for o in pending})}
+    foreign = sorted({c for c in currency_of.values() if c != "SEK"})
+    if foreign:
+        try:
+            fetch_and_cache_prices(
+                [UniverseTicker(fx_symbol(c), fx_symbol(c), "", "", "", "", False) for c in foreign],
+                store, 400)
+        except Exception as exc:
+            click.echo(f"      ⚠ FX history for scoring unavailable ({exc}); "
+                       "foreign outcomes stay pending.", err=True)
+    return currency_of
 
 
 def _apply_prescreen(cfg, run_id: str, features: dict, pool: dict, screened: dict,

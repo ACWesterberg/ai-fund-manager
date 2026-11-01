@@ -336,7 +336,7 @@ def test_calibration_body_reports_intervals_not_a_breakeven_claim():
 def test_calibration_reports_every_qualifying_band():
     """The old chain was silent for the medium band and for whole ranges of the others."""
     body = calibration_body(_stats(high=(12, 25), medium=(13, 25), low=(11, 25)))
-    for label in ("high (>=0.7)", "medium (0.4-0.7)", "low (<0.4)"):
+    for label in ("high (>=0.75)", "medium (0.55-0.75)", "starter (<0.55)"):
         assert label in body
 
 
@@ -384,7 +384,7 @@ def test_two_qualifying_bands_no_longer_delete_each_other(store):
     active = store.get_active_learnings()
     assert len(active) == 1
     # One lesson carrying both readings, rather than one band silently lost.
-    assert "high (>=0.7)" in active[0].body and "low (<0.4)" in active[0].body
+    assert "high (>=0.75)" in active[0].body and "starter (<0.55)" in active[0].body
     assert active[0].run_ids == ["r1"]
 
 

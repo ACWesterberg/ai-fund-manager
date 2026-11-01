@@ -290,18 +290,21 @@ def call_local_json(system: str, user: str, pcfg, schema: type) -> tuple:
 
 # ── Consensus sampling ────────────────────────────────────────────────────────
 
-def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str, int]]:
+def _aggregate_decisions(runs: list[DecisionRun],
+                         threshold: int | None = None) -> tuple[DecisionRun, dict[str, int]]:
     """
     Majority-vote aggregate of N DecisionRun objects.
 
-    A ticker makes it into the consensus only if strictly more than half the runs
-    agree on the same side (buy/sell/hold). Numeric fields are averaged across
+    A ticker makes it into the consensus only if `threshold` runs agree on the
+    same side (buy/sell/hold) — by default strictly more than half of `runs`;
+    the consensus call passes a majority of the samples *requested*, so a
+    failed sample can never lower the bar. Numeric fields are averaged across
     the agreeing runs; the thesis is taken from the highest-confidence agreeing run.
 
     Returns (consensus_decision, {ticker: n_agreeing_runs}).
     """
     n = len(runs)
-    threshold = n // 2 + 1  # e.g. 2 out of 3, 3 out of 5
+    threshold = threshold or n // 2 + 1  # e.g. 2 out of 3, 3 out of 5
 
     all_tickers: set[str] = {a.ticker for run in runs for a in run.actions}
 
@@ -382,11 +385,14 @@ def call_llm_consensus(
             except LLMError as e:
                 errors.append(str(e))
 
-    if not results:
-        raise LLMError(f"All {n} LLM calls failed: {'; '.join(errors)}")
+    # A decision needs a majority of the samples asked for, both to come back and
+    # to agree. With four of five failing, the one survivor used to trade alone.
+    quorum = n // 2 + 1
+    if len(results) < quorum:
+        raise LLMError(f"Only {len(results)} of {n} samples came back; a decision needs "
+                       f"{quorum}: {'; '.join(errors)[:1000]}")
 
     if errors:
-        # Partial failure — note it but continue with what we have
         print(f"  ⚠ {len(errors)}/{n} LLM call(s) failed; building consensus from {len(results)} run(s).")
 
     sampling = {
@@ -394,10 +400,10 @@ def call_llm_consensus(
         "succeeded": len(results),
         "failed":    len(errors),
         "errors":    [e[:200] for e in errors],  # truncated for storage
+        # Every sample's own answer: how they split is the evidence for what
+        # the vote hides (the IVSO-vs-BONEX week that moved n_samples to 5).
+        "samples":   [r.model_dump(mode="json") for r in results],
     }
 
-    if len(results) == 1:
-        return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}, sampling
-
-    consensus, vote_counts = _aggregate_decisions(results)
+    consensus, vote_counts = _aggregate_decisions(results, threshold=quorum)
     return consensus, consensus.model_dump_json(), vote_counts, sampling

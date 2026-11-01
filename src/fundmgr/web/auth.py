@@ -62,13 +62,29 @@ def _valid_basic(header: str, password: str) -> bool:
     return hmac.compare_digest(decoded, f"{username}:{password}".encode())
 
 
+_TUNNEL_PEERS = {"127.0.0.1", "::1"}
+MAX_TRACKED = 1000
+
+
 def _client(request: Request) -> str:
-    # Behind the Cloudflare tunnel every request arrives from 127.0.0.1.
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
+    """The address failed logins are counted against.
+
+    Behind the Cloudflare tunnel every request arrives from loopback and the
+    caller is in cf-connecting-ip. From anywhere else that header is the
+    caller's own text: honouring it let a client on the LAN (the app listens on
+    0.0.0.0) name a new address on every attempt and never be throttled.
+    """
+    peer = request.client.host if request.client else "?"
+    if peer in _TUNNEL_PEERS:
+        return request.headers.get("cf-connecting-ip") or peer
+    return peer
 
 
 def _throttled(key: str) -> bool:
     now = time.time()
+    if len(_failures) > MAX_TRACKED:
+        for stale in [k for k, ts in _failures.items() if not ts or now - ts[-1] >= FAILURE_WINDOW]:
+            del _failures[stale]
     recent = [t for t in _failures.get(key, []) if now - t < FAILURE_WINDOW]
     _failures[key] = recent
     return len(recent) >= MAX_FAILURES

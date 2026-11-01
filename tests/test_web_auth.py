@@ -65,9 +65,9 @@ def _anon():
     return client({"Authorization": ""})
 
 
-def _login(c, password="test-password", next_path="/"):
+def _login(c, password="test-password", next_path="/", headers=None):
     return c.post("/login", data={"password": password, "next": next_path},
-                  follow_redirects=False)
+                  headers=headers, follow_redirects=False)
 
 
 def test_a_page_visit_goes_to_the_login_page_and_comes_back(monkeypatch):
@@ -133,3 +133,32 @@ def test_logout_ends_the_session():
     out = c.get("/logout", follow_redirects=False)
     assert out.status_code == 303 and out.headers["location"] == "/login"
     assert c.get("/", headers={"Accept": "application/json"}).status_code == 401
+
+
+def test_only_the_tunnel_may_name_the_caller(monkeypatch):
+    """A LAN client used to dodge the throttle by sending a new cf-connecting-ip each try."""
+    from types import SimpleNamespace
+
+    from fundmgr.web import auth
+
+    def request(peer, header=None):
+        return SimpleNamespace(client=SimpleNamespace(host=peer),
+                               headers={"cf-connecting-ip": header} if header else {})
+
+    assert auth._client(request("127.0.0.1", "203.0.113.9")) == "203.0.113.9"
+    assert auth._client(request("192.168.1.50", "203.0.113.9")) == "192.168.1.50"
+    monkeypatch.setattr(auth, "_failures", {})
+    c = _anon()
+    for i in range(auth.MAX_FAILURES):
+        assert _login(c, password="nope", headers={"cf-connecting-ip": f"198.51.100.{i}"}
+                      ).status_code == 401
+    assert _login(c, headers={"cf-connecting-ip": "198.51.100.99"}).status_code == 429
+
+
+def test_the_photo_readers_words_are_never_markup():
+    from pathlib import Path
+
+    import fundmgr.web as web
+    page = (Path(web.__file__).parent / "templates" / "live.html").read_text()
+    assert "notesBox.innerHTML" not in page
+    assert "createTextNode(payload.notes)" in page and "li.append(what)" in page

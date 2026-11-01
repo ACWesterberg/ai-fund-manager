@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from fundmgr import evidence, paper
+from fundmgr.data.fundamentals import FIELD_MAP
 from fundmgr.state.models import Transaction
 from fundmgr.state.store import Store
 
@@ -671,50 +672,40 @@ def test_verdict_with_unchecked_array_parses():
 
 # ── The metric catalogue must match what the data layer actually fetches ──────
 
-# financedata's `_FIELD_MAP` (src/financedata/fundamentals.py) — the complete
-# set of keys `get_fundamentals` can return. Copied here as a guard: offering
-# the analyser a metric with no data behind it invites a rule that can never
+# The complete set of keys the fundamentals fetch can return: offering the
+# analyser a metric with no data behind it invites a rule that can never
 # evaluate, so a new entry in _FUND_FIELDS must be one of these.
-FINANCEDATA_KEYS = {
-    "pe_ratio", "forward_pe", "pb_ratio", "ev_to_ebitda", "price_to_sales",
-    "market_cap", "profit_margin", "gross_margin", "operating_margin",
-    "ebitda_margin", "roe", "roa", "free_cash_flow", "operating_cash_flow",
-    "total_cash", "total_debt", "debt_to_equity",
-    "revenue_growth", "earnings_growth", "beta", "fifty_two_week_high",
-    "fifty_two_week_low", "dividend_yield", "analyst_target_price",
-    "analyst_count", "currency", "earnings_timestamp", "ex_div_timestamp",
-    "website", "sector",
-}
+FETCHED_KEYS = set(FIELD_MAP.values())
 
 
 def test_every_offered_metric_is_actually_fetched():
     from fundmgr.data.statements import STATEMENT_METRICS
-    # Two sources feed the cache: financedata's `.info` map, and the ratios
+    # Two sources feed the cache: the `.info` map, and the ratios
     # derived from the statements. An offered metric must come from one of them.
-    unknown = set(evidence.FUND_FIELD_META) - FINANCEDATA_KEYS - set(STATEMENT_METRICS)
+    unknown = set(evidence.FUND_FIELD_META) - FETCHED_KEYS - set(STATEMENT_METRICS)
     assert not unknown, (
-        f"{unknown} are offered to the criterion analyser but financedata never "
+        f"{unknown} are offered to the criterion analyser but the fetch never "
         "fetches them — a rule naming one could never evaluate.")
 
 
 def test_profitability_and_cash_flow_metrics_are_offered():
-    """These were absent until financedata mapped them; verified live on the Pi
+    """These were absent until the fetch mapped them; verified live on the Pi
     (`fund fundamentals-check VOLV-B.ST`) before being offered here."""
     for key in ("ebitda_margin", "operating_margin", "roa",
                 "free_cash_flow", "operating_cash_flow", "total_cash", "total_debt"):
         assert key in evidence.FUND_FIELD_META
-        assert key in FINANCEDATA_KEYS
+        assert key in FETCHED_KEYS
 
 
 def test_price_to_sales_is_mapped_but_not_offered():
     """Yahoo returns null for it (VOLV-B.ST and AAPL), so a rule on it could
     never evaluate — it stays in the data layer but off the metric menu."""
-    assert "price_to_sales" in FINANCEDATA_KEYS
+    assert "price_to_sales" in FETCHED_KEYS
     assert "price_to_sales" not in evidence.FUND_FIELD_META
 
 
 def test_fraction_flags_match_the_providers_units():
-    """financedata stores yfinance values raw; these are the 0-1 ones."""
+    """The fetch stores yfinance values raw; these are the 0-1 ones."""
     fractions = {k for k, m in evidence.FUND_FIELD_META.items() if m["is_fraction"]}
     assert fractions == {"profit_margin", "gross_margin", "operating_margin",
                          "ebitda_margin", "roe", "roa", "revenue_growth",
@@ -728,9 +719,8 @@ def test_fraction_flags_match_the_providers_units():
 
 def _run_check(monkeypatch, payload):
     from click.testing import CliRunner
-    import financedata
-    monkeypatch.setattr(financedata, "get_fundamentals",
-                        lambda tickers, **kw: {tickers[0]: payload})
+    from fundmgr.data import fundamentals
+    monkeypatch.setattr(fundamentals, "fetch_info", lambda ticker: payload)
     from fundmgr.cli import cli
     return CliRunner().invoke(cli, ["fundamentals-check", "volv-b.st"])
 

@@ -1372,8 +1372,8 @@ def track_portfolio(slug: str) -> list[str]:
 
     # Fundamentals for the kill judge: refresh the cache and snapshot it, so a
     # criterion phrased around growth or margins has both a current number and a
-    # direction of travel to be judged against. Optional dependency — a book on
-    # a machine without financedata just keeps whatever is already cached.
+    # direction of travel to be judged against. A failed fetch just keeps
+    # whatever is already cached.
     watched = sorted(set(tickers) | set(json.loads(
         store.get_meta("paper_target_weights") or "{}")))
     if watched:
@@ -1385,9 +1385,8 @@ def track_portfolio(slug: str) -> list[str]:
         except Exception as e:
             log.append(f"⚠ fundamentals refresh skipped: {e}")
         # Capital structure comes off the statements, which `.info` never
-        # carries. Merged after the financedata refresh — that call rewrites the
-        # whole blob, so these have to be folded in afterwards, and before the
-        # snapshot so trends include them.
+        # carries. Refreshed after `.info` and before the snapshot, so trends
+        # include them.
         try:
             from fundmgr.data.statements import refresh as refresh_statements
             merged, seeded = refresh_statements(store, watched)

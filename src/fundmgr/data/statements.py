@@ -1,7 +1,7 @@
 """
 Balance-sheet and income-statement derived metrics.
 
-`.info` — the payload financedata maps — is a normalised snapshot: valuation
+`.info` — the payload `fundamentals.FIELD_MAP` maps — is a normalised snapshot: valuation
 multiples, headline margins, growth rates. It carries nothing about capital
 structure, so a criterion phrased around leverage, solvency or interest cover
 has no field behind it at all.
@@ -328,9 +328,8 @@ def refresh(store, tickers: list[str], ttl_days: int = 7,
             max_workers: int = 8) -> tuple[int, int]:
     """Derive statement metrics and merge them into the fundamentals cache.
 
-    Merges rather than replaces: financedata owns the `.info` keys and rewrites
-    the whole blob on its own refresh, so these are folded in afterwards on the
-    same schedule.
+    Merges rather than replaces: the `.info` keys belong to
+    `fundamentals.fetch_and_cache_fundamentals`, which in turn keeps these.
 
     The same fetch also back-fills the reported periods the statements already
     contain, since the frames are in hand and re-fetching them later would be

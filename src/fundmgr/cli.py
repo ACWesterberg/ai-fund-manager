@@ -2858,17 +2858,14 @@ def fundamentals_check(ticker: str):
     Every metric the kill-criterion analyser can offer needs data behind it: a
     key that is always None shows up as a watched line on the dashboard but can
     never evaluate. yfinance `.info` is a passthrough of Yahoo's payload, so a
-    mis-mapped key name fails silently — run this after changing financedata's
-    _FIELD_MAP to confirm the new keys actually arrive.
+    mis-mapped key name fails silently — run this after changing FIELD_MAP in
+    data/fundamentals.py to confirm the new keys actually arrive.
     """
     tkr = ticker.upper()
-    try:
-        from financedata import get_fundamentals
-    except ImportError as e:
-        raise click.ClickException(f"financedata is not installed: {e}")
+    from fundmgr.data.fundamentals import fetch_info
     from fundmgr.evidence import FUND_FIELD_META
 
-    data = (get_fundamentals([tkr], ttl_days=0) or {}).get(tkr)
+    data = fetch_info(tkr)
     if not data:
         raise click.ClickException(
             f"No fundamentals returned for {tkr} — bad ticker, or the fetch failed.")

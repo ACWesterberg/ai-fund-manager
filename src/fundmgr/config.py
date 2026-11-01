@@ -78,6 +78,9 @@ class DataConfig:
     news_feeds: list[str] = field(default_factory=list)
     macro_feeds: list[str] = field(default_factory=list)
     sentiment: SentimentConfig = field(default_factory=SentimentConfig)
+    # Yahoo's insider/institution share of capital under each candidate. Off
+    # until a shadow variant has measured whether it helps (checklist item 24).
+    ownership_in_prompt: bool = False
 
 
 @dataclass

@@ -798,17 +798,29 @@ class Store:
             ).fetchall()
         return [self._txn_from_row(r) for r in rows]
 
-    def undo_last_fill(self) -> Transaction | None:
+    def last_transaction(self) -> Transaction | None:
+        """The most recently recorded transaction — the one undo_last_fill reverses."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM transactions ORDER BY id DESC LIMIT 1").fetchone()
+        return self._txn_from_row(row) if row else None
+
+    def undo_last_fill(self, expected_id: int | None = None) -> Transaction | None:
         """
         Atomically reverse the most recent transaction and return it, or None if none exists.
         Restores position shares/avg_cost and cash to their pre-fill state.
+
+        `expected_id` refuses (ValueError) unless the most recent transaction is
+        still that one, so a stale Telegram button cannot undo a later fill.
         """
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM transactions ORDER BY id DESC LIMIT 1"
             ).fetchone()
             if not row:
                 return None
+            if expected_id is not None and row["id"] != expected_id:
+                raise ValueError("A newer fill has been recorded since; nothing was undone.")
 
             txn = Transaction(
                 id=row["id"],

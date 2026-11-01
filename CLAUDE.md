@@ -164,6 +164,7 @@ Everything is cron on the Pi; there is no in-process scheduler.
 | `fund run` × 5 funds | Mon, staggered 09:30–17:30 CET | yes — the main spend |
 | `fund check-news` | weekdays ×3–4 | no (local FinBERT); `--auto-run` can trigger a run, never within 24 h of a saved one |
 | `fund check-stops` | every 15 min, trading hours | no |
+| `fund mark` | weekdays 17:47 (real fund) | no — NAV at the close, so the return index is daily |
 | `fund paper-watch` | hourly, trading hours | cheap `gpt-4o-mini` only |
 | `fund earnings-watch` | weekdays 18:30 | no — heads-up the evening before a holding reports |
 | `fund montrose-reconcile --notify` | weekdays 21:45 | no — broker check; offers new rows to book |
@@ -174,7 +175,7 @@ Everything is cron on the Pi; there is no in-process scheduler.
 | `fund optimize` × 5 | Sun 02:00–04:00 | yes — **gated, see below** |
 | `deploy/backup.sh` | daily 03:00 + post-run | no |
 
-The account jobs, earnings-watch and report-check are installed by `deploy/managed_cron.sh` on every deploy, as a marked block in the crontab; everything else is pasted by hand from `deploy/cron.example`.
+The account jobs, earnings-watch, report-check and the daily `fund mark` are installed by `deploy/managed_cron.sh` on every deploy, as a marked block in the crontab; everything else is pasted by hand from `deploy/cron.example`.
 
 Run times are staggered so the funds don't collide, and each is placed 30 min after its market's open. `fund run` gates itself on holidays; the others don't need to. Each fund's `run` also holds an exclusive lock (`<db>.run.lock`), so a second one started while it is still going exits without doing anything.
 

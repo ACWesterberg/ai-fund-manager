@@ -26,6 +26,11 @@ $BEGIN
 30 18 * * 1-5 cd $REPO_DIR && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
 45 8 * * 1-5 cd $REPO_DIR && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
 30 18 * * 1-5 cd $REPO_DIR && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
+# Mark the real fund's NAV at the close every weekday. It used to be marked only
+# on run and fill days, so volatility (annualised as if daily) and drawdown were
+# read off roughly weekly points. No model calls; writes nothing if a holding
+# has no price.
+47 17 * * 1-5 cd $REPO_DIR && .venv/bin/fund mark >> data/logs/mark.log 2>&1
 $END
 CRON
 }
@@ -38,7 +43,7 @@ rest="$(printf '%s\n' "$current" | awk -v b="$BEGIN" -v e="$END" '
     !skip')"
 # A job already added by hand outside the block would run twice — say so, and
 # leave it to the operator rather than guess which copy to keep.
-if printf '%s\n' "$rest" | grep -v '^[[:space:]]*#' | grep -qE 'fund (account-(sync --all|plan)|earnings-watch|report-check)'; then
+if printf '%s\n' "$rest" | grep -v '^[[:space:]]*#' | grep -qE 'fund (account-(sync --all|plan)|earnings-watch|report-check|mark( |$))'; then
     echo "managed_cron: managed jobs already in the crontab outside the managed block — not adding them again"
     exit 0
 fi

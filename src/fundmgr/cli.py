@@ -972,18 +972,44 @@ def cash_flows():
     click.echo(f"  Money put in:     {invested(cfg.capital_sek, flows):>12,.0f} SEK\n")
 
 
+def _describe_txn(txn) -> str:
+    direction = "BUY" if txn.side == "buy" else "SELL"
+    return (f"{direction} {txn.shares:g} × {txn.ticker} @ {txn.price_sek:.2f} SEK "
+            f"(fee {txn.fee_sek:.2f} SEK, {txn.timestamp.strftime('%Y-%m-%d %H:%M')}, {txn.source})")
+
+
 @cli.command("undo-fill")
-def undo_fill():
-    """Reverse the most recent fill (position + cash restored, transaction deleted)."""
+@click.option("--show", is_flag=True, help="Print the most recent fill; change nothing.")
+@click.option("--json", "as_json", is_flag=True, help="With --show: print it as JSON.")
+@click.option("--expect", type=int, default=None, metavar="ID",
+              help="Undo only if the most recent fill is still this one.")
+def undo_fill(show: bool, as_json: bool, expect: int | None):
+    """Reverse the most recent fill (position + cash restored, transaction deleted).
+
+    A fill booked from Montrose is offered again by the next reconcile. Today's
+    NAV point is re-marked when the undone fill was today's.
+    """
     cfg, store = _get_store()
-    txn = store.undo_last_fill()
+    if show:
+        txn = store.last_transaction()
+        if as_json:
+            click.echo(json.dumps({"id": txn.id, "summary": _describe_txn(txn),
+                                   "source": txn.source} if txn else {}))
+        else:
+            click.echo(_describe_txn(txn) if txn else "No transactions to undo.")
+        return
+    try:
+        txn = store.undo_last_fill(expected_id=expect)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     if txn is None:
         click.echo("No transactions to undo.")
         return
-    direction = "BUY" if txn.side == "buy" else "SELL"
-    click.echo(f"✓ Undone: {direction} {txn.shares} × {txn.ticker} @ {txn.price_sek:.2f} SEK  "
-               f"(fee {txn.fee_sek:.2f} SEK, recorded {txn.timestamp.strftime('%Y-%m-%d %H:%M')})")
+    click.echo(f"✓ Undone: {_describe_txn(txn)}")
+    if txn.source == "montrose":
+        click.echo("  It was booked from Montrose, so the next reconcile offers it again.")
     click.echo(f"  Cash now: {store.get_cash():,.0f} SEK")
+    _mark_after_ledger_change(cfg, store, datetime.utcnow().strftime("%Y-%m-%d"))
 
 
 @cli.command("backfill-nav")

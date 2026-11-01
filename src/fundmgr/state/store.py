@@ -739,7 +739,6 @@ class Store:
         else:  # sell
             cur_shares = float(row["shares"]) if row else 0.0
             new_shares = max(0.0, cur_shares - txn.shares)
-            avg_cost = float(row["avg_cost_sek"]) if row else 0.0
             conn.execute(
                 "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",
                 (new_shares, txn.timestamp.isoformat(), txn.ticker),
@@ -1050,7 +1049,6 @@ class Store:
 
         Returns a list of dicts: {run_id, timestamp, score, nav_start, nav_end}.
         """
-        import json as _json
         from datetime import datetime, timedelta
 
         cutoff = (datetime.utcnow() - timedelta(days=min_days)).strftime("%Y-%m-%d")

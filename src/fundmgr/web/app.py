@@ -10,6 +10,13 @@ from pathlib import Path
 from urllib.parse import quote_plus, urlparse
 
 import yfinance as yf
+from fastapi import FastAPI, Form, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from jinja2 import Environment, FileSystemLoader
+
+from fundmgr.config import load_config, load_universe
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, gain, invested, nav_chart_json
+from fundmgr.state.store import Store
 
 _price_cache: dict[frozenset, tuple[float, dict[str, float]]] = {}
 _PRICE_TTL = 300  # seconds
@@ -25,19 +32,12 @@ def _logo_domain(website: str | None) -> str | None:
     except Exception:
         return None
 
-from fastapi import FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from jinja2 import Environment, FileSystemLoader
-
-from fundmgr.config import load_config, load_universe
-from fundmgr.reporting.dashboard import benchmark_label, compute_stats, gain, invested, nav_chart_json
-from fundmgr.state.store import Store
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app = FastAPI(title="AI Fund Manager", docs_url=None, redoc_url=None)
 
-from fundmgr.web.auth import protect_dashboard
+from fundmgr.web.auth import protect_dashboard  # noqa: E402
 app.middleware("http")(protect_dashboard)
 
 # Simulation sub-routes — one per model provider
@@ -290,10 +290,6 @@ async def history(request: Request):
             actions = json.loads(r["actions_json"])
         except Exception:
             actions = []
-        try:
-            llm_data = json.loads(r["guardrail_log"]) if r["guardrail_log"] else {}
-        except Exception:
-            llm_data = {}
         # Pull market_summary + notes from the recommendations table llm_response column
         market_summary = ""
         notes = ""

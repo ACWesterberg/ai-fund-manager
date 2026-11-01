@@ -53,14 +53,18 @@ def technicals_block(ticker: str) -> tuple[str, float | None]:
 
     lines = [f"  Live: {live:.2f}"]
     r5, r20 = ret(5), ret(20)
-    if r5 is not None:  lines.append(f"  5d return:  {r5:+.1f}%")
-    if r20 is not None: lines.append(f"  20d return: {r20:+.1f}%")
+    if r5 is not None:
+        lines.append(f"  5d return:  {r5:+.1f}%")
+    if r20 is not None:
+        lines.append(f"  20d return: {r20:+.1f}%")
     if ma50 is not None:
         lines.append(f"  vs 50d MA:  {(live/ma50-1)*100:+.1f}% ({'above' if live>=ma50 else 'below'})")
     if ma200 is not None:
         lines.append(f"  vs 200d MA: {(live/ma200-1)*100:+.1f}% ({'above' if live>=ma200 else 'below'})")
-    if rsi is not None:  lines.append(f"  RSI(14): {rsi:.0f}")
-    if hi and lo:        lines.append(f"  1-month range: {lo:.2f} – {hi:.2f}")
+    if rsi is not None:
+        lines.append(f"  RSI(14): {rsi:.0f}")
+    if hi and lo:
+        lines.append(f"  1-month range: {lo:.2f} – {hi:.2f}")
     return "\n".join(lines), live
 
 

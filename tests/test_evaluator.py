@@ -364,7 +364,6 @@ def test_calibration_single_band_makes_no_comparison_claim():
 
 def _seed_buys(store, run_id, rows):
     """rows: (confidence, outperformed)"""
-    import sqlite3
     with store._conn() as conn:
         for i, (conf, won) in enumerate(rows):
             conn.execute(

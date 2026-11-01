@@ -6,7 +6,7 @@ from html import escape
 from pathlib import Path
 
 from fundmgr.config import AppConfig
-from fundmgr.state.models import NavPoint, PortfolioSnapshot
+from fundmgr.state.models import NavPoint
 from fundmgr.state.store import Store
 
 

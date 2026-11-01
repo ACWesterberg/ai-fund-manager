@@ -7,9 +7,8 @@ import pytest
 from fundmgr import accounts, addsignal, paper, watchplan
 from fundmgr.engine import account_plan
 
-# The paper-book fixtures (isolated PAPER_DIR, mocked prices/FX/history) are
-# shared with test_paper.py rather than copied, so the two stay in step.
-pytest_plugins = ["tests.test_paper"]
+# The paper-book fixtures (isolated PAPER_DIR, mocked prices/FX/history) live
+# in conftest.py, shared with test_paper.py.
 
 
 @pytest.fixture

@@ -33,8 +33,9 @@ def test_the_daily_mark_is_installed_once_beside_hand_kept_jobs(tmp_path):
                     f'elif [ "$1" = "-" ]; then cat > {tab}; fi\n')
     fake.chmod(0o755)
     env = {**os.environ, "PATH": f"{fake.parent}:{os.environ['PATH']}"}
-    run = lambda: subprocess.run(["bash", "deploy/managed_cron.sh", "."], cwd=ROOT, env=env,
-                                 capture_output=True, text=True, check=True).stdout
+    def run() -> str:
+        return subprocess.run(["bash", "deploy/managed_cron.sh", "."], cwd=ROOT, env=env,
+                              capture_output=True, text=True, check=True).stdout
     assert "updated" in run() and "already up to date" in run()
     lines = tab.read_text().splitlines()
     assert sum("fund mark" in line for line in lines) == 1

@@ -12,7 +12,7 @@ import click
 
 from fundmgr import regions, styles
 from fundmgr.config import load_config, get_enabled_tickers, holding_rows
-from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
+from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
@@ -231,7 +231,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 if t.yahoo_ticker not in universe_tickers]
     fetch_tickers, fetch_note = select_tickers_for_price_fetch(tickers, held_tickers, cfg.screener)
     click.echo(f"\n{'═'*56}")
-    click.echo(f"  AI Fund Manager — Weekly Run")
+    click.echo("  AI Fund Manager — Weekly Run")
     click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     click.echo(f"{'═'*56}")
 
@@ -257,9 +257,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             refreshed = fetch_and_cache_fundamentals(ticker_symbols, store, ttl_days=7, max_workers=12)
             click.echo(f"      {refreshed}/{stale_count} refreshed")
         else:
-            click.echo(f"      All fresh (TTL 7d)")
+            click.echo("      All fresh (TTL 7d)")
     else:
-        click.echo(f"\n[2/6] Fundamentals refresh skipped.")
+        click.echo("\n[2/6] Fundamentals refresh skipped.")
 
     # ── Step 3: Fetch benchmark ────────────────────────────────────────────────
     click.echo(f"\n[3/6] Fetching benchmark ({cfg.benchmark})…")
@@ -270,17 +270,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
     macro_block = ""
     if not skip_macro:
-        click.echo(f"\n[4/6] Fetching global macro context…")
+        click.echo("\n[4/6] Fetching global macro context…")
         macro_indicators = fetch_macro_indicators()
         macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
         macro_block = build_macro_block(macro_indicators, macro_headlines)
         ind_ok = sum(1 for i in macro_indicators if i.price is not None)
         click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
     else:
-        click.echo(f"\n[4/6] Global macro context skipped.")
+        click.echo("\n[4/6] Global macro context skipped.")
 
     # ── Step 5: Compute features + pre-screen ─────────────────────────────────
-    click.echo(f"\n[5/6] Computing features…")
+    click.echo("\n[5/6] Computing features…")
     features = build_all_features(feature_tickers, store, cfg, fetch_result)
     apply_to_features(features, store)
 
@@ -342,13 +342,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device
             )
     else:
-        click.echo(f"\n[6/6] News skipped.")
+        click.echo("\n[6/6] News skipped.")
 
     attach_sentiment_to_features(features, store, since_date=since_news)
 
     # ── Data quality summary ──────────────────────────────────────────────────
     click.echo(f"\n{'─'*56}")
-    click.echo(f"  Data Quality Report")
+    click.echo("  Data Quality Report")
     click.echo(f"{'─'*56}")
     _print_feature_table(features, cfg)
 
@@ -552,7 +552,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             sells = [a for a in guardrail_result.approved_actions if a.side == "sell"]
             holds = [a for a in guardrail_result.approved_actions if a.side == "hold"]
             tg_consensus = vote_counts is not None and n_samples > 1
-            tg_vote = (lambda t: f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else "")
+            def tg_vote(t: str) -> str:
+                return f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else ""
             header = f"<b>{html.escape(cfg.display_name)}</b>\n📊 Run Complete  <code>{run_id}</code>"
             if tg_consensus:
                 header += f"  <i>({n_samples}-run consensus)</i>"
@@ -656,11 +657,6 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if not dry_run and cfg.auto_fill and guardrail_result.approved_actions:
         from fundmgr.engine.auto_fill import execute_paper_fills
         click.echo("\n[→] Auto-fill: executing paper trades…")
-        # Attach live prices to positions before computing trade sizes
-        for p in store.get_positions():
-            feat = features.get(p.ticker)
-            if feat:
-                p.current_price_sek = feat.last_price
         fill_log, _skipped = execute_paper_fills(
             [a.model_dump() for a in guardrail_result.approved_actions],
             store,
@@ -778,7 +774,6 @@ def _apply_prescreen(cfg, run_id: str, features: dict, pool: dict, screened: dic
 
 
 def _print_feature_table(features, cfg):
-    from fundmgr.data.prices import TickerFeatures
     if not features:
         click.echo("  No features available.")
         return
@@ -2119,7 +2114,6 @@ def check_news(auto_run: bool, max_age_hours: int):
 
     # ── Print and notify ──────────────────────────────────────────────────────
     held_triggers = [t for t in triggers if t["is_held"]]
-    watch_triggers = [t for t in triggers if not t["is_held"]]
 
     click.echo(f"\n  {len(triggers)} trigger(s) found:")
     for t in triggers:

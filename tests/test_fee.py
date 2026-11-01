@@ -25,4 +25,4 @@ def test_fee_at_cap_boundary():
     assert fee.calc(98_000) == pytest.approx(98.0)
 
 
-import pytest
+import pytest  # noqa: E402

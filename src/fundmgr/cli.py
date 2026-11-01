@@ -11,11 +11,14 @@ from pathlib import Path
 import click
 
 from fundmgr import regions, styles
-from fundmgr.config import load_config, get_enabled_tickers, holding_rows
+from fundmgr.config import AppConfig, load_config, get_enabled_tickers, holding_rows
 from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
-from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
+from fundmgr.data.news import (
+    attach_sentiment_to_features, check_news_triggers, fetch_mfn_news, fetch_news, merge_news,
+    score_and_cache_sentiment,
+)
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
 from fundmgr.data.universe_selection import (
@@ -326,14 +329,15 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         )
 
     # ── Step 6: News + FinBERT — screener candidates only (not full universe) ─
-    if not skip_news and cfg.data.news_feeds:
+    if not skip_news and (cfg.data.news_feeds or cfg.data.mfn_news):
         news_symbols = set(screened_features.keys()) | held_tickers | set(prescreen_pool)
         news_tickers = [t for t in tickers if t.yahoo_ticker in news_symbols]
         click.echo(
             f"\n[6/6] Fetching news for {len(news_tickers)} screener candidates "
-            f"(from {len(cfg.data.news_feeds)} feeds)…"
+            f"(from {len(cfg.data.news_feeds)} feeds"
+            + (" + each company's MFN feed" if cfg.data.mfn_news else "") + ")…"
         )
-        ticker_news = fetch_news(cfg.data.news_feeds, news_tickers, max_age_hours=72)
+        ticker_news = _news_for_run(cfg, news_tickers)
         total_headlines = sum(len(v) for v in ticker_news.values())
         click.echo(f"      {total_headlines} matched headlines across {len(ticker_news)} tickers")
         if total_headlines > 0 and cfg.data.sentiment.enabled:
@@ -721,6 +725,23 @@ def _outcome_currencies(cfg, store, horizon: int) -> dict[str, str]:
             click.echo(f"      ⚠ FX history for scoring unavailable ({exc}); "
                        "foreign outcomes stay pending.", err=True)
     return currency_of
+
+
+def _news_for_run(cfg: AppConfig, news_tickers: list) -> dict[str, list[dict]]:
+    """The general feeds' headlines plus, when switched on, each name's own MFN
+    releases. MFN is advisory: if it fails, the run keeps the feeds' news."""
+    ticker_news = (fetch_news(cfg.data.news_feeds, news_tickers, max_age_hours=72)
+                   if cfg.data.news_feeds else {})
+    if cfg.data.mfn_news:
+        try:
+            releases = fetch_mfn_news(news_tickers, cfg.db_path.parent / "mfn_slugs.json")
+        except Exception as exc:
+            click.echo(f"      ⚠ MFN releases skipped: {exc}", err=True)
+        else:
+            click.echo(f"      MFN: {sum(len(v) for v in releases.values())} releases "
+                       f"across {len(releases)} tickers")
+            ticker_news = merge_news(ticker_news, releases)
+    return ticker_news
 
 
 def _apply_prescreen(cfg, run_id: str, features: dict, pool: dict, screened: dict,
@@ -2742,7 +2763,6 @@ def _all_learning_books_with_configs() -> list[tuple[str, object, Store]]:
         except Exception as exc:
             click.echo(f"  ⚠ skipping paper book {meta['slug']}: {exc}")
             continue
-        from fundmgr.config import AppConfig
         cfg = AppConfig(benchmark=paper_meta["benchmark"])
         books.append((f"{meta['name']} [paper/{meta['slug']}]", cfg, store))
 

@@ -78,6 +78,10 @@ class DataConfig:
     news_feeds: list[str] = field(default_factory=list)
     macro_feeds: list[str] = field(default_factory=list)
     sentiment: SentimentConfig = field(default_factory=SentimentConfig)
+    # Each candidate's own MFN press releases (matched by ISIN) join the weekly
+    # run's headlines. The all-companies feed is not used: it can only be
+    # matched by words in the text, which tied one release to 52 names.
+    mfn_news: bool = False
     # Yahoo's insider/institution share of capital under each candidate. Off
     # until a shadow variant has measured whether it helps (checklist item 24).
     ownership_in_prompt: bool = False

@@ -93,9 +93,11 @@ block for fixed indicator values. The headline half is already local.
 cooldown breaker, Finnhub with its rate limit, Yahoo news as the fallback, and
 FinBERT scoring. Before porting, measure which providers the fund's own candidates
 actually get items from. A provider that adds nothing for this universe is
-dropped rather than ported. MFN (`data/mfn.py`) is the obvious addition for Nordic
-names. Fix the dead `mfn.se/a/all.rss` feed in `config.yaml` (checklist P5) here
-or before.
+dropped rather than ported. MFN is already read here: since 2026-11-01 the
+Nordic fund's run adds each candidate's own MFN releases (`data.mfn_news`,
+matched by ISIN), and the dead `mfn.se/a/all.rss` feed is gone from every config.
+The keyword matcher this phase ports needs fixing on the way: name words such as
+"series", "investor" and "general" match unrelated text in every feed.
 
 **5. Universe source (your decision).** Today `deploy.sh` regenerates
 `config/universe.csv` and `universe_global.csv` from FinanceData's committed EODHD

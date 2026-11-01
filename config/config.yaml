@@ -45,8 +45,11 @@ data:
   news_feeds:
     - "https://www.avanza.se/placera/rss/senaste-analyserna.rss"  # Swedish broker analysis
     - "https://www.di.se/rss"                                      # Dagens Industri (SE)
-    - "https://mfn.se/a/all.rss"                                   # Nordic regulatory filings & press releases
     - "https://e24.no/rss.xml"                                     # E24 (NO)
+  # Each candidate's own MFN releases, matched by ISIN. Replaces mfn.se/a/all.rss,
+  # which returned nothing; the live all-companies feed can only be matched by
+  # words in the release text and tied one release to 52 names.
+  mfn_news: true
   macro_feeds:
     - "https://feeds.bbci.co.uk/news/business/rss.xml"             # BBC Business
     - "https://www.cnbc.com/id/100003114/device/rss/rss.html"      # CNBC Business

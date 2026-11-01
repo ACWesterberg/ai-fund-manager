@@ -43,7 +43,6 @@ data:
     - "https://www.cnbc.com/id/100003114/device/rss/rss.html"
     - "https://feeds.a.wsj.com/rss/RSSWorldNews.xml"
     - "https://www.di.se/rss"
-    - "https://mfn.se/a/all.rss"
   macro_feeds:
     - "https://feeds.bbci.co.uk/news/business/rss.xml"
     - "https://www.cnbc.com/id/100003114/device/rss/rss.html"

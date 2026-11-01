@@ -8,9 +8,10 @@ universe row resolves only on an exact ISIN match and is never guessed from
 its name. MFN answers an unknown slug with an empty feed rather than an error,
 which is why a guessed slug cannot be checked.
 
-The all-companies feed only holds the newest 48 releases market-wide. The one
-in config.yaml (`mfn.se/a/all.rss`) returns no items at all; `mfn.se/all/a.rss`
-is the live one.
+The all-companies feed (`mfn.se/all/a.rss`; `mfn.se/a/all.rss` returns nothing)
+holds at most the newest 500 releases market-wide and can only be matched to a
+ticker by words in its text, which tied one release to 52 names. The weekly
+run's news (`news.fetch_mfn_news`) reads each company's own feed instead.
 
 Advisory throughout: a name that cannot be resolved or read is left out.
 """

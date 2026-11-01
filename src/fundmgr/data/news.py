@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from financedata import get_news_cached, score_sentiment, score_and_save, get_cache as fd_cache_getter
@@ -41,6 +42,59 @@ def fetch_news(
         use_fallback=use_fallback,
         force_refresh=force_refresh,
     )
+
+
+MFN_SUMMARY_CHARS = 300
+
+
+def fetch_mfn_news(
+    tickers: list[UniverseTicker],
+    cache_path: Path,
+    max_age_hours: int = 7 * 24,
+) -> dict[str, list[dict]]:
+    """Each name's own MFN press releases, matched by ISIN, as news items.
+
+    Read per company rather than from MFN's all-companies feed: that feed's
+    items reach a ticker only by words in the release text, and on 1 Nov one
+    "New number of votes in AB Volvo" matched 52 names through "series",
+    while "investor" and "general" tied Investor AB and General Oceans to
+    unrelated releases. A company's own feed holds only that company. The
+    default window is a week: the decision is weekly, and a report published
+    on a Tuesday is the news Monday's run most needs.
+    """
+    from fundmgr.data import mfn
+
+    since = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    found = mfn.releases(tickers, since, cache_path)
+    out: dict[str, list[dict]] = {}
+    for ticker, releases in found.items():
+        out[ticker] = [{
+            "headline": r.title[:500],
+            "summary": _shorten(r.summary, MFN_SUMMARY_CHARS),
+            "source_url": r.link[:500],
+            "published_at": r.published.strftime("%Y-%m-%d %H:%M"),
+            "source": "MFN",
+        } for r in releases if r.title]
+    return {t: items for t, items in out.items() if items}
+
+
+def _shorten(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def merge_news(base: dict[str, list[dict]], extra: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """`base` plus `extra`, dropping a headline a ticker already has."""
+    out = {t: list(items) for t, items in base.items()}
+    for ticker, items in extra.items():
+        have = out.setdefault(ticker, [])
+        seen = {(i.get("headline") or "").strip().lower() for i in have}
+        for item in items:
+            key = (item.get("headline") or "").strip().lower()
+            if key and key not in seen:
+                have.append(item)
+                seen.add(key)
+    return {t: items for t, items in out.items() if items}
 
 
 def score_and_cache_sentiment(

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
 from financedata import get_prices_since, rsi, pct_return, ann_vol, get_cache as get_fd_cache
 from fundmgr.config import AppConfig, UniverseTicker
+from fundmgr.data.fundamentals import normalise_sector
 from fundmgr.state.store import Store
 
 
@@ -254,6 +256,20 @@ def fetch_and_cache_prices(
     return results
 
 
+def _venue_open(exchange: str) -> bool:
+    """Is the venue trading right now? Cached per minute — the run asks for
+    every name in the universe. Unknown venue or calendar error: assume closed,
+    i.e. the old behaviour."""
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    return _venue_open_at((exchange or "").upper(), stamp)
+
+
+@functools.lru_cache(maxsize=256)
+def _venue_open_at(exchange: str, stamp: str) -> bool:
+    from fundmgr.data.market_hours import is_exchange_open
+    return bool(is_exchange_open(exchange, datetime.fromisoformat(stamp).replace(tzinfo=timezone.utc)))
+
+
 def compute_features(
     ticker: UniverseTicker,
     store: Store,
@@ -272,7 +288,15 @@ def compute_features(
     last_price = rows[-1]["close"]
     age = _count_trading_days_since(last_date)
 
-    volumes = pd.Series([r["volume"] for r in rows if r.get("volume") is not None])
+    vol_rows = [r for r in rows if r.get("volume") is not None]
+    # Today's bar is still filling while the venue trades: the Monday run starts
+    # 30 min after the open, so it compared half an hour of volume with whole
+    # sessions and read 0.0-0.2x across the book (2 Nov). Measure the last
+    # complete session instead.
+    if vol_rows and vol_rows[-1]["date"] == datetime.now(timezone.utc).strftime("%Y-%m-%d") \
+            and _venue_open(ticker.exchange):
+        vol_rows = vol_rows[:-1]
+    volumes = pd.Series([r["volume"] for r in vol_rows])
     rel_vol = None
     if len(volumes) >= 21:
         avg_20d = volumes.iloc[-21:-1].mean()
@@ -287,7 +311,7 @@ def compute_features(
         data_age_trading_days=age,
         currency=ticker.currency,
         needs_fx=ticker.needs_fx,
-        sector=ticker.sector or None,
+        sector=normalise_sector(ticker.sector),
         country=(ticker.country or "").strip().upper() or None,
         return_1d_pct=pct_return(closes, 1),
         return_5d_pct=pct_return(closes, 5),

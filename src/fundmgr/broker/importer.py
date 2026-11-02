@@ -207,22 +207,20 @@ _ORDER_SIDE = {"trim": "sell", "exit": "sell", "sell": "sell", "add": "buy"}
 
 
 def close_owed_reviews(store: Any, ticker: str, side: str, trade_date: str) -> list[str]:
-    """Tick off the review orders a booked broker fill carried out.
+    """Tick off the review orders a booked broker fill makes moot.
 
     A trim leaves the name held, so its stop review stayed 'open' and the
     ACTION NEEDED banner — and its ticket — kept repeating after the sale had
-    gone through (30 Oct, IVSO). A Montrose fill on the same side, on or after
-    the day the review asked for it, is that order done. Reviews written after
-    the fill are a new instruction and are left alone.
+    gone through (30 Oct, IVSO). Worse, while the sale sat unbooked the next
+    stop check reviewed the position on the ledger's stale 30 shares and asked
+    for the same 15 again (2 Nov). So every open same-side review on the name is
+    closed when the fill is booked: whether it asked for this order or was
+    written after it, it was written against a ledger missing this fill. The
+    next stop or target check re-reviews the position as it now stands.
     """
     closed = []
     for r in store.get_open_reviews(tickers=[ticker]):
         if r["ticker"] != ticker or _ORDER_SIDE.get(r["verdict"]) != side:
-            continue
-        # The review's day leads its id (review_run_id); created_at is only when
-        # the row was last written.
-        asked_on = r["review_id"][:10] if r["review_id"][:4].isdigit() else (r.get("created_at") or "")[:10]
-        if asked_on > trade_date:
             continue
         if store.resolve_review(r["review_id"], "done"):
             closed.append(f"{r['verdict']} review")

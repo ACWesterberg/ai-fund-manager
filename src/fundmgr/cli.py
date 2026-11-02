@@ -573,7 +573,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 lines.append("")
                 lines.append("<b>⏸ HOLDS</b>")
                 for a in holds:
-                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis[:120])}</i>")
+                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis)}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:

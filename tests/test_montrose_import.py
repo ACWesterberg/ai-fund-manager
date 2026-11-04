@@ -286,12 +286,73 @@ def test_booking_a_sell_closes_the_open_trim_review_but_not_a_later_one(store):
     assert review_id
 
 
-def test_a_buy_does_not_close_a_trim_and_a_newer_review_stays_open(store):
+def test_a_review_written_against_the_stale_ledger_is_closed_too(store):
+    # 2 Nov: the sale sat unbooked, so the stop check reviewed IVSO on the
+    # ledger's 30 shares and asked for the same 15 again. Booking the sale
+    # closes that review as well; the next check re-reviews the 15 held.
     store.book_broker_fill(4, _fill(), "Buy", "2026-10-05", -7_287.28)
     store.record_review(ticker="INWI.ST", source="stop_review", verdict="trim",
                         trim_pct=50, review_date="2026-10-12")
     sell = imp.Proposal(broker_id=9, kind="fill", category="Sell", trade_date="2026-10-09",
                         amount_sek=3_600.0, ticker="INWI.ST", side="sell", shares=20,
                         price_sek=180.5, fee_sek=10.0)
-    assert "Closed" not in imp.book(store, sell)
+    assert "Closed the open trim review" in imp.book(store, sell)
+    assert store.get_open_reviews(tickers=["INWI.ST"]) == []
+
+
+def test_a_buy_does_not_close_a_trim(store):
+    store.book_broker_fill(4, _fill(), "Buy", "2026-10-05", -7_287.28)
+    store.record_review(ticker="INWI.ST", source="stop_review", verdict="trim", trim_pct=50)
+    buy = imp.Proposal(broker_id=9, kind="fill", category="Buy", trade_date="2026-10-09",
+                       amount_sek=-1_800.0, ticker="INWI.ST", side="buy", shares=10,
+                       price_sek=179.0, fee_sek=10.0)
+    assert "Closed" not in imp.book(store, buy)
     assert len(store.get_open_reviews(tickers=["INWI.ST"])) == 1
+
+
+# ── Automatic booking (montrose.auto_book) ───────────────────────────────────
+
+def _auto_on(tmp_path):
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(cfg.read_text().replace("  import_from: '2026-10-05'\n",
+                                           "  import_from: '2026-10-05'\n  auto_book: true\n"))
+
+
+def test_auto_books_the_accounts_transactions_and_says_so(env, tmp_path):
+    store, sent = env
+    _auto_on(tmp_path)
+    res = _cli("montrose-import", "--auto", "--notify")
+    assert res.exit_code == 0, res.output
+    assert {p.ticker: p.shares for p in store.get_positions()}["INWI.ST"] == 40
+    assert sorted(store.get_broker_imports()) == [4, 5, 6, 7, 8]
+    msgs = [t for t, b in sent if "Booked from Montrose" in t]
+    assert len(msgs) == 1 and "INWI.ST" in msgs[0] and not any(b for _, b in sent)
+    sent.clear()
+    res = _cli("montrose-import", "--auto", "--notify")
+    assert "Nothing to book" in res.output and sent == []
+
+
+def test_auto_leaves_a_clash_with_a_hand_booked_fill_for_a_tap(env, tmp_path):
+    store, sent = env
+    _auto_on(tmp_path)
+    store.apply_fill(Transaction("INWI.ST", "buy", 41, 182.0, 7.28, "fill", datetime(2026, 10, 5, 12)))
+    res = _cli("montrose-import", "--auto", "--notify")
+    assert res.exit_code == 0, res.output
+    assert 4 not in store.get_broker_imports()
+    assert {p.ticker: p.shares for p in store.get_positions()}["INWI.ST"] == 41
+    assert any("INWI.ST" in t and "fix that fill by hand" in t for t, _ in sent)
+
+
+def test_auto_is_refused_when_auto_book_is_off(env):
+    res = _cli("montrose-import", "--auto")
+    assert res.exit_code != 0 and "auto_book is off" in res.output
+
+
+def test_the_evening_reconcile_books_too_when_auto_book_is_on(env, tmp_path):
+    store, sent = env
+    _auto_on(tmp_path)
+    res = _cli("montrose-reconcile", "--notify")
+    assert res.exit_code == 0, res.output
+    assert sorted(store.get_broker_imports()) == [4, 5, 6, 7, 8]
+    assert any("Booked from Montrose" in t for t, _ in sent)
+    assert not any(b for _, b in sent)       # nothing left to offer

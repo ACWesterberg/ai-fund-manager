@@ -209,6 +209,9 @@ class MontroseConfig:
     # the ledger (one tap each). Earlier history was booked by hand — some of
     # it folded into cash with /setcash — so it is never offered. Empty = off.
     import_from: str = ""
+    # Book the account's own transactions without a tap (montrose-import --auto,
+    # every 30 min). Off = each row waits for Book/Skip on Telegram.
+    auto_book: bool = False
     # Phase 3: after each weekly run, send a pre-filled Montrose order ticket
     # per approved trade. Off until the owner has tried /montrose_ticket once;
     # the plan is saved either way, so /montrose_tickets works on demand.

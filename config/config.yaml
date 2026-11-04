@@ -100,6 +100,11 @@ montrose:
   lookback_days: 60
   cash_tolerance_sek: 25
   import_from: "2026-10-28"
+  # Book Montrose trades, deposits and dividends into the ledger automatically
+  # (every 30 min in trading hours) and report them; only rows that can't be
+  # matched safely wait for a Book/Skip tap. On since 2026-11-02, after a sale
+  # sat unbooked for days and the stop check kept asking for it again.
+  auto_book: true
   # After each weekly run, one pre-filled Montrose order ticket per approved
   # trade (you set the limit and approve in the app). The plan is saved either
   # way; /montrose_tickets sends it on demand. On since 2026-10-29, after a

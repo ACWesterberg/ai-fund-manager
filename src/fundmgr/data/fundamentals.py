@@ -167,6 +167,37 @@ def ownership_lines(store: Store, tickers: list[str]) -> dict[str, str]:
     return {t: line for t, line in lines.items() if line}
 
 
+# Yahoo's sector names → the universe's GICS-style ones, so a filled-in sector
+# lands in the same bucket as a listed one (Healthcare and Health Care are one
+# sector to the cap, not two).
+_YAHOO_SECTOR = {
+    "Financial Services": "Financials",
+    "Consumer Cyclical": "Consumer Discretionary",
+    "Consumer Defensive": "Consumer Staples",
+    "Basic Materials": "Materials",
+    "Healthcare": "Health Care",
+    "Communication Services": "Communication Services",
+    "Technology": "Technology",
+    "Industrials": "Industrials",
+    "Energy": "Energy",
+    "Utilities": "Utilities",
+    "Real Estate": "Real Estate",
+}
+
+
+def normalise_sector(value: str | None) -> str | None:
+    """A sector in the universe's names, or None when there is none.
+
+    "Unknown" is not a sector. Two thirds of universe.csv carry it, and treated
+    as one it pooled NOBA, WSG, NANEXA and DYVOX into a 34% "Unknown" bucket
+    against the 35% cap, blocking every unclassified buy (2 Nov).
+    """
+    v = (value or "").strip()
+    if not v or v.lower() in ("unknown", "n/a", "none"):
+        return None
+    return _YAHOO_SECTOR.get(v, v)
+
+
 def apply_to_features(features: dict, store: Store) -> None:
     """
     Pull cached fundamentals from fund's store and attach to TickerFeatures objects.
@@ -178,6 +209,8 @@ def apply_to_features(features: dict, store: Store) -> None:
         data = cached.get(ticker)
         if not data:
             continue
+        if not feat.sector:
+            feat.sector = normalise_sector(data.get("sector"))
 
         def _safe(val, scale=1.0):
             try:
@@ -208,10 +241,15 @@ def apply_to_features(features: dict, store: Store) -> None:
             ("roe",             "roe_pct"),
             ("revenue_growth",  "revenue_growth_pct"),
             ("earnings_growth", "earnings_growth_pct"),
-            ("dividend_yield",  "dividend_yield_pct"),
         ):
             raw = data.get(frac_key)
             setattr(feat, attr, round(raw * 100, 1) if raw is not None else None)
+        # Yahoo's dividendYield is already a percentage (INWI.ST: 2.88 with
+        # trailingAnnualDividendYield 0.0288), not the 0-1 fraction the other
+        # ratios are. Scaled like them, the 2 Nov prompt showed KCC at 618% and
+        # NOBA at 176%, and the model set every yield aside as mis-scaled.
+        dy = _safe(data.get("dividend_yield"))
+        feat.dividend_yield_pct = round(dy, 2) if dy is not None else None
 
         mc = data.get("market_cap")
         feat.market_cap_msek = round(mc / 1e6, 0) if mc is not None else None

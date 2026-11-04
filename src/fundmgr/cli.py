@@ -594,7 +594,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 lines.append("")
                 lines.append("<b>⏸ HOLDS</b>")
                 for a in holds:
-                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis[:120])}</i>")
+                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis)}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:
@@ -4502,6 +4502,46 @@ def _offer_proposals(props) -> int:
     return len(sent)
 
 
+def _auto_book(cfg, store, props) -> tuple[list[str], list]:
+    """Book every proposal that can be booked safely; return (messages, the rest).
+
+    Montrose's transaction history is what actually happened in the account, so
+    for the real fund it is booked without a tap (montrose.auto_book). A sale
+    made in the app on 30 Oct sat behind a Book button for days while the stop
+    check kept asking for the same 15 shares. Same checks as a tap: proposals
+    come from a fresh read and reconcile, a hand-booked fill matches and is not
+    offered, and the ledger refuses an oversell or an unfunded buy. Anything not
+    bookable — unmatched instrument, clash with a hand-booked fill, a refused
+    write — is left for the buttons.
+    """
+    from fundmgr.broker import importer
+
+    booked, rest = [], []
+    for p in props:
+        if not p.bookable:
+            rest.append(p)
+            continue
+        try:
+            booked.append(importer.book(store, p))
+        except ValueError as exc:
+            p.problem = f"not booked automatically: {exc}"
+            rest.append(p)
+            continue
+        _mark_after_ledger_change(cfg, store, p.trade_date if p.kind == "fill"
+                                  else datetime.utcnow().strftime("%Y-%m-%d"))
+    return booked, rest
+
+
+def _send_booked(booked: list[str]) -> None:
+    import html
+
+    from fundmgr.notify.send import send_telegram
+
+    if booked:
+        send_telegram("🧾 <b>Booked from Montrose</b> (the account's own transactions)\n"
+                      + "\n".join(html.escape(m) for m in booked))
+
+
 @cli.command("montrose-reconcile")
 @click.option("--since", default=None, metavar="YYYY-MM-DD",
               help="Transactions from this date (default: montrose.lookback_days ago).")
@@ -4531,6 +4571,10 @@ def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_js
     cfg, store = _get_store()
     start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
     report, props = _montrose_report(cfg, store, start, offline=offline, notify=notify)
+    if notify and cfg.montrose.auto_book and any(p.bookable for p in props):
+        booked, _ = _auto_book(cfg, store, props)
+        _send_booked(booked)
+        report, props = _montrose_report(cfg, store, start, offline=True)
     text = rec.format_report(report)
     if props:
         text += (f"\n{len(props)} Montrose row(s) waiting to be booked — "
@@ -4554,7 +4598,10 @@ def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_js
 @click.option("--skip", "skip_id", type=int, default=None, metavar="ID",
               help="Never offer Montrose row ID again; the ledger is left as it is.")
 @click.option("--notify", is_flag=True, help="Send every waiting row to Telegram with buttons.")
-def montrose_import_cmd(book_id: int | None, skip_id: int | None, notify: bool):
+@click.option("--auto", is_flag=True,
+              help="Book every row that can be booked safely (montrose.auto_book); with --notify, "
+                   "report what was booked and offer the rest once. The 30-minute cron job.")
+def montrose_import_cmd(book_id: int | None, skip_id: int | None, notify: bool, auto: bool):
     """Book Montrose fills, deposits and dividends into the ledger — one row at a time.
 
     \b
@@ -4577,6 +4624,21 @@ def montrose_import_cmd(book_id: int | None, skip_id: int | None, notify: bool):
     start = max(date.fromisoformat(cfg.montrose.import_from) - timedelta(days=rec.DATE_SLACK_DAYS),
                 rec.default_since(cfg.montrose.lookback_days))
     _, props = _montrose_report(cfg, store, start)
+
+    if auto:
+        if not cfg.montrose.auto_book:
+            raise click.ClickException("montrose.auto_book is off — rows wait for a tap.")
+        booked, rest = _auto_book(cfg, store, props)
+        for m in booked:
+            click.echo(m)
+        for p in rest:
+            click.echo(f"#{p.broker_id}  {importer.describe(p)}   ⚠ {p.problem}")
+        if notify:
+            _send_booked(booked)
+            _offer_proposals(importer.unoffered(rest))
+        if not booked and not rest:
+            click.echo("Nothing to book.")
+        return
 
     target = book_id if book_id is not None else skip_id
     if target is None:

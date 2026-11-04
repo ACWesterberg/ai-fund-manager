@@ -305,6 +305,21 @@ def review_run_id(ticker: str, source: str, date: str) -> str:
     return f"{date}-{source}-{ticker.upper()}"
 
 
+
+# The conviction bands the decision schema gives the model (engine/schema.py:
+# 0.75+ high, 0.55-0.74 medium, 0.40-0.54 starter). The calibration lesson used
+# 0.7/0.4, so its "low" band held almost nothing — the model is told not to buy
+# below 0.40 — and the high-vs-low comparison that says whether conviction
+# means anything could almost never be made.
+HIGH_CONVICTION = 0.75
+MEDIUM_CONVICTION = 0.55
+
+
+def conviction_band(confidence: float | None) -> str:
+    value = confidence or 0.0
+    return "high" if value >= HIGH_CONVICTION else "medium" if value >= MEDIUM_CONVICTION else "low"
+
+
 class Store:
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -724,7 +739,6 @@ class Store:
         else:  # sell
             cur_shares = float(row["shares"]) if row else 0.0
             new_shares = max(0.0, cur_shares - txn.shares)
-            avg_cost = float(row["avg_cost_sek"]) if row else 0.0
             conn.execute(
                 "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",
                 (new_shares, txn.timestamp.isoformat(), txn.ticker),
@@ -783,17 +797,29 @@ class Store:
             ).fetchall()
         return [self._txn_from_row(r) for r in rows]
 
-    def undo_last_fill(self) -> Transaction | None:
+    def last_transaction(self) -> Transaction | None:
+        """The most recently recorded transaction — the one undo_last_fill reverses."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM transactions ORDER BY id DESC LIMIT 1").fetchone()
+        return self._txn_from_row(row) if row else None
+
+    def undo_last_fill(self, expected_id: int | None = None) -> Transaction | None:
         """
         Atomically reverse the most recent transaction and return it, or None if none exists.
         Restores position shares/avg_cost and cash to their pre-fill state.
+
+        `expected_id` refuses (ValueError) unless the most recent transaction is
+        still that one, so a stale Telegram button cannot undo a later fill.
         """
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM transactions ORDER BY id DESC LIMIT 1"
             ).fetchone()
             if not row:
                 return None
+            if expected_id is not None and row["id"] != expected_id:
+                raise ValueError("A newer fill has been recorded since; nothing was undone.")
 
             txn = Transaction(
                 id=row["id"],
@@ -1023,7 +1049,6 @@ class Store:
 
         Returns a list of dicts: {run_id, timestamp, score, nav_start, nav_end}.
         """
-        import json as _json
         from datetime import datetime, timedelta
 
         cutoff = (datetime.utcnow() - timedelta(days=min_days)).strftime("%Y-%m-%d")
@@ -1705,27 +1730,47 @@ class Store:
             "hold_rate": held / resolved if resolved else None,
         }
 
-    def get_calibration_stats(self) -> dict:
-        """Return accuracy stats by confidence bucket for use in learnings generation."""
-        with self._conn() as conn:
-            # Run decisions only: "your high-confidence buy calls" must keep
-            # meaning the weekly whole-portfolio calls. A stop review's ADD is a
-            # buy too, but made under a different prompt about one name, and
-            # folding it in here would quietly redefine the hit rate.
-            rows = conn.execute(
-                "SELECT confidence, outperformed FROM decision_outcomes "
-                "WHERE outperformed IS NOT NULL AND action = 'buy' "
-                "AND (source IS NULL OR source = 'run')"
-            ).fetchall()
+    def _calibration_buys(self) -> list:
+        """Evaluated run buys, each stock counted once per horizon window.
 
+        Run decisions only: "your high-confidence buy calls" must keep meaning
+        the weekly whole-portfolio calls. A stop review's ADD is a buy too, but
+        made under a different prompt about one name, and folding it in here
+        would quietly redefine the hit rate.
+
+        Weekly runs score over 28 days, so a name bought or added to in four
+        consecutive weeks was four overlapping looks at one price path, and the
+        interval read them as four independent calls. The earliest is kept and
+        any later one inside its window dropped.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT run_id, ticker, confidence, outperformed, decision_date, horizon_days "
+                "FROM decision_outcomes "
+                "WHERE outperformed IS NOT NULL AND action = 'buy' "
+                "AND (source IS NULL OR source = 'run') "
+                "ORDER BY ticker, decision_date, id"
+            ).fetchall()
+        kept, window_end = [], {}
+        for r in rows:
+            day = r["decision_date"] or ""
+            if day and r["ticker"] in window_end and day < window_end[r["ticker"]]:
+                continue
+            kept.append(r)
+            if day:
+                end = datetime.strptime(day, "%Y-%m-%d") + timedelta(days=r["horizon_days"] or 28)
+                window_end[r["ticker"]] = end.strftime("%Y-%m-%d")
+        return kept
+
+    def get_calibration_stats(self) -> dict:
+        """Return accuracy stats by conviction band for use in learnings generation."""
+        rows = self._calibration_buys()
         if not rows:
             return {}
 
         buckets: dict[str, list[int]] = {"high": [], "medium": [], "low": []}
         for r in rows:
-            c = r["confidence"] or 0.0
-            bucket = "high" if c >= 0.7 else "medium" if c >= 0.4 else "low"
-            buckets[bucket].append(r["outperformed"])
+            buckets[conviction_band(r["confidence"])].append(r["outperformed"])
 
         # `hits` rides along so callers can put an interval on the rate: a hit
         # rate without its sample size reads as a fact at n=5.
@@ -1738,20 +1783,8 @@ class Store:
         """Run provenance behind the calibration bands that cleared the sample bar."""
         if not qualifying_buckets:
             return []
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT run_id, confidence FROM decision_outcomes "
-                "WHERE outperformed IS NOT NULL AND action = 'buy' "
-                "AND (source IS NULL OR source = 'run') ORDER BY run_id"
-            ).fetchall()
-
-        def bucket(confidence: float | None) -> str:
-            value = confidence or 0.0
-            return "high" if value >= 0.7 else "medium" if value >= 0.4 else "low"
-
-        return sorted({
-            r["run_id"] for r in rows if bucket(r["confidence"]) in qualifying_buckets
-        })
+        return sorted({r["run_id"] for r in self._calibration_buys()
+                       if conviction_band(r["confidence"]) in qualifying_buckets})
 
     # ── Learnings ─────────────────────────────────────────────────────────────
 

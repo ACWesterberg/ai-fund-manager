@@ -78,6 +78,13 @@ class DataConfig:
     news_feeds: list[str] = field(default_factory=list)
     macro_feeds: list[str] = field(default_factory=list)
     sentiment: SentimentConfig = field(default_factory=SentimentConfig)
+    # Each candidate's own MFN press releases (matched by ISIN) join the weekly
+    # run's headlines. The all-companies feed is not used: it can only be
+    # matched by words in the text, which tied one release to 52 names.
+    mfn_news: bool = False
+    # Yahoo's insider/institution share of capital under each candidate. Off
+    # until a shadow variant has measured whether it helps (checklist item 24).
+    ownership_in_prompt: bool = False
 
 
 @dataclass
@@ -161,6 +168,36 @@ class EarningsWatchConfig:
 
 
 @dataclass
+class PrescreenConfig:
+    # A local model (an OpenAI-compatible server — Ollama, LM Studio, llama.cpp —
+    # reached over the tailnet) reads each mechanical candidate's news and tags
+    # it, and a fixed rule re-ranks the pool to screener.top_n
+    # (engine/prescreen.py). Off by default. `shadow` keeps sending the
+    # mechanical list while recording what the pre-screen would have sent, so
+    # the two can be scored against each other before it is trusted.
+    enabled: bool = False
+    shadow: bool = True
+    base_url: str = ""              # e.g. http://mac-studio:11434/v1
+    model_id: str = ""
+    api_key_env: str = ""           # env var holding a key, if the server wants one
+    pool_size: int = 200            # mechanical candidates the local model reads
+    batch_size: int = 20            # names per call
+    temperature: float = 0.0
+    seed: int | None = 0
+    max_tokens: int = 4000
+    timeout_s: float = 180.0
+    json_mode: bool = True          # response_format={"type": "json_object"}
+    news_days: int = 14             # headlines and MFN releases this recent
+    mfn: bool = True                # read each pool name's own MFN feed
+    # Added to the mechanical score by the tags; fixed and visible, so a week's
+    # selection can be recomputed from its record.
+    weights: dict[str, float] = field(default_factory=lambda: {
+        "material_positive": 3.0, "material_negative": 1.0, "material_mixed": 1.0,
+        "index_or_flow": -1.0,
+    })
+
+
+@dataclass
 class MontroseConfig:
     # The real broker account this fund's ledger mirrors (phase 1: read and
     # compare only). Empty means the fund has no broker account.
@@ -197,6 +234,7 @@ class AppConfig:
     report_watch: ReportWatchConfig = field(default_factory=ReportWatchConfig)
     montrose: MontroseConfig = field(default_factory=MontroseConfig)
     earnings_watch: EarningsWatchConfig = field(default_factory=EarningsWatchConfig)
+    prescreen: PrescreenConfig = field(default_factory=PrescreenConfig)
     db_path: Path = field(default_factory=lambda: DATA_DIR / "fund.db")
     mandate_path: Path = field(default_factory=lambda: CONFIG_DIR / "mandate.md")
     universe_path: Path = field(default_factory=lambda: CONFIG_DIR / "universe.csv")
@@ -398,6 +436,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         cfg.report_watch = ReportWatchConfig(**rw_raw)
     if ew_raw := raw.get("earnings_watch"):
         cfg.earnings_watch = EarningsWatchConfig(**ew_raw)
+    if ps_raw := raw.get("prescreen"):
+        cfg.prescreen = PrescreenConfig(**ps_raw)
     if montrose_raw := raw.get("montrose"):
         cfg.montrose = MontroseConfig(**montrose_raw)
     if shadow_raw := raw.get("shadow"):

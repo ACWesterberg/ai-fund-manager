@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 from fundmgr.config import AppConfig
-from fundmgr.state.models import NavPoint, PortfolioSnapshot
+from fundmgr.state.models import NavPoint
 from fundmgr.state.store import Store
 
 
@@ -183,6 +184,31 @@ def nav_chart_json(nav_history: list[NavPoint],
     return json.dumps({"data": data, "layout": layout})
 
 
+def _price_from_cache(store: Store, cfg: AppConfig, positions: list) -> None:
+    """Each position's latest cached close, in SEK for a SEK-booked fund.
+
+    The report's P&L column read `current_price_sek`, which nothing set, so it
+    always said n/a. A holding with no close, or no FX rate, stays n/a.
+    """
+    from fundmgr.config import holding_rows
+    from fundmgr.data.fx import rate_to_sek
+
+    currency = {t.yahoo_ticker: t.currency
+                for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
+    for p in positions:
+        rows = store.get_prices(p.ticker)
+        if not rows or not rows[-1].get("close"):
+            continue
+        price = rows[-1]["close"]
+        cur = currency.get(p.ticker, "SEK")
+        if cfg.fx_to_sek and cur != "SEK":
+            rate = rate_to_sek(cur, store)
+            if not rate:
+                continue
+            price *= rate
+        p.current_price_sek = price
+
+
 def format_text_report(store: Store, cfg: AppConfig) -> str:
     nav_history = store.get_nav_history()
     positions = store.get_positions()
@@ -208,7 +234,7 @@ def format_text_report(store: Store, cfg: AppConfig) -> str:
     lines.append(f"  Current NAV:    {stats['nav_current']:>12,.0f} SEK")
     lines.append("")
     lines.append(f"  TWR:            {stats['twr_pct']:>+11.2f}%")
-    lines.append(f"  OMXSPI:         {stats['benchmark_return_pct']:>+11.2f}%")
+    lines.append(f"  {benchmark_label(cfg.benchmark) + ':':<15} {stats['benchmark_return_pct']:>+11.2f}%")
     lines.append(f"  Alpha:          {stats['alpha_pct']:>+11.2f}%  {'▲ outperforming' if stats['alpha_pct'] > 0 else '▼ underperforming'}")
     lines.append(f"  Max drawdown:   {-stats['max_drawdown_pct']:>+11.2f}%")
     if stats["volatility_ann_pct"] is not None:
@@ -224,8 +250,8 @@ def format_text_report(store: Store, cfg: AppConfig) -> str:
     if positions:
         lines.append("\n  ── Open Positions ──────────────────────────────────")
         lines.append(f"  {'Ticker':<16} {'Shares':>8} {'Avg Cost':>10} {'P&L':>8}")
+        _price_from_cache(store, cfg, positions)
         for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
-            cost_val = p.shares * p.avg_cost_sek
             pnl_str = f"{p.unrealised_pnl_pct:+.1f}%" if p.current_price_sek else "  n/a"
             lines.append(f"  {p.ticker:<16} {p.shares:>8.0f} {p.avg_cost_sek:>10.2f} {pnl_str:>8}")
 
@@ -238,7 +264,7 @@ def generate_html_report(store: Store, cfg: AppConfig, output_path: Path) -> Non
     nav_history = store.get_nav_history()
     flows = store.get_cash_flows()
     stats = compute_stats(nav_history, cfg.capital_sek, flows)
-    chart_json = nav_chart_json(nav_history, flows=flows)
+    chart_json = nav_chart_json(nav_history, benchmark_label(cfg.benchmark), flows=flows)
 
     twr = f"{stats.get('twr_pct', 0):+.2f}%" if stats else "n/a"
     bench = f"{stats.get('benchmark_return_pct', 0):+.2f}%" if stats else "n/a"
@@ -265,7 +291,7 @@ def generate_html_report(store: Store, cfg: AppConfig, output_path: Path) -> Non
       <div class="h4 mb-0 {'text-success' if stats and stats.get('twr_pct',0)>0 else 'text-danger'}">{twr}</div>
     </div></div>
     <div class="col-6 col-md-3"><div class="stat-card text-center">
-      <div class="text-muted small">OMXSPI</div>
+      <div class="text-muted small">{escape(benchmark_label(cfg.benchmark))}</div>
       <div class="h4 mb-0">{bench}</div>
     </div></div>
     <div class="col-6 col-md-3"><div class="stat-card text-center">

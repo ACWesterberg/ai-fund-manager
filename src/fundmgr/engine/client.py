@@ -224,20 +224,87 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
     return parsed, raw_text
 
 
+# ── Local OpenAI-compatible servers (pre-screen) ──────────────────────────────
+
+def _clean_local_json(text: str) -> str:
+    """The JSON object in a local model's reply.
+
+    Local reasoning models (Qwen, DeepSeek-R1 and kin) print a <think>…</think>
+    block before the answer, and many wrap the answer in a code fence, neither
+    of which a JSON parser accepts.
+    """
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    text = text.strip()
+    if text.startswith("```"):
+        text = "\n".join(text.split("\n")[1:])
+        if "```" in text:
+            text = text[: text.rfind("```")]
+    start, end = text.find("{"), text.rfind("}")
+    return text[start:end + 1] if start != -1 and end > start else text
+
+
+def call_local_json(system: str, user: str, pcfg, schema: type) -> tuple:
+    """One call to a local OpenAI-compatible server; (parsed `schema`, raw text).
+
+    Plain chat completions with JSON mode and validation, not structured
+    outputs: Ollama, LM Studio and llama.cpp all speak the chat API, but they
+    differ in how far they honour a JSON schema, and a hosted-API feature
+    failing quietly on one of them would read as a bad answer.
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise LLMError("openai package not installed. Run: uv pip install openai")
+    if not pcfg.base_url or not pcfg.model_id:
+        raise LLMError("prescreen.base_url and prescreen.model_id must be set")
+
+    key = os.getenv(pcfg.api_key_env, "") if pcfg.api_key_env else ""
+    client = OpenAI(base_url=pcfg.base_url, api_key=key or "local",
+                    timeout=pcfg.timeout_s, max_retries=0)
+    kwargs = dict(
+        model=pcfg.model_id,
+        messages=[{"role": "system", "content": system + _schema_hint(schema)},
+                  {"role": "user", "content": user}],
+        temperature=pcfg.temperature,
+        max_tokens=pcfg.max_tokens,
+    )
+    if pcfg.seed is not None:
+        kwargs["seed"] = pcfg.seed
+    if pcfg.json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception as e:
+        raise LLMError(f"Local model call failed: {e}") from e
+
+    choice = response.choices[0]
+    raw_text = choice.message.content or ""
+    if choice.finish_reason == "length":
+        raise LLMError("Local model reply hit max_tokens")
+    try:
+        return schema.model_validate_json(_clean_local_json(raw_text)), raw_text
+    except (ValidationError, json.JSONDecodeError) as e:
+        raise LLMError(f"Failed to parse local model reply: {e}\n\nRaw response:\n{raw_text}") from e
+
+
 # ── Consensus sampling ────────────────────────────────────────────────────────
 
-def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str, int]]:
+def _aggregate_decisions(runs: list[DecisionRun],
+                         threshold: int | None = None) -> tuple[DecisionRun, dict[str, int]]:
     """
     Majority-vote aggregate of N DecisionRun objects.
 
-    A ticker makes it into the consensus only if strictly more than half the runs
-    agree on the same side (buy/sell/hold). Numeric fields are averaged across
+    A ticker makes it into the consensus only if `threshold` runs agree on the
+    same side (buy/sell/hold) — by default strictly more than half of `runs`;
+    the consensus call passes a majority of the samples *requested*, so a
+    failed sample can never lower the bar. Numeric fields are averaged across
     the agreeing runs; the thesis is taken from the highest-confidence agreeing run.
 
     Returns (consensus_decision, {ticker: n_agreeing_runs}).
     """
     n = len(runs)
-    threshold = n // 2 + 1  # e.g. 2 out of 3, 3 out of 5
+    threshold = threshold or n // 2 + 1  # e.g. 2 out of 3, 3 out of 5
 
     all_tickers: set[str] = {a.ticker for run in runs for a in run.actions}
 
@@ -318,11 +385,14 @@ def call_llm_consensus(
             except LLMError as e:
                 errors.append(str(e))
 
-    if not results:
-        raise LLMError(f"All {n} LLM calls failed: {'; '.join(errors)}")
+    # A decision needs a majority of the samples asked for, both to come back and
+    # to agree. With four of five failing, the one survivor used to trade alone.
+    quorum = n // 2 + 1
+    if len(results) < quorum:
+        raise LLMError(f"Only {len(results)} of {n} samples came back; a decision needs "
+                       f"{quorum}: {'; '.join(errors)[:1000]}")
 
     if errors:
-        # Partial failure — note it but continue with what we have
         print(f"  ⚠ {len(errors)}/{n} LLM call(s) failed; building consensus from {len(results)} run(s).")
 
     sampling = {
@@ -330,10 +400,10 @@ def call_llm_consensus(
         "succeeded": len(results),
         "failed":    len(errors),
         "errors":    [e[:200] for e in errors],  # truncated for storage
+        # Every sample's own answer: how they split is the evidence for what
+        # the vote hides (the IVSO-vs-BONEX week that moved n_samples to 5).
+        "samples":   [r.model_dump(mode="json") for r in results],
     }
 
-    if len(results) == 1:
-        return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}, sampling
-
-    consensus, vote_counts = _aggregate_decisions(results)
+    consensus, vote_counts = _aggregate_decisions(results, threshold=quorum)
     return consensus, consensus.model_dump_json(), vote_counts, sampling

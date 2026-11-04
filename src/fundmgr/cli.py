@@ -11,11 +11,14 @@ from pathlib import Path
 import click
 
 from fundmgr import regions, styles
-from fundmgr.config import load_config, get_enabled_tickers, holding_rows
-from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
+from fundmgr.config import AppConfig, load_config, get_enabled_tickers, holding_rows
+from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
-from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
+from fundmgr.data.news import (
+    attach_sentiment_to_features, check_news_triggers, fetch_mfn_news, fetch_news, merge_news,
+    score_and_cache_sentiment,
+)
 from fundmgr.data.prices import build_all_features, fetch_and_cache_prices
 from fundmgr.data.screener import screen
 from fundmgr.data.universe_selection import (
@@ -231,7 +234,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 if t.yahoo_ticker not in universe_tickers]
     fetch_tickers, fetch_note = select_tickers_for_price_fetch(tickers, held_tickers, cfg.screener)
     click.echo(f"\n{'═'*56}")
-    click.echo(f"  AI Fund Manager — Weekly Run")
+    click.echo("  AI Fund Manager — Weekly Run")
     click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     click.echo(f"{'═'*56}")
 
@@ -257,9 +260,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             refreshed = fetch_and_cache_fundamentals(ticker_symbols, store, ttl_days=7, max_workers=12)
             click.echo(f"      {refreshed}/{stale_count} refreshed")
         else:
-            click.echo(f"      All fresh (TTL 7d)")
+            click.echo("      All fresh (TTL 7d)")
     else:
-        click.echo(f"\n[2/6] Fundamentals refresh skipped.")
+        click.echo("\n[2/6] Fundamentals refresh skipped.")
 
     # ── Step 3: Fetch benchmark ────────────────────────────────────────────────
     click.echo(f"\n[3/6] Fetching benchmark ({cfg.benchmark})…")
@@ -270,17 +273,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
     macro_block = ""
     if not skip_macro:
-        click.echo(f"\n[4/6] Fetching global macro context…")
+        click.echo("\n[4/6] Fetching global macro context…")
         macro_indicators = fetch_macro_indicators()
         macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
         macro_block = build_macro_block(macro_indicators, macro_headlines)
         ind_ok = sum(1 for i in macro_indicators if i.price is not None)
         click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
     else:
-        click.echo(f"\n[4/6] Global macro context skipped.")
+        click.echo("\n[4/6] Global macro context skipped.")
 
     # ── Step 5: Compute features + pre-screen ─────────────────────────────────
-    click.echo(f"\n[5/6] Computing features…")
+    click.echo("\n[5/6] Computing features…")
     features = build_all_features(feature_tickers, store, cfg, fetch_result)
     apply_to_features(features, store)
 
@@ -313,16 +316,28 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if screened_out > 0:
         click.echo(f"      Screener: {len(screened_features)} candidates → LLM "
                    f"({screened_out} filtered out, held positions always included)")
+    # The local pre-screen reads a wider slice of the same ranking (engine/prescreen.py).
+    prescreen_pool: dict = {}
+    if cfg.prescreen.enabled:
+        pool_n = max(cfg.prescreen.pool_size, cfg.screener.top_n)
+        prescreen_pool, _ = screen(
+            features, held_tickers, top_n=pool_n, pinned_tickers=pinned,
+            region_quotas=regions.candidate_quotas(cfg.risk.region_targets, pool_n),
+            excluded_regions=regions.excluded(cfg.risk.region_targets),
+            style_quotas=styles.candidate_quotas(cfg.risk.style_targets, pool_n),
+            excluded_styles=styles.excluded(cfg.risk.style_targets),
+        )
 
     # ── Step 6: News + FinBERT — screener candidates only (not full universe) ─
-    if not skip_news and cfg.data.news_feeds:
-        news_symbols = set(screened_features.keys()) | held_tickers
+    if not skip_news and (cfg.data.news_feeds or cfg.data.mfn_news):
+        news_symbols = set(screened_features.keys()) | held_tickers | set(prescreen_pool)
         news_tickers = [t for t in tickers if t.yahoo_ticker in news_symbols]
         click.echo(
             f"\n[6/6] Fetching news for {len(news_tickers)} screener candidates "
-            f"(from {len(cfg.data.news_feeds)} feeds)…"
+            f"(from {len(cfg.data.news_feeds)} feeds"
+            + (" + each company's MFN feed" if cfg.data.mfn_news else "") + ")…"
         )
-        ticker_news = fetch_news(cfg.data.news_feeds, news_tickers, max_age_hours=72)
+        ticker_news = _news_for_run(cfg, news_tickers)
         total_headlines = sum(len(v) for v in ticker_news.values())
         click.echo(f"      {total_headlines} matched headlines across {len(ticker_news)} tickers")
         if total_headlines > 0 and cfg.data.sentiment.enabled:
@@ -331,19 +346,20 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device
             )
     else:
-        click.echo(f"\n[6/6] News skipped.")
+        click.echo("\n[6/6] News skipped.")
 
     attach_sentiment_to_features(features, store, since_date=since_news)
 
     # ── Data quality summary ──────────────────────────────────────────────────
     click.echo(f"\n{'─'*56}")
-    click.echo(f"  Data Quality Report")
+    click.echo("  Data Quality Report")
     click.echo(f"{'─'*56}")
     _print_feature_table(features, cfg)
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
     horizon = cfg.evaluation_horizon_days
-    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
+    currency_of = _outcome_currencies(cfg, store, horizon) if cfg.fx_to_sek else None
+    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon, currency_of=currency_of)
     if evaluated:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
@@ -403,6 +419,10 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
     run_id = f"{datetime.utcnow().strftime('%Y-%m-%d')}-{__import__('uuid').uuid4().hex[:6]}"
+    if prescreen_pool:
+        screened_features = _apply_prescreen(
+            cfg, run_id, features, prescreen_pool, screened_features, held_tickers | pinned,
+            {t.yahoo_ticker: t for t in tickers}, dry_run)
     # ── Cold-start: lift turnover cap when deploying from near-100% cash ─────
     import copy
     effective_cfg = cfg
@@ -536,7 +556,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             sells = [a for a in guardrail_result.approved_actions if a.side == "sell"]
             holds = [a for a in guardrail_result.approved_actions if a.side == "hold"]
             tg_consensus = vote_counts is not None and n_samples > 1
-            tg_vote = (lambda t: f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else "")
+            def tg_vote(t: str) -> str:
+                return f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else ""
             header = f"<b>{html.escape(cfg.display_name)}</b>\n📊 Run Complete  <code>{run_id}</code>"
             if tg_consensus:
                 header += f"  <i>({n_samples}-run consensus)</i>"
@@ -640,11 +661,6 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if not dry_run and cfg.auto_fill and guardrail_result.approved_actions:
         from fundmgr.engine.auto_fill import execute_paper_fills
         click.echo("\n[→] Auto-fill: executing paper trades…")
-        # Attach live prices to positions before computing trade sizes
-        for p in store.get_positions():
-            feat = features.get(p.ticker)
-            if feat:
-                p.current_price_sek = feat.last_price
         fill_log, _skipped = execute_paper_fills(
             [a.model_dump() for a in guardrail_result.approved_actions],
             store,
@@ -688,8 +704,97 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             click.echo(f"  Shadow collection unavailable: {exc}", err=True)
 
 
+def _outcome_currencies(cfg, store, horizon: int) -> dict[str, str]:
+    """Quote currencies of the outcomes due for scoring, with their FX history cached.
+
+    Advisory: a rate that cannot be fetched leaves those outcomes pending.
+    """
+    from fundmgr.config import UniverseTicker
+    from fundmgr.engine.evaluator import fx_symbol
+
+    pending = store.get_pending_outcomes(older_than_days=horizon)
+    currency_of = {t.yahoo_ticker: t.currency
+                   for t in holding_rows(cfg.universe_path, {o.ticker for o in pending})}
+    foreign = sorted({c for c in currency_of.values() if c != "SEK"})
+    if foreign:
+        try:
+            fetch_and_cache_prices(
+                [UniverseTicker(fx_symbol(c), fx_symbol(c), "", "", "", "", False) for c in foreign],
+                store, 400)
+        except Exception as exc:
+            click.echo(f"      ⚠ FX history for scoring unavailable ({exc}); "
+                       "foreign outcomes stay pending.", err=True)
+    return currency_of
+
+
+def _news_for_run(cfg: AppConfig, news_tickers: list) -> dict[str, list[dict]]:
+    """The general feeds' headlines plus, when switched on, each name's own MFN
+    releases. MFN is advisory: if it fails, the run keeps the feeds' news."""
+    ticker_news = (fetch_news(cfg.data.news_feeds, news_tickers, max_age_hours=72)
+                   if cfg.data.news_feeds else {})
+    if cfg.data.mfn_news:
+        try:
+            releases = fetch_mfn_news(news_tickers, cfg.db_path.parent / "mfn_slugs.json")
+        except Exception as exc:
+            click.echo(f"      ⚠ MFN releases skipped: {exc}", err=True)
+        else:
+            click.echo(f"      MFN: {sum(len(v) for v in releases.values())} releases "
+                       f"across {len(releases)} tickers")
+            ticker_news = merge_news(ticker_news, releases)
+    return ticker_news
+
+
+def _apply_prescreen(cfg, run_id: str, features: dict, pool: dict, screened: dict,
+                     forced: set[str], rows_by_ticker: dict, dry_run: bool) -> dict:
+    """Run the local pre-screen and return the candidates the model should see.
+
+    In shadow mode (the default) that is still the mechanical list; the record
+    keeps both so they can be scored. Live, it is the pre-screen's selection —
+    unless the call failed outright, or a regional or style mix is set, which
+    the re-ranking does not honour yet. Advisory: any failure means the
+    mechanical list, said on stdout.
+    """
+    from datetime import timezone as _tz
+    from urllib.parse import urlsplit
+
+    from fundmgr.engine.prescreen import run_prescreen, write_record
+
+    pcfg = cfg.prescreen
+    under_mix = bool(cfg.risk.region_targets or cfg.risk.style_targets)
+    live = not pcfg.shadow and not under_mix
+    mode = "live" if live else "shadow"
+    note = ("a regional or style mix is set; the pre-screen does not re-rank under a mix yet"
+            if not pcfg.shadow and under_mix else "")
+    click.echo(f"\n[→] Pre-screen ({mode}): {len(pool)} candidates → "
+               f"{pcfg.model_id or '?'} at {urlsplit(pcfg.base_url).netloc or '?'}…")
+    try:
+        releases = {}
+        if pcfg.mfn:
+            from fundmgr.data import mfn
+            since = datetime.now(_tz.utc) - timedelta(days=pcfg.news_days)
+            releases = mfn.releases([rows_by_ticker[t] for t in pool if t in rows_by_ticker],
+                                    since, cfg.db_path.parent / "mfn_slugs.json")
+        result = run_prescreen(pool, list(screened), forced, pcfg, cfg.screener.top_n, releases)
+    except Exception as exc:
+        click.echo(f"      ⚠ Pre-screen failed; the mechanical list goes to the model: {exc}",
+                   err=True)
+        return screened
+    if not dry_run:
+        try:
+            path = write_record(cfg, run_id, mode, result, pool, list(screened), forced, note)
+            click.echo(f"      Recorded: {path}")
+        except OSError as exc:
+            click.echo(f"      ⚠ Pre-screen record not written: {exc}", err=True)
+    added = [t for t in result.selected if t not in screened]
+    click.echo(f"      {result.status}: {len(result.tags)} tagged"
+               + (f", {result.error}" if result.error else "")
+               + f"; its list differs from the screener's by {len(added)} name(s).")
+    if live and result.status != "unavailable":
+        return {t: features[t] for t in result.selected if t in features}
+    return screened
+
+
 def _print_feature_table(features, cfg):
-    from fundmgr.data.prices import TickerFeatures
     if not features:
         click.echo("  No features available.")
         return
@@ -883,18 +988,44 @@ def cash_flows():
     click.echo(f"  Money put in:     {invested(cfg.capital_sek, flows):>12,.0f} SEK\n")
 
 
+def _describe_txn(txn) -> str:
+    direction = "BUY" if txn.side == "buy" else "SELL"
+    return (f"{direction} {txn.shares:g} × {txn.ticker} @ {txn.price_sek:.2f} SEK "
+            f"(fee {txn.fee_sek:.2f} SEK, {txn.timestamp.strftime('%Y-%m-%d %H:%M')}, {txn.source})")
+
+
 @cli.command("undo-fill")
-def undo_fill():
-    """Reverse the most recent fill (position + cash restored, transaction deleted)."""
+@click.option("--show", is_flag=True, help="Print the most recent fill; change nothing.")
+@click.option("--json", "as_json", is_flag=True, help="With --show: print it as JSON.")
+@click.option("--expect", type=int, default=None, metavar="ID",
+              help="Undo only if the most recent fill is still this one.")
+def undo_fill(show: bool, as_json: bool, expect: int | None):
+    """Reverse the most recent fill (position + cash restored, transaction deleted).
+
+    A fill booked from Montrose is offered again by the next reconcile. Today's
+    NAV point is re-marked when the undone fill was today's.
+    """
     cfg, store = _get_store()
-    txn = store.undo_last_fill()
+    if show:
+        txn = store.last_transaction()
+        if as_json:
+            click.echo(json.dumps({"id": txn.id, "summary": _describe_txn(txn),
+                                   "source": txn.source} if txn else {}))
+        else:
+            click.echo(_describe_txn(txn) if txn else "No transactions to undo.")
+        return
+    try:
+        txn = store.undo_last_fill(expected_id=expect)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     if txn is None:
         click.echo("No transactions to undo.")
         return
-    direction = "BUY" if txn.side == "buy" else "SELL"
-    click.echo(f"✓ Undone: {direction} {txn.shares} × {txn.ticker} @ {txn.price_sek:.2f} SEK  "
-               f"(fee {txn.fee_sek:.2f} SEK, recorded {txn.timestamp.strftime('%Y-%m-%d %H:%M')})")
+    click.echo(f"✓ Undone: {_describe_txn(txn)}")
+    if txn.source == "montrose":
+        click.echo("  It was booked from Montrose, so the next reconcile offers it again.")
     click.echo(f"  Cash now: {store.get_cash():,.0f} SEK")
+    _mark_after_ledger_change(cfg, store, datetime.utcnow().strftime("%Y-%m-%d"))
 
 
 @cli.command("backfill-nav")
@@ -1857,6 +1988,42 @@ def insider_study_cmd(years: int):
     click.echo(format_study(result))
 
 
+@cli.command("prescreen-check")
+def prescreen_check_cmd():
+    """Send one fixed sample batch to the local pre-screen model and show its tags.
+
+    For setting up the local server: checks that prescreen.base_url answers,
+    that the model returns valid JSON in the expected shape, and how long a
+    batch takes. Works while prescreen.enabled is still false. No fund data
+    is sent.
+    """
+    import time as _time
+
+    from fundmgr.engine.client import call_local_json
+    from fundmgr.engine.prescreen import SYSTEM, PrescreenBatch
+
+    cfg, _store = _get_store()
+    sample = (
+        "## ALFA-B.ST — Alfa Industrial AB (Industrials)\n"
+        "- 2026-10-28 press release (regulatory, report): Alfa Industrial Q3 2026: order intake "
+        "up 31%, operating margin 14.2% (11.0) — CEO: demand remained strong across segments.\n\n"
+        "## BETA.ST — Beta Health AB (Health Care)\n"
+        "- 2026-10-27 news: Beta Health holder sells 4% stake in overnight placement at a 6% discount\n\n"
+        "## GAMMA.ST — Gamma Software AB (Technology)\n(no news in the window)"
+    )
+    started = _time.monotonic()
+    try:
+        parsed, raw = call_local_json(SYSTEM, sample, cfg.prescreen, PrescreenBatch)
+    except LLMError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"✓ {cfg.prescreen.model_id} answered in {_time.monotonic() - started:.1f}s "
+               f"with {len(parsed.tags)} tag(s) (expected 3):")
+    for tag in parsed.tags:
+        click.echo(f"  {tag.ticker:<10} material={tag.material_news!s:<5} {tag.news_type:<14} "
+                   f"{tag.direction:<8} {tag.note}")
+    click.echo("  Expected roughly: ALFA report/positive, BETA index_or_flow, GAMMA none.")
+
+
 @cli.command("report-watch")
 @click.option("--dry-run", is_flag=True,
               help="Detect and show what would be judged. No model calls, nothing written.")
@@ -1968,7 +2135,6 @@ def check_news(auto_run: bool, max_age_hours: int):
 
     # ── Print and notify ──────────────────────────────────────────────────────
     held_triggers = [t for t in triggers if t["is_held"]]
-    watch_triggers = [t for t in triggers if not t["is_held"]]
 
     click.echo(f"\n  {len(triggers)} trigger(s) found:")
     for t in triggers:
@@ -2597,7 +2763,6 @@ def _all_learning_books_with_configs() -> list[tuple[str, object, Store]]:
         except Exception as exc:
             click.echo(f"  ⚠ skipping paper book {meta['slug']}: {exc}")
             continue
-        from fundmgr.config import AppConfig
         cfg = AppConfig(benchmark=paper_meta["benchmark"])
         books.append((f"{meta['name']} [paper/{meta['slug']}]", cfg, store))
 
@@ -2713,17 +2878,14 @@ def fundamentals_check(ticker: str):
     Every metric the kill-criterion analyser can offer needs data behind it: a
     key that is always None shows up as a watched line on the dashboard but can
     never evaluate. yfinance `.info` is a passthrough of Yahoo's payload, so a
-    mis-mapped key name fails silently — run this after changing financedata's
-    _FIELD_MAP to confirm the new keys actually arrive.
+    mis-mapped key name fails silently — run this after changing FIELD_MAP in
+    data/fundamentals.py to confirm the new keys actually arrive.
     """
     tkr = ticker.upper()
-    try:
-        from financedata import get_fundamentals
-    except ImportError as e:
-        raise click.ClickException(f"financedata is not installed: {e}")
+    from fundmgr.data.fundamentals import fetch_info
     from fundmgr.evidence import FUND_FIELD_META
 
-    data = (get_fundamentals([tkr], ttl_days=0) or {}).get(tkr)
+    data = fetch_info(tkr)
     if not data:
         raise click.ClickException(
             f"No fundamentals returned for {tkr} — bad ticker, or the fetch failed.")

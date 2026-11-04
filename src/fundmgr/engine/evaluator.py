@@ -21,7 +21,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[DecisionOutcome]:
+def fx_symbol(currency: str) -> str:
+    return f"{currency.upper()}SEK=X"
+
+
+def _fx_on(store: Store, currency: str, day: str) -> float | None:
+    close = store.close_on_or_before(fx_symbol(currency), day, max_delta_days=7)
+    return close[1] if close else None
+
+
+def evaluate_pending_outcomes(store: Store, lookback_days: int = 28, *,
+                              currency_of: dict[str, str] | None = None) -> list[DecisionOutcome]:
     """
     For each pending outcome older than lookback_days, compute return vs
     benchmark over a *fixed* horizon and persist. Returns the evaluated outcomes.
@@ -31,6 +41,13 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
     is persisted regardless of when this evaluator runs. When the cache has no
     close on or before that target, the outcome stays pending. A later live
     quote must not masquerade as a fixed-horizon observation.
+
+    `currency_of` ({ticker: quote currency}) is given for a fund that books in
+    SEK against a SEK benchmark: a foreign name's return is then its SEK return,
+    from the cached `XXXSEK=X` closes at both ends. Scored in its own currency, a
+    NOK or EUR pick was compared with the OMXSPI net of a currency move as large
+    as the excess return being measured. A name with either rate missing stays
+    pending rather than be scored in the wrong currency.
     """
     pending = store.get_pending_outcomes(older_than_days=lookback_days)
     if not pending:
@@ -45,7 +62,15 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
         if eval_price is None:
             continue
 
-        position_return = (eval_price / _entry_price(store, outcome) - 1) * 100
+        growth = eval_price / _entry_price(store, outcome)
+        currency = (currency_of or {}).get(outcome.ticker, "SEK").upper()
+        if currency_of is not None and currency != "SEK":
+            fx_start = _fx_on(store, currency, outcome.decision_date)
+            fx_end = _fx_on(store, currency, eval_date)
+            if not fx_start or not fx_end:
+                continue
+            growth *= fx_end / fx_start
+        position_return = (growth - 1) * 100
 
         # Benchmark over the same window as the position: decision date -> eval date.
         bench_return = get_benchmark_return_pct(
@@ -518,10 +543,11 @@ def _call_for_learning_consolidations(
 
 CALIBRATION_MIN_SAMPLE = 20  # evaluated buys in a bucket before its rate is reported
 
+# The schema's own bands (state/store.conviction_band); "low" is its starter band.
 _BUCKET_LABELS = {
-    "high":   "high (>=0.7)",
-    "medium": "medium (0.4-0.7)",
-    "low":    "low (<0.4)",
+    "high":   "high (>=0.75)",
+    "medium": "medium (0.55-0.75)",
+    "low":    "starter (<0.55)",
 }
 
 

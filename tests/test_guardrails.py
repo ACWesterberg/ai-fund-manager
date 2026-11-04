@@ -3,7 +3,6 @@ Guardrail unit tests — these are the safety-critical rules; they must be bulle
 """
 from __future__ import annotations
 
-from datetime import datetime
 
 import pytest
 

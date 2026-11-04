@@ -200,7 +200,7 @@ def store(tmp_path):
 
 
 def test_refresh_merges_and_does_not_clobber_info_keys(monkeypatch, store):
-    """financedata owns the .info keys and rewrites the blob; these fold in."""
+    """The fundamentals fetch owns the .info keys; these fold in beside them."""
     store.save_fundamentals("BALD-B.ST", {"revenue_growth": 0.04, "pe_ratio": 12.0})
     monkeypatch.setattr(statements, "fetch_frames", lambda t: _frames())
 

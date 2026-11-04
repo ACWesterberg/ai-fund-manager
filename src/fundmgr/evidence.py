@@ -50,17 +50,17 @@ MAX_NEWS_ITEMS = 8
 
 # Fundamentals put in front of the judge, in reading order.
 #
-# Every key here must be one financedata's `_FIELD_MAP` actually returns with a
+# Every key here must be one `data/fundamentals.FIELD_MAP` actually returns with a
 # value. The analyser offers this list to the model as the menu of checkable
 # metrics, so an entry with no data behind it invites a rule that can never
 # evaluate — it would show as a watched line on the dashboard and report
 # "unread" forever. `fund fundamentals-check TICKER` verifies both directions.
 #
-# `price_to_sales` is deliberately absent: financedata still maps it, but Yahoo
+# `price_to_sales` is deliberately absent: the fetch still maps it, but Yahoo
 # returns null for it (checked against VOLV-B.ST and AAPL), so it is a mapped
 # key with no data — exactly the case this list must not carry.
 #
-# `is_fraction` marks the values yfinance returns as 0–1 (financedata stores
+# `is_fraction` marks the values yfinance returns as 0–1 (the fetch stores
 # them raw). Those render and compare as percentages, so a rule written
 # "below 8" means 8%. The rest compare in their own units; the cash and debt
 # figures are in the company's own reporting currency.

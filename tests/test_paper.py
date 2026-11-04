@@ -11,50 +11,7 @@ from fundmgr import paper
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-# ── Fixtures: isolate PAPER_DIR + mock all market data ────────────────────────
-
-FAKE_NATIVE = {"AAPL": 200.0, "MSFT": 500.0, "VOLV-B.ST": 300.0}
-FAKE_FX = {"USD": 10.0, "SEK": 1.0}
-
-
-@pytest.fixture
-def paper_dir(tmp_path, monkeypatch):
-    d = tmp_path / "paper"
-    monkeypatch.setattr(paper, "PAPER_DIR", d)
-    return d
-
-
-@pytest.fixture
-def mock_market(monkeypatch):
-    import fundmgr.data.fx as fx
-    import fundmgr.data.quotes as quotes
-
-    monkeypatch.setattr(quotes, "live_prices", lambda tickers: {t: FAKE_NATIVE.get(t) for t in tickers})
-    monkeypatch.setattr(fx, "rate_to_sek", lambda cur, store=None: FAKE_FX.get(cur.upper()))
-    monkeypatch.setattr(
-        paper, "detect_currency",
-        lambda t: "SEK" if t.endswith(".ST") else "USD",
-    )
-
-    def fake_bench(store, symbol="URTH", **kwargs):
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        store.save_benchmark([{"date": today, "close": 100.0}])
-        return True
-
-    import fundmgr.data.benchmark as benchmark
-    monkeypatch.setattr(benchmark, "fetch_and_cache_benchmark", fake_bench)
-
-    def fake_history(store, tickers, lookback_days=40):
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        for t in tickers:
-            if t in FAKE_NATIVE:
-                store.save_prices(t, [{
-                    "date": today, "open": FAKE_NATIVE[t], "high": FAKE_NATIVE[t],
-                    "low": FAKE_NATIVE[t], "close": FAKE_NATIVE[t], "volume": 1000,
-                }])
-
-    monkeypatch.setattr(paper, "_cache_price_history", fake_history)
-    monkeypatch.setattr(paper, "_search_symbol", lambda name: None)  # no network
+# Fixtures (isolated PAPER_DIR, mocked market data) live in conftest.py.
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

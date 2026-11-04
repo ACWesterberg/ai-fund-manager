@@ -13,6 +13,7 @@ Commands:
   /review [TICKER] — stop-loss review (no ticker = scan all breaches)
   /reportcheck [TICKER] — read a holding's latest report against its thesis
   /target [TICKER] — take-profit review (no ticker = every position at target)
+  /undo — show the most recent fill and reverse it after a confirming tap
   /setcash AMOUNT — correct the cash balance (SEK)
   /deposit AMOUNT [note] — new money in (not profit); /withdraw for money out
   /proof [SLUG] TICKER yes|no — answer the post-earnings proof question
@@ -417,6 +418,48 @@ async def _cash_flow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", ver
     note = " ".join(args[1:])
     output = _run_cli(verb, f"{amount:.2f}", *(["--note", note] if note else []), timeout=30)
     await _send(update, output)
+
+
+async def cmd_undo(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """/undo — show the most recent fill, and reverse it on a tap."""
+    ok, output = _run_cli_ok("undo-fill", "--show", "--json", timeout=30)
+    try:
+        last = json.loads(output) if ok else None
+    except ValueError:
+        last = None
+    if not ok or last is None:
+        await _send(update, output)
+        return
+    if not last:
+        await update.message.reply_text("No fills to undo.")
+        return
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("↩ Undo it", callback_data=f"undo:{last['id']}"),
+        InlineKeyboardButton("Keep it", callback_data="undo:keep"),
+    ]])
+    await update.message.reply_text(f"Undo the most recent fill?\n{last['summary']}",
+                                    reply_markup=keyboard)
+
+
+async def undo_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """The /undo buttons. The CLI undoes only if that fill is still the most
+    recent, so a stale or repeated tap cannot reverse a later one."""
+    import asyncio
+
+    query = update.callback_query
+    await query.answer()
+    m = re.fullmatch(r"undo:(\d+|keep)", query.data or "")
+    if not m:
+        return
+    await query.edit_message_reply_markup(reply_markup=None)
+    original = query.message.text if query.message else ""
+    if m.group(1) == "keep":
+        await query.edit_message_text(f"{original}\n\nKept — nothing changed.")
+        return
+    ok, output = await asyncio.to_thread(_run_cli_ok, "undo-fill", "--expect", m.group(1),
+                                         timeout=120)
+    result = output if ok else f"❌ Nothing undone.\n{output}"
+    await query.edit_message_text(f"{original}\n\n{result}"[:4000])
 
 
 async def cmd_deposit(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -835,6 +878,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> No
         "/run_full — full run with FinBERT sentiment\n"
         "/fill TICKER SHARES PRICE FEE [side] [again] — record a fill\n"
         "         e.g. /fill VOLV-B.ST 12 291.50 2.91\n"
+        "/undo — show the most recent fill and reverse it (asks first)\n"
         "/status — current portfolio snapshot\n"
         "/report — performance vs OMXSPI\n"
         "/stops — check stop-loss alerts\n"
@@ -1158,7 +1202,7 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     _pending_fills[chat_id] = pending
 
     data = pending
-    lines = [f"🧾 <b>Confirm fill</b>\n"]
+    lines = ["🧾 <b>Confirm fill</b>\n"]
     lines.append(f"Ticker: <b>{text}</b>")
     lines.append(f"Side: <b>{data['side'].upper()}</b>")
     lines.append(f"Shares: <b>{data['shares']}</b>")
@@ -1229,6 +1273,7 @@ def main() -> None:
         "run": cmd_run,
         "run_full": cmd_run_full,
         "fill": cmd_fill,
+        "undo": cmd_undo,
         "status": cmd_status,
         "report": cmd_report,
         "stops": cmd_stops,
@@ -1265,6 +1310,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(fill_callback, pattern="^fill_"))
     app.add_handler(CallbackQueryHandler(montrose_import_callback, pattern=r"^mi:(book|skip):\d+$"))
+    app.add_handler(CallbackQueryHandler(undo_callback, pattern=r"^undo:(\d+|keep)$"))
     # Before text_handler: within a group only the first matching handler runs.
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r"(localhost|127\.0\.0\.1):8765/callback"),

@@ -5,8 +5,9 @@ from datetime import datetime
 from pathlib import Path
 
 from fundmgr import regions, styles
-from fundmgr.config import AppConfig, UniverseTicker
+from fundmgr.config import AppConfig
 from fundmgr.data.benchmark import get_benchmark_return_pct
+from fundmgr.data.fundamentals import ownership_lines
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.state.models import Learning, PortfolioSnapshot
 from fundmgr.state.store import Store
@@ -299,11 +300,20 @@ def _signal_score(f: TickerFeatures) -> float:
     return score
 
 
+OWNERSHIP_NOTE = (
+    "Owners lines are Yahoo's share of the capital held by insiders and by "
+    "institutions. They count capital, not votes, and can miss or misfile a "
+    "controlling owner (a founder's A-shares, a foundation, a holding company), "
+    "so read them as a rough hint, never as who controls the company."
+)
+
+
 def _features_block(
     features: dict[str, TickerFeatures],
     current_tickers: set[str],
     show_region: bool = False,
     show_style: bool = False,
+    ownership: dict[str, str] | None = None,
 ) -> str:
     held = {t: f for t, f in features.items() if t in current_tickers}
     rest = {t: f for t, f in features.items() if t not in current_tickers}
@@ -322,12 +332,20 @@ def _features_block(
         f"Remaining {total_universe - shown} had no notable signal this run.)\n"
     )
 
+    if ownership:
+        lines.append(OWNERSHIP_NOTE + "\n")
+
+    def block(f: TickerFeatures) -> str:
+        text = f.to_prompt_block(show_region=show_region, show_style=show_style)
+        owners = (ownership or {}).get(f.ticker)
+        return f"{text}\n  {owners}" if owners else text
+
     for f in held.values():
-        lines.append("★ " + f.to_prompt_block(show_region=show_region, show_style=show_style))
+        lines.append("★ " + block(f))
         lines.append("")
 
     for f in top_candidates:
-        lines.append("  " + f.to_prompt_block(show_region=show_region, show_style=show_style))
+        lines.append("  " + block(f))
         lines.append("")
 
     return "\n".join(lines)
@@ -407,6 +425,8 @@ def build_prompt(
         features, current_tickers,
         show_region=bool(cfg.risk.region_targets),
         show_style=bool(cfg.risk.style_targets),
+        ownership=(ownership_lines(store, list(features))
+                   if cfg.data.ownership_in_prompt else None),
     )
 
     fields = {

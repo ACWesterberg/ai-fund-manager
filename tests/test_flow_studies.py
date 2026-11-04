@@ -66,6 +66,33 @@ def test_the_register_is_read_two_weeks_at_a_time():
     assert len(trades) == 2
 
 
+def test_a_dropped_connection_or_server_error_is_retried_not_fatal():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        if len(calls) == 2:
+            return httpx.Response(503)
+        return httpx.Response(200, content=export(row()))
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        trades = fetch_trades(date(2026, 10, 1), date(2026, 10, 10), client=client,
+                              pause=0, backoff=0)
+    assert len(calls) == 3 and len(trades) == 1
+
+
+def test_a_fortnight_that_keeps_failing_still_says_so():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.ConnectError):
+            fetch_trades(date(2026, 10, 1), date(2026, 10, 10), client=client,
+                         pause=0, retries=2, backoff=0)
+
+
 def trade(person: str, day: int, side: str = "buy", shares: float = 10_000, price: float = 20):
     return InsiderTrade(published=datetime(2026, 9, day, 18), traded=date(2026, 9, day),
                         issuer="Alfa AB", isin="SE1", person=person, role="VD", side=side,

@@ -110,8 +110,24 @@ def parse_export(raw: bytes) -> list[InsiderTrade]:
     return trades
 
 
+def _export(client: httpx.Client, params: dict, retries: int, backoff: float) -> bytes:
+    """One fortnight's export, retried. FI drops a connection now and then, and
+    one dropped request used to end a three-year read on its first fortnight."""
+    for attempt in range(retries + 1):
+        try:
+            resp = client.get(EXPORT_URL, params=params)
+            if resp.status_code < 500 or attempt == retries:
+                resp.raise_for_status()
+                return resp.content
+        except httpx.TransportError:
+            if attempt == retries:
+                raise
+        time.sleep(backoff * 2 ** attempt)
+    raise AssertionError("unreachable")
+
+
 def fetch_trades(start: date, end: date, *, client: httpx.Client | None = None,
-                 pause: float = 0.5) -> list[InsiderTrade]:
+                 pause: float = 0.5, retries: int = 3, backoff: float = 2.0) -> list[InsiderTrade]:
     """Every filing published from `start` to `end`, fetched two weeks at a time."""
     own = client is None
     client = client or httpx.Client(timeout=60, follow_redirects=True,
@@ -121,14 +137,12 @@ def fetch_trades(start: date, end: date, *, client: httpx.Client | None = None,
         lo = start
         while lo <= end:
             hi = min(end, lo + timedelta(days=CHUNK_DAYS - 1))
-            resp = client.get(EXPORT_URL, params={
+            trades += parse_export(_export(client, {
                 "SearchFunctionType": "Insyn", "Utgivare": "", "PersonILedandeStallningNamn": "",
                 "Transaktionsdatum.From": "", "Transaktionsdatum.To": "",
                 "Publiceringsdatum.From": lo.isoformat(), "Publiceringsdatum.To": hi.isoformat(),
                 "button": "export",
-            })
-            resp.raise_for_status()
-            trades += parse_export(resp.content)
+            }, retries, backoff))
             lo = hi + timedelta(days=1)
             if lo <= end and pause:
                 time.sleep(pause)

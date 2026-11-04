@@ -307,15 +307,25 @@
     payload.holdings.forEach((h, i) => rowsBody.appendChild(buildRow(h, i)));
     updateCount();
 
-    const bits = [];
-    bits.push(`${payload.holdings.length} holdings read by ${payload.model}` +
-              (payload.ocr_used ? ' (with local OCR cross-check)' : ''));
+    // Built as nodes: the notes and warnings are the photo model's own words.
+    notesBox.replaceChildren();
+    const bits = [document.createTextNode(
+      `${payload.holdings.length} holdings read by ${payload.model}` +
+      (payload.ocr_used ? ' (with local OCR cross-check)' : ''))];
     if (payload.unresolved) {
-      bits.push(`<span class="text-amber-400">${payload.unresolved} row(s) without a ticker — ` +
-                `type the Yahoo symbol, or untick to skip</span>`);
+      const span = document.createElement('span');
+      span.className = 'text-amber-400';
+      span.textContent = `${payload.unresolved} row(s) without a ticker — ` +
+                         'type the Yahoo symbol, or untick to skip';
+      bits.push(span);
     }
-    if (payload.notes) bits.push(payload.notes);
-    notesBox.innerHTML = bits.join(' · ') + renderWarnings(payload.warnings || []);
+    if (payload.notes) bits.push(document.createTextNode(payload.notes));
+    bits.forEach((node, i) => {
+      if (i) notesBox.append(' · ');
+      notesBox.append(node);
+    });
+    const warnings = renderWarnings(payload.warnings || []);
+    if (warnings) notesBox.append(warnings);
 
     if (payload.account_name && !nameInput.value) nameInput.value = payload.account_name;
     if (payload.cash_sek) cashInput.value = Math.round(payload.cash_sek);
@@ -329,7 +339,7 @@
   // The same issue on thirteen rows is one finding, not thirteen. Group by the
   // message and name the rows, so the panel stays readable at any book size.
   function renderWarnings(warnings) {
-    if (!warnings.length) return '';
+    if (!warnings.length) return null;
     const groups = new Map();
     warnings.forEach(w => {
       const at = w.indexOf(': ');
@@ -338,14 +348,22 @@
       if (!groups.has(what)) groups.set(what, []);
       if (who) groups.get(what).push(who);
     });
-    const items = [...groups.entries()].map(([what, who]) => {
+    const ul = document.createElement('ul');
+    ul.className = 'mt-2 space-y-1 text-amber-400 list-disc pl-4';
+    for (const [what, who] of groups) {
+      const li = document.createElement('li');
       const label = who.length > 3
         ? `${who.length} rows (${who.slice(0, 3).join(', ')}…)`
         : who.join(', ');
-      return `<li>${label ? `<b>${label}</b> — ` : ''}${what}</li>`;
-    });
-    return '<ul class="mt-2 space-y-1 text-amber-400 list-disc pl-4">' +
-           items.join('') + '</ul>';
+      if (label) {
+        const b = document.createElement('b');
+        b.textContent = label;
+        li.append(b, ' — ');
+      }
+      li.append(what);
+      ul.append(li);
+    }
+    return ul;
   }
 
   function cell(row, child) {

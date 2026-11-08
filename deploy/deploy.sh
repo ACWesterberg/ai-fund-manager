@@ -46,15 +46,26 @@ check_financedata_branch() {
 }
 
 mkdir -p "$(dirname "$LOG_FILE")"
-# Serialize webhook, polling and SSH deployments.
-if command -v flock >/dev/null 2>&1; then
-    exec 9>"$REPO_DIR/data/deploy.lock"
-    flock -n 9 || { log "Another deployment is running"; exit 0; }
-else
-    # macOS has no flock; shlock writes our pid and clears a lock whose pid has died.
-    shlock -f "$REPO_DIR/data/deploy.pid" -p $$ || { log "Another deployment is running"; exit 0; }
-    trap 'rm -f "$REPO_DIR/data/deploy.pid"' EXIT
+# A host the fund has moved off (deploy/MIGRATE-TO-MAC.md) must never be deployed to
+# again: systemctl restart would start its disabled services (a second bot on the same
+# token) and managed_cron.sh would put the old jobs back in its crontab. Fail, so a
+# deploy still pointed here is noticed (the workflow reports failures on Telegram).
+if [ -f "$REPO_DIR/data/moved-to-mac" ]; then
+    log "✗ This host is retired: the fund runs on the Mac ($(cat "$REPO_DIR/data/moved-to-mac")). Not deploying."
+    exit 1
 fi
+# Serialize webhook, polling and SSH deployments.
+# A re-exec (below) inherits fd 9 and with it the lock already held; on macOS, where
+# there is no flock, exec keeps the pid shlock recorded.
+if [ -z "${DEPLOY_REEXEC:-}" ]; then
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$REPO_DIR/data/deploy.lock"
+        flock -n 9 || { log "Another deployment is running"; exit 0; }
+    else
+        shlock -f "$REPO_DIR/data/deploy.pid" -p $$ || { log "Another deployment is running"; exit 0; }
+    fi
+fi
+command -v flock >/dev/null 2>&1 || trap 'rm -f "$REPO_DIR/data/deploy.pid"' EXIT
 SUCCESS_FILE="$REPO_DIR/data/deployed-revision"
 log "=== Deploy started (branch: $BRANCH) ==="
 
@@ -81,9 +92,18 @@ if [ -n "${EXPECTED_REVISION:-}" ] && [ "$TARGET" != "$EXPECTED_REVISION" ]; the
     log "Branch advanced beyond the tested revision — aborting; run checks again"
     exit 1
 fi
-BEFORE=$(git rev-parse HEAD)
+BEFORE="${DEPLOY_BEFORE:-$(git rev-parse HEAD)}"
 git reset --hard "origin/$BRANCH" --quiet
 AFTER=$(git rev-parse HEAD)
+
+# The reset replaces this file with a new one, but bash keeps reading the old
+# copy it has open — so a deploy that changes deploy.sh used to finish on the
+# previous version (the managed-cron step first shipped that way and did not
+# run). Carry on in the updated copy instead, once.
+if [ -z "${DEPLOY_REEXEC:-}" ] && ! git diff --quiet "$BEFORE" "$AFTER" -- deploy/deploy.sh; then
+    log "deploy.sh itself changed — continuing in the updated copy"
+    DEPLOY_REEXEC=1 DEPLOY_BEFORE="$BEFORE" exec bash "$REPO_DIR/deploy/deploy.sh"
+fi
 
 if [ -f "$SUCCESS_FILE" ] && [ "$(cat "$SUCCESS_FILE")" = "$AFTER" ]; then
     log "Already up to date ($AFTER). Nothing to do."
@@ -129,6 +149,20 @@ if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ];
     else
         log "  ⚠ Universe sync skipped or failed — using committed CSVs"
     fi
+fi
+
+# Cron jobs owned by the code (deploy/managed_cron.sh): a marked block only,
+# the rest of the crontab stays hand-maintained. Advisory — never fails a deploy.
+# On macOS the same jobs are launchd jobs, regenerated from cron.example plus that
+# block (only changed ones reload), so a Mac never runs fund jobs from cron, which
+# skips what the Mac slept through.
+if [ "$(uname -s)" = "Darwin" ]; then
+    if [ -f "$REPO_DIR/deploy/macos/launchd.py" ]; then
+        "$REPO_DIR/.venv/bin/python" "$REPO_DIR/deploy/macos/launchd.py" install 2>&1 \
+            | while read -r line; do log "  $line"; done || true
+    fi
+elif [ -f "$REPO_DIR/deploy/managed_cron.sh" ]; then
+    bash "$REPO_DIR/deploy/managed_cron.sh" "$REPO_DIR" 2>&1 | while read -r line; do log "  $line"; done || true
 fi
 
 log "Restarting services…"

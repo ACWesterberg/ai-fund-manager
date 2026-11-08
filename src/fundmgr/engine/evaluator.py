@@ -45,7 +45,7 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
         if eval_price is None:
             continue
 
-        position_return = (eval_price / outcome.price_at_decision - 1) * 100
+        position_return = (eval_price / _entry_price(store, outcome) - 1) * 100
 
         # Benchmark over the same window as the position: decision date -> eval date.
         bench_return = get_benchmark_return_pct(
@@ -67,6 +67,26 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
         evaluated.append(outcome)
 
     return evaluated
+
+
+# Further from the stored decision price than a normal decision-day move: a
+# 6:5 split (−16.7%) clears it, a dividend adjustment of a few percent doesn't.
+REBASE_TOLERANCE = 0.15
+
+
+def _entry_price(store: Store, outcome: DecisionOutcome) -> float:
+    """The decision price on the same basis as the evaluation close.
+
+    `price_at_decision` is frozen when the run decides, but every run rewrites
+    the price cache with split-adjusted history, so after a split the two no
+    longer share a basis and a 2:1 split scored as −50%. When the cache's own
+    close for the decision day is further from the stored price than a day
+    can move, the history was rebased and both ends come from it.
+    """
+    cached = store.close_on_or_before(outcome.ticker, outcome.decision_date, max_delta_days=7)
+    if cached is not None and abs(cached[1] / outcome.price_at_decision - 1) > REBASE_TOLERANCE:
+        return cached[1]
+    return outcome.price_at_decision
 
 
 def _evaluation_price(

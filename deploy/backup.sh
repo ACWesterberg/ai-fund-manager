@@ -13,7 +13,7 @@
 # Env overrides:
 #   RCLONE_REMOTE    rclone remote:path         (default "gdrive:fund-manager-backups")
 #   RETENTION_DAYS   keep backups newer than N  (default 14)
-#   BACKUP_ENV       "1" to also back up .env    (default 0 — contains secrets!)
+#   BACKUP_ENV       "1" to also back up .env and the Montrose token (default 0 — secrets!)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,8 +33,13 @@ LOG "=== Backup $STAMP ==="
 PY="$REPO_DIR/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
 args=(export --live --no-logs --no-financedata-cache --out "data/backups/$ARCHIVE")
-[ "$BACKUP_ENV" = "1" ] || args+=(--no-env)
-"$PY" deploy/migrate.py --root "$REPO_DIR" "${args[@]}" | sed 's/^/  /'
+[ "$BACKUP_ENV" = "1" ] || args+=(--no-secrets)
+# A database failing its integrity check makes export exit 1 after writing the archive:
+# upload it anyway (a damaged copy of one file beats no copy of all of them) and say so.
+if ! "$PY" deploy/migrate.py --root "$REPO_DIR" "${args[@]}" | sed 's/^/  /'; then
+    [ -f "data/backups/$ARCHIVE" ] || { LOG "  ✗ export failed, no archive written"; exit 1; }
+    LOG "  ⚠ export reported a problem (above); keeping and uploading the archive anyway"
+fi
 LOG "  archived data/backups/$ARCHIVE ($(du -h "data/backups/$ARCHIVE" | cut -f1))"
 
 if command -v rclone >/dev/null 2>&1; then

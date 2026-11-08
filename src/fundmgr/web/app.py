@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
 
 from fundmgr.config import load_config, load_universe
-from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
+from fundmgr.reporting.dashboard import benchmark_label, compute_stats, gain, invested, nav_chart_json
 from fundmgr.state.store import Store
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -57,9 +57,11 @@ app.include_router(make_sim_router(
 
 # Paper portfolios — user-created from pasted LLM picks, tracked like the sims.
 # Live sleeves — real monitored books imported via `fund paper-import`.
-from fundmgr.web.paper import router as paper_router, live_router  # noqa: E402
+from fundmgr.web.paper import router as paper_router, live_router, account_router  # noqa: E402
 app.include_router(paper_router)
 app.include_router(live_router)
+# Broker accounts — real books you trade yourself, synced from holdings snapshots.
+app.include_router(account_router)
 
 # What-If Lab — generate a fresh hypothetical portfolio for any fund profile.
 from fundmgr.web.whatif import router as whatif_router  # noqa: E402
@@ -67,6 +69,8 @@ app.include_router(whatif_router)
 
 # Use Jinja2 directly — Starlette's Jinja2Templates has a cache bug on Python 3.14
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
+from fundmgr.web.nav import install as _install_nav  # noqa: E402
+_install_nav(_jinja_env)
 
 
 def _render(template_name: str, context: dict) -> HTMLResponse:
@@ -130,7 +134,7 @@ def index(request: Request):
     cash = store.get_cash()
     fees_paid = store.total_fees_paid()
     nav_history = store.get_nav_history()
-    stats = compute_stats(nav_history, cfg.capital_sek)
+    stats = compute_stats(nav_history, cfg.capital_sek, store.get_cash_flows())
 
     universe = load_universe(cfg.universe_path)
     name_map = {t.yahoo_ticker: t.name for t in universe}
@@ -217,8 +221,10 @@ def index(request: Request):
         except Exception:
             pass
 
-    pnl_sek = round(nav - cfg.capital_sek, 0)
-    pnl_pct = round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0
+    flows = store.get_cash_flows()
+    gain_sek, gain_pct = gain(nav, cfg.capital_sek, flows)
+    pnl_sek, pnl_pct = round(gain_sek, 0), round(gain_pct, 2)
+    invested_sek = round(invested(cfg.capital_sek, flows), 0)
 
     from fundmgr.web.views import open_reviews_context, recent_reviews_context
 
@@ -243,6 +249,7 @@ def index(request: Request):
         "last_run": last_run,
         "pnl_sek": pnl_sek,
         "pnl_pct": pnl_pct,
+        "invested_sek": invested_sek,
         "active_page": "portfolio",
         "benchmark_label": benchmark_label(cfg.benchmark),
     })
@@ -352,14 +359,14 @@ async def transactions(request: Request):
 async def api_nav():
     cfg, store = _get_deps()
     nav_history = store.get_nav_history()
-    return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark)))
+    return json.loads(nav_chart_json(nav_history, benchmark_label(cfg.benchmark), store.get_cash_flows()))
 
 
 @app.get("/api/stats")
 async def api_stats():
     cfg, store = _get_deps()
     nav_history = store.get_nav_history()
-    return compute_stats(nav_history, cfg.capital_sek)
+    return compute_stats(nav_history, cfg.capital_sek, store.get_cash_flows())
 
 
 @app.get("/api/positions")
@@ -453,12 +460,13 @@ async def api_kiosk():
         for p in positions
     ])["rows"]
 
+    gain_sek, gain_pct = gain(nav, cfg.capital_sek, store.get_cash_flows())
     return {
         "nav": round(nav, 0),
         "currency": "SEK",
         "cash_pct": round(cash / nav * 100, 1) if nav > 0 else 100.0,
-        "pnl_sek": round(nav - cfg.capital_sek, 0),
-        "pnl_pct": round((nav / cfg.capital_sek - 1) * 100, 2) if cfg.capital_sek else 0.0,
+        "pnl_sek": round(gain_sek, 0),
+        "pnl_pct": round(gain_pct, 2),
         "holdings": holdings,
         "decisions": [
             {

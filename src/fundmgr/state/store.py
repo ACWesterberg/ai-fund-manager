@@ -50,6 +50,82 @@ CREATE TABLE IF NOT EXISTS nav_history (
     cash_sek            REAL NOT NULL
 );
 
+-- The report-reaction experiment: one row per report that moved a stock, with
+-- the model's verdict on whether the move was justified and the abnormal
+-- returns that followed. Research data, not book state — reset keeps it.
+CREATE TABLE IF NOT EXISTS report_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker              TEXT NOT NULL,
+    report_date         TEXT NOT NULL,
+    event_date          TEXT NOT NULL,       -- close the reaction is measured to; entry point
+    reaction_pct        REAL NOT NULL,
+    abnormal_pct        REAL NOT NULL,       -- reaction minus the benchmark's
+    volume_ratio        REAL,
+    source              TEXT NOT NULL,       -- calendar | news
+    eps_estimate        REAL,                -- consensus EPS, where Yahoo carries it
+    eps_reported        REAL,
+    eps_surprise_pct    REAL,
+    verdict             TEXT,                -- overreaction | justified | unclear | NULL
+    confidence          REAL,
+    what_changed        TEXT,
+    temporary_factors   TEXT,
+    structural_factors  TEXT,
+    expectations        TEXT,
+    quotes_json         TEXT,
+    n_sources           INTEGER,
+    judge_model         TEXT,
+    judged_at           TEXT,
+    fwd_5               REAL,
+    fwd_20              REAL,
+    fwd_28              REAL,
+    matured_at          TEXT,
+    created_at          TEXT NOT NULL,
+    UNIQUE (ticker, report_date)
+);
+
+-- Money in (+) and out (-) of the book that is not a trade. Returns are
+-- measured with these taken out, so a deposit never reads as profit. A flow
+-- belongs to the NAV point of its date: that point already includes it.
+CREATE TABLE IF NOT EXISTS cash_flows (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    date        TEXT NOT NULL,
+    amount_sek  REAL NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+-- One row per held name's report (engine/earnings_watch.py): the heads-up the
+-- evening before, then the thesis verdict read off the report's coverage.
+-- Kept after the verdict so it can be scored against what the stock did next.
+CREATE TABLE IF NOT EXISTS earnings_checks (
+    ticker          TEXT NOT NULL,
+    report_date     TEXT NOT NULL,
+    found_by        TEXT NOT NULL,          -- calendar | headline
+    heads_up_at     TEXT,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    verdict         TEXT,                   -- held | broken | unclear; NULL = not final
+    confidence      REAL,
+    detail          TEXT,                   -- JSON: what changed, impact, quotes, model
+    price_at_check  REAL,
+    checked_at      TEXT,
+    PRIMARY KEY (ticker, report_date)
+);
+
+-- One row per Montrose transaction the owner has decided on (booked or
+-- skipped), keyed by Montrose's own id: the same broker row can never be
+-- offered or booked twice. A booked fill points at its ledger transaction, so
+-- undoing that fill reopens the row.
+CREATE TABLE IF NOT EXISTS broker_imports (
+    broker_id      INTEGER PRIMARY KEY,
+    category       TEXT NOT NULL,
+    trade_date     TEXT NOT NULL,
+    status         TEXT NOT NULL,          -- booked | skipped
+    amount_sek     REAL,
+    ledger_txn_id  INTEGER,
+    detail         TEXT NOT NULL DEFAULT '',
+    decided_at     TEXT NOT NULL
+);
+
 -- Tracks the outcome of each LLM action recommendation once enough time has passed.
 -- Populated retrospectively (e.g. 4 weeks after the decision).
 CREATE TABLE IF NOT EXISTS decision_outcomes (
@@ -65,7 +141,7 @@ CREATE TABLE IF NOT EXISTS decision_outcomes (
     outperformed        INTEGER,            -- 1=yes, 0=no, NULL=not yet evaluated
     evaluation_date     TEXT,
     thesis              TEXT,               -- LLM's stated thesis at time of decision
-    source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review'
+    source              TEXT,               -- NULL/'run' | 'stop_review' | 'target_review' | 'report_review'
     decision_date       TEXT,               -- set for review rows; run rows read it off the recommendation
     -- Did the reasoning hold, independently of whether the price obliged?
     thesis_verdict      TEXT,               -- held | broke | unresolved | NULL=not checked
@@ -177,7 +253,7 @@ CREATE TABLE IF NOT EXISTS position_alerts (
 CREATE TABLE IF NOT EXISTS position_reviews (
     review_id       TEXT PRIMARY KEY,   -- {date}-{source}-{TICKER}: one per name per day
     ticker          TEXT NOT NULL,
-    source          TEXT NOT NULL,      -- stop_review | target_review
+    source          TEXT NOT NULL,      -- stop_review | target_review | report_review
     verdict         TEXT NOT NULL,      -- exit | sell | trim | raise | hold | add
     confidence      REAL,
     trim_pct        REAL,               -- % of the position the verdict says to sell
@@ -302,6 +378,238 @@ class Store:
         self.set_cash(new_balance)
         return new_balance
 
+    # ── Report-reaction experiment ────────────────────────────────────────────
+
+    def add_report_event(self, event: dict) -> int | None:
+        """Log a report reaction once. Returns its id, or None if already logged."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO report_events (ticker, report_date, event_date, "
+                "reaction_pct, abnormal_pct, volume_ratio, source, eps_estimate, "
+                "eps_reported, eps_surprise_pct, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (event["ticker"], event["report_date"], event["event_date"],
+                 event["reaction_pct"], event["abnormal_pct"], event.get("volume_ratio"),
+                 event["source"], event.get("eps_estimate"), event.get("eps_reported"),
+                 event.get("eps_surprise_pct"), datetime.utcnow().isoformat()),
+            )
+            return cur.lastrowid if cur.rowcount else None
+
+    def get_report_events(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM report_events ORDER BY event_date, ticker"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_report_verdict(self, event_id: int, verdict: dict) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE report_events SET verdict = ?, confidence = ?, what_changed = ?, "
+                "temporary_factors = ?, structural_factors = ?, expectations = ?, "
+                "quotes_json = ?, n_sources = ?, judge_model = ?, judged_at = ? WHERE id = ?",
+                (verdict["verdict"], verdict.get("confidence"), verdict.get("what_changed", ""),
+                 verdict.get("temporary_factors", ""), verdict.get("structural_factors", ""),
+                 verdict.get("expectations", ""), json.dumps(verdict.get("quotes", [])),
+                 verdict.get("n_sources", 0), verdict.get("judge_model", ""),
+                 datetime.utcnow().isoformat(), event_id),
+            )
+
+    def set_report_forward(self, event_id: int, fwd: dict[int, float | None]) -> None:
+        matured = datetime.utcnow().isoformat() if fwd.get(28) is not None else None
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE report_events SET fwd_5 = COALESCE(?, fwd_5), "
+                "fwd_20 = COALESCE(?, fwd_20), fwd_28 = COALESCE(?, fwd_28), "
+                "matured_at = COALESCE(?, matured_at) WHERE id = ?",
+                (fwd.get(5), fwd.get(20), fwd.get(28), matured, event_id),
+            )
+
+    def count_report_verdicts_on(self, day: str) -> int:
+        """Verdicts actually paid for on `day` (UTC) — what the daily cap counts."""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM report_events WHERE judge_model != '' "
+                "AND substr(judged_at, 1, 10) = ?",
+                (day,),
+            ).fetchone()[0]
+
+    # ── Deposits and withdrawals ──────────────────────────────────────────────
+
+    def record_cash_flow(
+        self,
+        amount_sek: float,
+        flow_date: str | None = None,
+        note: str = "",
+        adjust_cash: bool = True,
+    ) -> float:
+        """Record money moving in (+) or out (-) of the book. Returns the cash balance.
+
+        With `adjust_cash` (the normal case) the cash balance moves with it and
+        today's NAV point, if one is already written, gains the same amount — so
+        the point on the flow's date includes the flow, which is the convention
+        returns are computed against, whichever job writes the next point.
+
+        `adjust_cash=False` is for recording a top-up after the fact, when cash
+        was already corrected with set-cash: only the ledger row is written, and
+        `flow_date` must name the first NAV date that already shows the money.
+        """
+        with self._conn() as conn:
+            return self._record_cash_flow(conn, amount_sek, flow_date, note, adjust_cash)
+
+    @staticmethod
+    def _record_cash_flow(conn: sqlite3.Connection, amount_sek: float, flow_date: str | None,
+                          note: str, adjust_cash: bool) -> float:
+        if not math.isfinite(amount_sek) or amount_sek == 0:
+            raise ValueError(f"cash flow must be a non-zero amount, got {amount_sek!r}")
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        date = flow_date or today
+        datetime.strptime(date, "%Y-%m-%d")
+        if adjust_cash and date != today:
+            raise ValueError("a flow that moves cash is dated today; use adjust_cash=False to backfill")
+        row = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+        cash = float(row["balance_sek"]) if row else 0.0
+        if adjust_cash:
+            if cash + amount_sek < 0:
+                raise ValueError(
+                    f"withdrawal of {-amount_sek:,.2f} exceeds cash of {cash:,.2f}"
+                )
+            cash += amount_sek
+            conn.execute(
+                "INSERT INTO cash (id, balance_sek) VALUES (1, ?) "
+                "ON CONFLICT(id) DO UPDATE SET balance_sek = excluded.balance_sek",
+                (cash,),
+            )
+            conn.execute(
+                "UPDATE nav_history SET portfolio_nav_sek = portfolio_nav_sek + ?, "
+                "cash_sek = cash_sek + ? WHERE date = ?",
+                (amount_sek, amount_sek, date),
+            )
+        conn.execute(
+            "INSERT INTO cash_flows (date, amount_sek, note, created_at) VALUES (?, ?, ?, ?)",
+            (date, amount_sek, note, datetime.utcnow().isoformat()),
+        )
+        return cash
+
+    # ── Broker imports (Montrose phase 2) ─────────────────────────────────────
+
+    def get_broker_imports(self) -> dict[int, dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM broker_imports").fetchall()
+        return {int(r["broker_id"]): dict(r) for r in rows}
+
+    @staticmethod
+    def _claim_broker_row(conn: sqlite3.Connection, broker_id: int, category: str,
+                          trade_date: str, status: str, amount_sek: float | None,
+                          detail: str, ledger_txn_id: int | None = None) -> None:
+        if conn.execute("SELECT 1 FROM broker_imports WHERE broker_id = ?", (broker_id,)).fetchone():
+            raise ValueError(f"Montrose transaction {broker_id} was already decided")
+        conn.execute(
+            "INSERT INTO broker_imports (broker_id, category, trade_date, status, amount_sek, "
+            "ledger_txn_id, detail, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (broker_id, category, trade_date, status, amount_sek, ledger_txn_id, detail,
+             datetime.utcnow().isoformat()),
+        )
+
+    def book_broker_fill(self, broker_id: int, txn: Transaction, category: str,
+                         trade_date: str, amount_sek: float, detail: str = "") -> int:
+        """Book a broker trade as a ledger fill, once. Same checks as apply_fill."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._claim_broker_row(conn, broker_id, category, trade_date, "booked",
+                                   amount_sek, detail)
+            txn_id = self._apply_fill(conn, txn)
+            conn.execute("UPDATE broker_imports SET ledger_txn_id = ? WHERE broker_id = ?",
+                         (txn_id, broker_id))
+        return txn_id
+
+    def book_broker_cash(self, broker_id: int, category: str, trade_date: str,
+                         amount_sek: float, detail: str = "", flow: bool = False) -> float:
+        """Book a broker cash row once. A deposit/withdrawal (`flow`) is a cash
+        flow dated today — the day the ledger's cash moves; anything else
+        (dividend, tax, interest) is return and only moves cash."""
+        if not math.isfinite(amount_sek) or amount_sek == 0:
+            raise ValueError(f"broker cash row must be a non-zero amount, got {amount_sek!r}")
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._claim_broker_row(conn, broker_id, category, trade_date, "booked",
+                                   amount_sek, detail)
+            if flow:
+                cash = self._record_cash_flow(conn, amount_sek, None, detail, True)
+            else:
+                row = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+                if row is None:
+                    raise ValueError("Portfolio must be initialised before booking cash")
+                cash = float(row["balance_sek"]) + amount_sek
+                if cash < 0:
+                    raise ValueError(f"{category} of {amount_sek:,.2f} would take cash below zero")
+                conn.execute("UPDATE cash SET balance_sek = ? WHERE id = 1", (cash,))
+        return cash
+
+    def skip_broker_row(self, broker_id: int, category: str, trade_date: str,
+                        amount_sek: float | None, detail: str = "") -> None:
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._claim_broker_row(conn, broker_id, category, trade_date, "skipped",
+                                   amount_sek, detail)
+
+    def get_cash_flows(self) -> list[dict]:
+        """Every deposit (+) and withdrawal (-), oldest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT date, amount_sek, note, created_at FROM cash_flows ORDER BY date, id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Earnings checks (engine/earnings_watch.py) ────────────────────────────
+
+    def get_earnings_check(self, ticker: str, report_date: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM earnings_checks WHERE ticker = ? AND report_date = ?",
+                               (ticker, report_date)).fetchone()
+        return dict(row) if row else None
+
+    def get_earnings_checks(self, open_only: bool = False) -> list[dict]:
+        sql = "SELECT * FROM earnings_checks"
+        if open_only:
+            sql += " WHERE verdict IS NULL"
+        with self._conn() as conn:
+            rows = conn.execute(sql + " ORDER BY report_date, ticker").fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_earnings_check(self, ticker: str, report_date: str, **fields) -> None:
+        """Create the row if new (found_by required then), then set `fields`."""
+        allowed = {"found_by", "heads_up_at", "attempts", "verdict", "confidence", "detail",
+                   "price_at_check", "checked_at"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"unknown earnings_checks fields: {sorted(bad)}")
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO earnings_checks (ticker, report_date, found_by) VALUES (?, ?, ?)",
+                (ticker, report_date, fields.get("found_by", "calendar")))
+            if fields:
+                cols = ", ".join(f"{k} = ?" for k in fields)
+                conn.execute(f"UPDATE earnings_checks SET {cols} WHERE ticker = ? AND report_date = ?",
+                             (*fields.values(), ticker, report_date))
+
+    def get_position_theses(self, ticker: str) -> dict:
+        """The reason a held name is held: its latest buy thesis and, if newer,
+        its latest hold rationale — each with the date it was written."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT o.action, o.thesis, COALESCE(o.decision_date, substr(r.timestamp, 1, 10)) AS d "
+                "FROM decision_outcomes o LEFT JOIN recommendations r ON r.run_id = o.run_id "
+                "WHERE o.ticker = ? AND o.action IN ('buy', 'hold') "
+                "AND o.thesis IS NOT NULL AND trim(o.thesis) != '' "
+                "ORDER BY d DESC, o.id DESC", (ticker,)).fetchall()
+        out: dict = {}
+        for r in rows:
+            out.setdefault(r["action"], {"date": r["d"], "thesis": r["thesis"]})
+        if "hold" in out and "buy" in out and (out["hold"]["date"] or "") <= (out["buy"]["date"] or ""):
+            out.pop("hold")
+        return out
+
     # ── Meta flags ────────────────────────────────────────────────────────────
 
     def get_meta(self, key: str) -> str | None:
@@ -354,73 +662,79 @@ class Store:
         fills are entered in SEK (OCR reads Köpesumma/Totalt belopp). The
         currency tag is metadata only; no conversion happens here.
         """
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._apply_fill(conn, txn)
+
+    @staticmethod
+    def _apply_fill(conn: sqlite3.Connection, txn: Transaction) -> int:
+        """apply_fill inside a caller's transaction. Returns the transaction id."""
         if txn.side not in ("buy", "sell") or not txn.ticker.strip():
             raise ValueError("Fill requires a ticker and a buy/sell side")
         if (not all(math.isfinite(v) for v in (txn.shares, txn.price_sek, txn.fee_sek))
                 or txn.shares <= 0 or txn.price_sek <= 0 or txn.fee_sek < 0
                 or not math.isfinite(txn.gross_sek + txn.fee_sek)):
             raise ValueError("Fill requires finite positive shares and price, and a nonnegative fee")
-        with self._conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cash = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
-            if cash is None:
-                raise ValueError("Portfolio must be initialised before recording fills")
-            held = conn.execute("SELECT shares FROM positions WHERE ticker = ?", (txn.ticker,)).fetchone()
-            if txn.side == "sell" and (held is None or txn.shares > held["shares"]):
-                raise ValueError("Cannot sell more shares than the portfolio holds")
-            if txn.side == "buy" and txn.gross_sek + txn.fee_sek > cash["balance_sek"]:
-                raise ValueError("Insufficient cash for this fill including fees")
-            # Record the transaction (price/fee native, plus its currency)
+        cash = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+        if cash is None:
+            raise ValueError("Portfolio must be initialised before recording fills")
+        held = conn.execute("SELECT shares FROM positions WHERE ticker = ?", (txn.ticker,)).fetchone()
+        if txn.side == "sell" and (held is None or txn.shares > held["shares"]):
+            raise ValueError("Cannot sell more shares than the portfolio holds")
+        if txn.side == "buy" and txn.gross_sek + txn.fee_sek > cash["balance_sek"]:
+            raise ValueError("Insufficient cash for this fill including fees")
+        # Record the transaction (price/fee native, plus its currency)
+        cur = conn.execute(
+            "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source, currency) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                txn.timestamp.isoformat(),
+                txn.ticker,
+                txn.side,
+                txn.shares,
+                txn.price_sek,
+                txn.fee_sek,
+                txn.source,
+                txn.currency,
+            ),
+        )
+
+        # Update position
+        row = conn.execute(
+            "SELECT shares, avg_cost_sek FROM positions WHERE ticker = ?", (txn.ticker,)
+        ).fetchone()
+
+        if txn.side == "buy":
+            cur_shares = float(row["shares"]) if row else 0.0
+            cur_cost = float(row["avg_cost_sek"]) if row else 0.0
+            new_shares = cur_shares + txn.shares
+            # Weighted average cost basis
+            new_avg = (cur_shares * cur_cost + txn.shares * txn.price_sek) / new_shares
             conn.execute(
-                "INSERT INTO transactions (timestamp, ticker, side, shares, price_sek, fee_sek, source, currency) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    txn.timestamp.isoformat(),
-                    txn.ticker,
-                    txn.side,
-                    txn.shares,
-                    txn.price_sek,
-                    txn.fee_sek,
-                    txn.source,
-                    txn.currency,
-                ),
+                "INSERT INTO positions (ticker, shares, avg_cost_sek, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(ticker) DO UPDATE SET "
+                "shares = excluded.shares, avg_cost_sek = excluded.avg_cost_sek, updated_at = excluded.updated_at",
+                (txn.ticker, new_shares, new_avg, txn.timestamp.isoformat()),
             )
-
-            # Update position
-            row = conn.execute(
-                "SELECT shares, avg_cost_sek FROM positions WHERE ticker = ?", (txn.ticker,)
-            ).fetchone()
-
-            if txn.side == "buy":
-                cur_shares = float(row["shares"]) if row else 0.0
-                cur_cost = float(row["avg_cost_sek"]) if row else 0.0
-                new_shares = cur_shares + txn.shares
-                # Weighted average cost basis
-                new_avg = (cur_shares * cur_cost + txn.shares * txn.price_sek) / new_shares
-                conn.execute(
-                    "INSERT INTO positions (ticker, shares, avg_cost_sek, updated_at) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(ticker) DO UPDATE SET "
-                    "shares = excluded.shares, avg_cost_sek = excluded.avg_cost_sek, updated_at = excluded.updated_at",
-                    (txn.ticker, new_shares, new_avg, txn.timestamp.isoformat()),
-                )
-                # Deduct from cash
-                conn.execute(
-                    "UPDATE cash SET balance_sek = balance_sek - ? WHERE id = 1",
-                    (txn.gross_sek + txn.fee_sek,),
-                )
-            else:  # sell
-                cur_shares = float(row["shares"]) if row else 0.0
-                new_shares = max(0.0, cur_shares - txn.shares)
-                avg_cost = float(row["avg_cost_sek"]) if row else 0.0
-                conn.execute(
-                    "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",
-                    (new_shares, txn.timestamp.isoformat(), txn.ticker),
-                )
-                # Add proceeds to cash (minus fee)
-                conn.execute(
-                    "UPDATE cash SET balance_sek = balance_sek + ? WHERE id = 1",
-                    (txn.gross_sek - txn.fee_sek,),
-                )
+            # Deduct from cash
+            conn.execute(
+                "UPDATE cash SET balance_sek = balance_sek - ? WHERE id = 1",
+                (txn.gross_sek + txn.fee_sek,),
+            )
+        else:  # sell
+            cur_shares = float(row["shares"]) if row else 0.0
+            new_shares = max(0.0, cur_shares - txn.shares)
+            avg_cost = float(row["avg_cost_sek"]) if row else 0.0
+            conn.execute(
+                "UPDATE positions SET shares = ?, updated_at = ? WHERE ticker = ?",
+                (new_shares, txn.timestamp.isoformat(), txn.ticker),
+            )
+            # Add proceeds to cash (minus fee)
+            conn.execute(
+                "UPDATE cash SET balance_sek = balance_sek + ? WHERE id = 1",
+                (txn.gross_sek - txn.fee_sek,),
+            )
+        return int(cur.lastrowid)
 
     # ── Transactions ──────────────────────────────────────────────────────────
 
@@ -529,6 +843,7 @@ class Store:
                 )
 
             conn.execute("DELETE FROM transactions WHERE id = ?", (txn.id,))
+            conn.execute("DELETE FROM broker_imports WHERE ledger_txn_id = ?", (txn.id,))
 
         return txn
 
@@ -626,6 +941,12 @@ class Store:
             cur = conn.execute("DELETE FROM recommendations WHERE run_id = ?", (run_id,))
             return cur.rowcount > 0
 
+    def last_run_at(self) -> datetime | None:
+        """When the newest recommendation was saved (UTC), dismissed or not."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT MAX(timestamp) AS ts FROM recommendations").fetchone()
+        return datetime.fromisoformat(row["ts"]) if row and row["ts"] else None
+
     def get_last_recommendation(self) -> RecommendationLog | None:
         """The book's current decision — the newest one not dismissed."""
         with self._conn() as conn:
@@ -721,6 +1042,7 @@ class Store:
         if not nav_rows:
             return []
 
+        flows = self.get_cash_flows()
         nav_by_date = {r["date"]: r for r in nav_rows}
         nav_dates = sorted(nav_by_date.keys())
 
@@ -744,7 +1066,11 @@ class Store:
             if nav_start is None or nav_end is None:
                 continue
 
-            nav_ret   = nav_end["portfolio_nav_sek"] / nav_start["portfolio_nav_sek"] - 1
+            # Net out deposits in the window, or a top-up week would score as
+            # the best decision the fund ever made.
+            flow = sum(f["amount_sek"] for f in flows
+                       if nav_start["date"] < f["date"] <= nav_end["date"])
+            nav_ret   = (nav_end["portfolio_nav_sek"] - flow) / nav_start["portfolio_nav_sek"] - 1
             bench_ret = nav_end["benchmark_value"]   / nav_start["benchmark_value"]   - 1
             score     = round(nav_ret - bench_ret, 6)
 
@@ -1848,6 +2174,7 @@ class Store:
         "transactions",
         "recommendations",
         "nav_history",
+        "cash_flows",
         "decision_outcomes",
         "learnings",
         "position_stops",

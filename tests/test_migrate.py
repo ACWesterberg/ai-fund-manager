@@ -70,6 +70,9 @@ def pi(tmp_path, monkeypatch):
     (repo / "config" / "compiled" / "active.json").write_text('{"instructions": "x"}')
     (repo / "config" / "compiled" / "searches" / "fund" / "abc.json").write_text("{}")
     (repo / ".env").write_text("OPENAI_API_KEY=sk-test\n")
+    (repo / "data" / "montrose").mkdir()
+    (repo / "data" / "montrose" / "token.json").write_text('{"refresh_token": "r"}')
+    (repo / "data" / "montrose" / "instruments.json").write_text("{}")
     # Regenerable: must stay behind.
     (repo / ".venv" / "lib").mkdir(parents=True)
     (repo / ".venv" / "lib" / "big.so").write_text("x")
@@ -118,6 +121,9 @@ def test_round_trip_carries_every_kind_of_state_and_leaves_the_regenerable(pi, m
                 "config/compiled/active.json", "config/compiled/searches/fund/abc.json"):
         assert (dst / rel).read_bytes() == (src / rel).read_bytes(), rel
     assert (dst / ".env").stat().st_mode & 0o777 == 0o600
+    assert (dst / "data/montrose/token.json").stat().st_mode & 0o777 == 0o600
+    assert (dst / "data/montrose").stat().st_mode & 0o777 == 0o700
+    assert (dst / "data/montrose/instruments.json").exists()
     for rel in (".venv/lib/big.so", "data/backups/fund-backup-1.tgz", "data/deploy.lock",
                 "src/__pycache__/m.cpython-312.pyc", "config/config.yaml"):
         assert not (dst / rel).exists(), rel
@@ -146,7 +152,7 @@ def test_export_refuses_while_the_fund_can_still_write(pi, tmp_path, monkeypatch
 def test_backup_flags_leave_keys_cache_and_logs_behind(pi, tmp_path):
     src, _ = pi
     archive = tmp_path / "move.tgz"
-    assert export(src, archive, "--no-env", "--no-financedata-cache", "--no-logs") == 0
+    assert export(src, archive, "--no-secrets", "--no-financedata-cache", "--no-logs") == 0
     with tarfile.open(archive) as tar:
         names = tar.getnames()
     assert "repo/.env" not in names and "repo/data/logs/weekly.log" not in names
@@ -248,6 +254,8 @@ def test_backup_script_takes_a_live_export_without_secrets(pi, mac):
     assert {"repo/data/fund.db", "repo/data/paper/kf-chokepoint.db",
             "repo/config/compiled/active.json"} <= names
     assert "repo/.env" not in names and not any(n.startswith("home/") for n in names)
+    assert "repo/data/montrose/token.json" not in names
+    assert "repo/data/montrose/instruments.json" in names
     assert not any("backups/" in n for n in names)
     assert manifest["live"] is True
     assert restore(dst, home, archive) == 0

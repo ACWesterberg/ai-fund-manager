@@ -8,6 +8,7 @@ the two reviews from drifting into disagreeing views of the same position.
 """
 from __future__ import annotations
 
+import html
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -108,13 +109,20 @@ def live_price_sek(
     live_price: float | None,
     tech_live: float | None,
 ) -> float:
-    """Resolve the position's live price in SEK, to compare against SEK cost basis."""
+    """Resolve the position's live price in SEK, to compare against SEK cost basis.
+
+    Raises ValueError when the FX rate is missing: a native price read as SEK
+    would hand the review a −90% loss on a EUR holding that hasn't moved.
+    """
     if live_price is not None:
         return live_price                      # already SEK (caller converted)
     live = tech_live or pos.avg_cost_sek
     if cfg.fx_to_sek and tech_live is not None and currency != "SEK":
         from fundmgr.data.fx import rate_to_sek
-        live = tech_live * (rate_to_sek(currency, store) or 1.0)  # native→SEK
+        rate = rate_to_sek(currency, store)
+        if not rate:
+            raise ValueError(f"no {currency}/SEK rate — can't value {ticker} in SEK")
+        live = tech_live * rate  # native→SEK
     return live
 
 
@@ -297,3 +305,35 @@ def follow_up(
 def votes_str(votes: dict[str, int], n: int) -> str:
     parts = [f"{rec}×{cnt}" for rec, cnt in sorted(votes.items(), key=lambda kv: -kv[1])]
     return f"{'/'.join(parts)} of {n}"
+
+
+def action_banner_html(rows: list[dict], today: str) -> str:
+    """The top of a price alert when it carries an order the human owes.
+
+    `rows` are `web.views.review_row` dicts for the alerted names' open reviews.
+    The verdict used to sit in the middle of the message under "Target review",
+    after a "Price Alert" header and a percentage — it read as a report. The
+    11:00 daily-drop alert on the same name then said nothing about the SELL
+    still waiting from 09:00, and looked like there was nothing to do at all.
+    """
+    if not rows:
+        return ""
+    n = len(rows)
+    lines = [f"🔴 <b>ACTION NEEDED — {n} order{'s' if n != 1 else ''} for you to place</b>"]
+    for r in rows:
+        lines.append(
+            f"👉 <b>{html.escape(r['verdict_label'])} {html.escape(r['ticker'])}</b>: "
+            f"{html.escape(r['instruction'])}"
+        )
+        if r.get("follow_up"):
+            lines.append(f"    {html.escape(r['follow_up'])}")
+        if r.get("when") and r["when"] != today:
+            lines.append(
+                f"    <i>Still open since {html.escape(r['when'])} "
+                f"({html.escape(r['source_label'].lower())}).</i>"
+            )
+    lines.append(
+        "<i>The fund never trades for you. Once placed, record it with /fill — or "
+        "<code>/decisions done TICKER</code> if it is already handled.</i>"
+    )
+    return "\n".join(lines)

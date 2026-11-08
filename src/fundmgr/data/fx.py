@@ -96,19 +96,19 @@ def convert_prices_to_sek(
     """Convert a {ticker: native_price} map to {ticker: SEK_price}.
 
     Each ticker's currency comes from `cur_by_ticker` (SEK / unknown pass through
-    unchanged). Rates are fetched once per currency. If a rate is unavailable the
-    native price is kept as-is (degrade rather than drop the position), matching
-    the CLI's `... or 1.0` fallback."""
+    unchanged). Rates are fetched once per currency. A ticker whose rate is
+    unavailable is left out, so callers treat it as having no live price: keeping
+    the native figure used to value a EUR holding at an eleventh of its worth."""
     out: dict[str, float] = {}
-    rate_cache: dict[str, float] = {}
+    rate_cache: dict[str, float | None] = {}
     for ticker, price in prices.items():
         cur = (cur_by_ticker.get(ticker) or "SEK").upper()
         if cur == "SEK":
             out[ticker] = price
             continue
-        rate = rate_cache.get(cur)
-        if rate is None:
-            rate = rate_to_sek(cur, store) or 1.0
-            rate_cache[cur] = rate
-        out[ticker] = price * rate
+        if cur not in rate_cache:
+            rate_cache[cur] = rate_to_sek(cur, store)
+        rate = rate_cache[cur]
+        if rate:
+            out[ticker] = price * rate
     return out

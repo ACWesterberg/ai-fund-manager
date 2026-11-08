@@ -5,8 +5,9 @@
     python3 deploy/macos/launchd.py install           # write and load ~/Library/LaunchAgents
     python3 deploy/macos/launchd.py uninstall
 
-The schedule is not restated here. Every active line of `deploy/cron.example` becomes a
-launchd job with the same times, and every `deploy/fundmgr-*.service` becomes an agent
+The schedule is not restated here. Every active line of `deploy/cron.example`, and every
+job `deploy/managed_cron.sh` keeps in the Pi's crontab, becomes a launchd job with the
+same times, and every `deploy/fundmgr-*.service` becomes an agent
 kept alive by launchd, so the Pi's table and the Mac's cannot drift apart. Lines with the
 same command (the three backup times) share one job.
 
@@ -118,7 +119,10 @@ def parse_crontab(text: str) -> list[Job]:
             stem = Path(log).stem if log else re.sub(r"\W+", "-", command)[:40].strip("-")
             label = PREFIX + stem
             if any(j.label == label for j in jobs.values()):
-                label += f"-{len(jobs)}"
+                # Two commands sharing a log (account-sync and account-plan both write
+                # accounts.log): tell them apart by subcommand, not by position.
+                sub = re.search(r"bin/fund\s+([\w-]+)", command)
+                label += "-" + (sub.group(1) if sub else str(len(jobs)))
             jobs[command] = Job(label=label, command=command, log=log)
         jobs[command].intervals += [i for i in intervals(parts[:5])
                                     if i not in jobs[command].intervals]
@@ -206,8 +210,22 @@ def system_timezone() -> str | None:
         return os.environ.get("TZ")
 
 
+def managed_block(crontab: Path) -> str:
+    """The jobs deploy/managed_cron.sh puts in the Pi's crontab (commented out in
+    cron.example so nobody pastes them twice). Empty when the script is absent."""
+    script = crontab.parent / "managed_cron.sh"
+    if not script.is_file():
+        return ""
+    r = subprocess.run(["bash", str(script), "--print", str(crontab.parent.parent)],
+                       capture_output=True, text=True, check=False)
+    if r.returncode:
+        raise RuntimeError(f"managed_cron.sh --print failed: {r.stderr.strip()}")
+    return r.stdout
+
+
 def build(root: Path, crontab: Path, studio: Path) -> dict[str, dict]:
-    plists = {j.label: job_plist(j, root, studio) for j in parse_crontab(crontab.read_text())}
+    table = crontab.read_text() + "\n" + managed_block(crontab)
+    plists = {j.label: job_plist(j, root, studio) for j in parse_crontab(table)}
     for a in agents(crontab.parent, root):
         plists[a.label] = agent_plist(a, root)
     return plists
@@ -237,8 +255,13 @@ def cmd_install(args, plists: dict[str, dict]) -> int:
     domain = f"gui/{os.getuid()}"
     for label, plist in plists.items():
         path = AGENTS / f"{label}.plist"
-        with path.open("wb") as f:
-            plistlib.dump(plist, f)
+        data = plistlib.dumps(plist)
+        loaded = launchctl("print", f"{domain}/{label}").returncode == 0
+        # deploy.sh runs this on every deploy: leave an unchanged, loaded job alone, so a
+        # check-stops in progress is not killed by a reload that changes nothing.
+        if loaded and path.is_file() and path.read_bytes() == data and not args.dry_run:
+            continue
+        path.write_bytes(data)
         if args.dry_run:
             print(f"wrote {path} (not loaded)")
             continue
@@ -253,9 +276,10 @@ def cmd_install(args, plists: dict[str, dict]) -> int:
         print(f"{'loaded' if r.returncode == 0 else 'FAILED'} {label}"
               + (f": {r.stderr.strip()}" if r.returncode else ""))
     for stale in sorted(AGENTS.glob(f"{PREFIX}*.plist")):
-        if stale.stem not in plists:
-            print(f"note: {stale} is not in the table any more; `uninstall` then `install` "
-                  "removes it")
+        if stale.stem not in plists and not args.dry_run:
+            launchctl("bootout", f"{domain}/{stale.stem}")
+            stale.unlink()
+            print(f"removed {stale.stem} (no longer in the table)")
     return 0
 
 

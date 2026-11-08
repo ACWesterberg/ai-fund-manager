@@ -9,38 +9,89 @@ from fundmgr.state.models import NavPoint, PortfolioSnapshot
 from fundmgr.state.store import Store
 
 
-def compute_stats(nav_history: list[NavPoint], initial_capital: float) -> dict:
+def _flow_between(flows: list[dict], after: str, upto: str) -> float:
+    return sum(f["amount_sek"] for f in flows if after < f["date"] <= upto)
+
+
+def return_index(nav_history: list[NavPoint], flows: list[dict] | None = None) -> list[float]:
+    """The fund's growth of 1.0, with deposits and withdrawals taken out.
+
+    Chain-linked: each step is (NAV_t - flows since the last point) / NAV_t-1,
+    so money arriving moves NAV without moving the index. The first version
+    divided last NAV by first NAV, which counted every top-up as profit — and
+    the weekly run score, the alpha and the drawdown with it.
+
+    A flow belongs to the first NAV point on or after its date (that point
+    already includes it); flows on or before the first point are in its NAV.
+    """
+    flows = flows or []
+    index = [1.0]
+    for prev, cur in zip(nav_history, nav_history[1:]):
+        base = prev.portfolio_nav_sek
+        if base <= 0:
+            index.append(index[-1])
+            continue
+        flow = _flow_between(flows, prev.date, cur.date)
+        index.append(index[-1] * (cur.portfolio_nav_sek - flow) / base)
+    return index
+
+
+def invested(initial_capital: float, flows: list[dict] | None = None) -> float:
+    """Money put in: starting capital plus deposits, less withdrawals."""
+    return initial_capital + sum(f["amount_sek"] for f in (flows or []))
+
+
+def gain(nav: float, initial_capital: float, flows: list[dict] | None = None) -> tuple[float, float]:
+    """(SEK, %) gained on the money put in — what the account has earned you.
+
+    Unlike the index, this is diluted by a deposit: +5,000 on 50,000 is +10%,
+    and the same +5,000 after another 50,000 goes in is +5%. Both are true;
+    this one answers "what have I made", the index "how well was it managed".
+    """
+    put_in = invested(initial_capital, flows)
+    sek = nav - put_in
+    return sek, (sek / put_in * 100 if put_in > 0 else 0.0)
+
+
+def compute_stats(
+    nav_history: list[NavPoint], initial_capital: float, flows: list[dict] | None = None
+) -> dict:
     if not nav_history:
         return {}
 
+    flows = flows or []
     navs = [n.portfolio_nav_sek for n in nav_history]
     benches = [n.benchmark_value for n in nav_history]
+    index = return_index(nav_history, flows)
 
-    # Time-weighted return
-    twr = (navs[-1] / navs[0] - 1) * 100 if navs[0] else 0.0
+    # Time-weighted return: deposits and withdrawals don't move it
+    twr = (index[-1] - 1) * 100
 
     # Benchmark return over same window
     bench_return = (benches[-1] / benches[0] - 1) * 100 if benches[0] else 0.0
 
-    # Max drawdown
-    peak = navs[0]
+    # Max drawdown — on the index, so a withdrawal is not a drawdown
+    peak = index[0]
     max_dd = 0.0
-    for nav in navs:
-        if nav > peak:
-            peak = nav
-        dd = (peak - nav) / peak * 100
+    for value in index:
+        if value > peak:
+            peak = value
+        dd = (peak - value) / peak * 100 if peak > 0 else 0.0
         if dd > max_dd:
             max_dd = dd
 
     # Volatility (daily returns std, annualised)
     vol = None
-    if len(navs) > 5:
-        daily_returns = [(navs[i] / navs[i - 1] - 1) for i in range(1, len(navs))]
+    if len(index) > 5:
+        daily_returns = [
+            (index[i] / index[i - 1] - 1) for i in range(1, len(index)) if index[i - 1] > 0
+        ]
         import math
         mean = sum(daily_returns) / len(daily_returns)
         variance = sum((r - mean) ** 2 for r in daily_returns) / len(daily_returns)
         vol = math.sqrt(variance) * math.sqrt(252) * 100
 
+    gain_sek, gain_pct = gain(navs[-1], initial_capital, flows)
     return {
         "twr_pct": round(twr, 2),
         "benchmark_return_pct": round(bench_return, 2),
@@ -53,6 +104,10 @@ def compute_stats(nav_history: list[NavPoint], initial_capital: float) -> dict:
         "nav_start": navs[0],
         "nav_current": navs[-1],
         "initial_capital": initial_capital,
+        "net_flows_sek": round(sum(f["amount_sek"] for f in flows), 2),
+        "invested_sek": round(invested(initial_capital, flows), 2),
+        "gain_sek": round(gain_sek, 2),
+        "gain_pct": round(gain_pct, 2),
     }
 
 
@@ -62,7 +117,8 @@ def benchmark_label(symbol: str | None) -> str:
 
 
 def nav_chart_json(nav_history: list[NavPoint],
-                   benchmark_label: str = "OMXSPI") -> str:
+                   benchmark_label: str = "OMXSPI",
+                   flows: list[dict] | None = None) -> str:
     """Return Plotly-compatible JSON for the NAV vs benchmark chart.
 
     The label must be passed by every caller that isn't the Nordic fund:
@@ -72,11 +128,11 @@ def nav_chart_json(nav_history: list[NavPoint],
     if not nav_history:
         return json.dumps({"data": [], "layout": {}})
 
-    nav0 = nav_history[0].portfolio_nav_sek
-    if nav0 == 0:
+    if nav_history[0].portfolio_nav_sek == 0:
         return json.dumps({"data": [], "layout": {}})
 
-    nav_indexed = [round(n.portfolio_nav_sek / nav0 * 100, 2) for n in nav_history]
+    # The return index, not raw NAV: a deposit would otherwise draw as a jump.
+    nav_indexed = [round(v * 100, 2) for v in return_index(nav_history, flows)]
     dates = [n.date for n in nav_history]
 
     data = [
@@ -132,7 +188,7 @@ def format_text_report(store: Store, cfg: AppConfig) -> str:
     positions = store.get_positions()
     cash = store.get_cash()
     fees_paid = store.total_fees_paid()
-    stats = compute_stats(nav_history, cfg.capital_sek)
+    stats = compute_stats(nav_history, cfg.capital_sek, store.get_cash_flows())
 
     lines = ["═" * 58]
     lines.append("  Performance Report")
@@ -158,6 +214,11 @@ def format_text_report(store: Store, cfg: AppConfig) -> str:
     if stats["volatility_ann_pct"] is not None:
         lines.append(f"  Volatility:     {stats['volatility_ann_pct']:>11.1f}% (ann.)")
     lines.append("")
+    lines.append(f"  Money put in:   {stats['invested_sek']:>12,.0f} SEK"
+                 + (f"  (incl. {stats['net_flows_sek']:+,.0f} deposits/withdrawals)"
+                    if stats["net_flows_sek"] else ""))
+    lines.append(f"  Gain:           {stats['gain_sek']:>+12,.0f} SEK  ({stats['gain_pct']:+.2f}% on money put in)")
+    lines.append("")
     lines.append(f"  Fees paid:      {fees_paid:>12.2f} SEK  ({fees_paid/stats['nav_current']*100:.2f}% of NAV)")
 
     if positions:
@@ -175,8 +236,9 @@ def format_text_report(store: Store, cfg: AppConfig) -> str:
 def generate_html_report(store: Store, cfg: AppConfig, output_path: Path) -> None:
     """Generate a standalone HTML report with embedded Plotly chart."""
     nav_history = store.get_nav_history()
-    stats = compute_stats(nav_history, cfg.capital_sek)
-    chart_json = nav_chart_json(nav_history)
+    flows = store.get_cash_flows()
+    stats = compute_stats(nav_history, cfg.capital_sek, flows)
+    chart_json = nav_chart_json(nav_history, flows=flows)
 
     twr = f"{stats.get('twr_pct', 0):+.2f}%" if stats else "n/a"
     bench = f"{stats.get('benchmark_return_pct', 0):+.2f}%" if stats else "n/a"

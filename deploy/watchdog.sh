@@ -4,8 +4,8 @@
 # fails (power cut, stuck update) cannot be noticed from the Mac, and a missed
 # check-stops on the real book is the job that costs money. So the Pi asks.
 #
-# Any HTTP answer from the fund dashboard counts as up: 401 is the normal reply without
-# credentials and proves the Mac is awake and serving. No answer for FAILS_BEFORE_ALERT
+# Any HTTP answer from the fund dashboard counts as up: without credentials it answers
+# with a redirect to /login (or 401), which proves the Mac is awake and serving. No answer for FAILS_BEFORE_ALERT
 # checks in a row sends one Telegram alert; recovery sends another. Nothing repeats in
 # between, so a long outage is one message, not one every 15 minutes.
 #

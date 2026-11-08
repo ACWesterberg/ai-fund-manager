@@ -23,8 +23,9 @@ def plists():
 
 
 def test_every_crontab_line_and_unit_becomes_one_job(plists):
-    cron = [ln for ln in (ROOT / "deploy" / "cron.example").read_text().splitlines()
-            if ln.strip() and not ln.lstrip().startswith("#")]
+    table = (ROOT / "deploy" / "cron.example").read_text() + launchd.managed_block(
+        ROOT / "deploy" / "cron.example")
+    cron = [ln for ln in table.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     commands = {launchd.CD.sub("", ln.split(None, 5)[5]) for ln in cron}
     jobs = [p for p in plists.values() if "StartCalendarInterval" in p]
     assert {p["ProgramArguments"][-1] for p in jobs} == commands
@@ -85,3 +86,17 @@ def test_lines_launchd_cannot_express_are_refused():
         launchd.parse_crontab("0 25 * * * echo hi\n")
     with pytest.raises(ValueError, match="unsupported"):
         launchd.parse_crontab("@reboot echo hi\n")
+
+
+def test_the_jobs_deploys_manage_in_cron_are_launchd_jobs_on_the_mac(plists):
+    by_command = {p["ProgramArguments"][-1]: label for label, p in plists.items()
+                  if "StartCalendarInterval" in p}
+    for sub in ("account-sync --all", "account-plan", "earnings-watch", "report-check",
+                "montrose-import --auto --notify"):
+        assert any(f"bin/fund {sub}" in c for c in by_command), sub
+    report = next(label for c, label in by_command.items() if "fund report-check" in c)
+    assert sorted((d["Hour"], d["Minute"]) for d in plists[report]["StartCalendarInterval"]) == [
+        (8, 45), (8, 45), (8, 45), (8, 45), (8, 45), (18, 30), (18, 30), (18, 30), (18, 30), (18, 30)]
+    # Shared log files still give distinct, stable names.
+    assert {"com.fundmgr.accounts", "com.fundmgr.accounts-account-plan",
+            "com.fundmgr.montrose", "com.fundmgr.montrose-montrose-import"} <= set(plists)

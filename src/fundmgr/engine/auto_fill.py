@@ -192,7 +192,10 @@ def execute_paper_fills(
                     log.append(f"  {ticker}: sell size {sell_sek:.0f} SEK below minimum — skipped")
                     continue
                 shares = sell_sek / price
-            if "sek_estimate" in action:
+            # A full exit sells what is held, not what the budget buys back: the
+            # budget was priced at the run's close, so on an up day it fell short
+            # and left a sliver that still held a position slot.
+            if "sek_estimate" in action and target_weight_pct != 0:
                 budget = action["sek_estimate"]
                 if not math.isfinite(budget) or budget <= 0:
                     skipped[ticker] = SKIP_RISK

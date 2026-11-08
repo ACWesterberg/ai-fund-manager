@@ -155,28 +155,66 @@
     </div>
 
     <nav class="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-0.5">
-      <a href="/"             class="nav-link {% if active_page == 'portfolio'     %}active{% endif %}">
+      {% set on_main = sim_prefix is not defined %}
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Nordic · Real money</p>
+      <a href="/"             class="nav-link {% if on_main and active_page == 'portfolio'     %}active{% endif %}">
         <span class="material-symbols-outlined">area_chart</span>Portfolio
       </a>
-      <a href="/history"      class="nav-link {% if active_page == 'history'       %}active{% endif %}">
+      <a href="/history"      class="nav-link {% if on_main and active_page == 'history'       %}active{% endif %}">
         <span class="material-symbols-outlined">history</span>Decisions
       </a>
-      <a href="/transactions" class="nav-link {% if active_page == 'transactions'  %}active{% endif %}">
+      <a href="/transactions" class="nav-link {% if on_main and active_page == 'transactions'  %}active{% endif %}">
         <span class="material-symbols-outlined">receipt_long</span>Trades
       </a>
       <a href="/universe" class="nav-link {% if active_page == 'universe' %}active{% endif %}">
         <span class="material-symbols-outlined">format_list_bulleted</span>Universe
       </a>
-      <a href="/learnings" class="nav-link {% if sim_prefix is not defined and active_page == 'learnings' %}active{% endif %}">
+      <a href="/learnings" class="nav-link {% if on_main and active_page == 'learnings' %}active{% endif %}">
         <span class="material-symbols-outlined">lightbulb</span>Learnings
       </a>
-      <a href="/prompt" class="nav-link {% if sim_prefix is not defined and active_page == 'prompt' %}active{% endif %}">
+      <a href="/prompt" class="nav-link {% if on_main and active_page == 'prompt' %}active{% endif %}">
         <span class="material-symbols-outlined">tune</span>Prompt
       </a>
-      <a href="/whatif" class="nav-link {% if active_page == 'whatif' %}active{% endif %}">
-        <span class="material-symbols-outlined">auto_awesome</span>What-If Lab
+
+      <!-- Broker accounts: you trade, the app syncs, plans and watches. -->
+      <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Accounts</p>
+      <a href="/accounts" class="nav-link {% if active_page == 'account' %}active{% endif %}"
+         style="color:#14b8a6">
+        <span class="material-symbols-outlined" style="color:#14b8a6">account_balance</span>All accounts
+      </a>
+      {% for acct in (nav_accounts() if nav_accounts is defined else []) %}
+      {% set acct_prefix = '/accounts/' ~ acct.slug %}
+      {% set here = book_prefix is defined and book_prefix == acct_prefix %}
+      <a href="{{ acct_prefix }}" class="nav-link {% if here and active_page == 'portfolio' %}active{% endif %}"
+         style="color:#2dd4bf">
+        <span class="material-symbols-outlined" style="color:#2dd4bf">wallet</span>{{ acct.name }}
+      </a>
+      {% if here %}
+      <a href="{{ acct_prefix }}/history" class="nav-link pl-8 {% if active_page == 'history' %}active{% endif %}">
+        <span class="material-symbols-outlined">history</span>Suggestions
+      </a>
+      <a href="{{ acct_prefix }}/transactions" class="nav-link pl-8 {% if active_page == 'transactions' %}active{% endif %}">
+        <span class="material-symbols-outlined">receipt_long</span>Trades
+      </a>
+      <a href="{{ acct_prefix }}/prompt" class="nav-link pl-8 {% if active_page == 'prompt' %}active{% endif %}">
+        <span class="material-symbols-outlined">gpp_maybe</span>Thesis &amp; kills
+      </a>
+      {% endif %}
+      {% endfor %}
+
+      <div class="my-3 border-t border-slate-800/50"></div>
+      <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Research</p>
+      <a href="/whatif" class="nav-link {% if active_page == 'whatif' %}active{% endif %}"
+         style="color:#a78bfa">
+        <span class="material-symbols-outlined" style="color:#a78bfa">auto_awesome</span>What-If Lab
       </a>
 
+      {# Model-comparison sims, paper portfolios and live sleeves: off the sidebar,
+         still served. Shown when asked for, or when you are already on one. #}
+      {% set in_archived = (sim_prefix is defined and not (book_section is defined and book_section == 'account'))
+                           or active_page in ('live', 'paper') %}
+      {% if (show_archived is defined and show_archived()) or in_archived %}
       <div class="my-3 border-t border-slate-800/50"></div>
       <p class="px-2 mb-1 text-[9px] font-semibold tracking-widest uppercase text-slate-700">Simulation</p>
 
@@ -322,6 +360,7 @@
          style="color:#10b981">
         <span class="material-symbols-outlined" style="color:#10b981">tune</span>Prompt
       </a>
+      {% endif %}
       {% endif %}
     </nav>
 

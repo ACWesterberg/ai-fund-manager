@@ -84,8 +84,8 @@ restore those by hand: `tar -xzf … -C restore/ && cp restore/*.db data/`.
 Everything git does not: every SQLite database under `data/` (the five funds, **live
 sleeves in `data/paper/`**, anything else), What-If results, shadow comparisons, ticker
 aliases, reports, and `config/compiled/` (active guidance, candidates, search
-checkpoints and the request cache). Not logs, not `.env` (unless `BACKUP_ENV=1`), not the
-FinanceData cache. It is the same export a migration takes (`deploy/MIGRATE-TO-MAC.md`).
+checkpoints and the request cache). Not logs, not credentials (`.env` and the Montrose token
+`data/montrose/token.json`, unless `BACKUP_ENV=1`), not the FinanceData cache. It is the same export a migration takes (`deploy/MIGRATE-TO-MAC.md`).
 
 ## Notes
 - `.env` (API keys, Telegram token) is **not** backed up by default — it holds

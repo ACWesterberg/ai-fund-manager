@@ -53,7 +53,12 @@ FORMAT = 1
 EXCLUDED_DIRS = {".venv", "__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache",
                  ".cache", "build", "dist", ".git"}
 EXCLUDED_PREFIXES = ("data/backups/",)
-EXCLUDED_NAMES = {"data/deploy.lock", "data/deployed-revision", ".DS_Store"}
+EXCLUDED_NAMES = {"data/deploy.lock", "data/deploy.pid", "data/deployed-revision",
+                  "data/moved-to-mac", ".DS_Store"}
+# Credentials: API keys, and the Montrose OAuth token (its refresh token reaches the
+# real broker account without BankID). A migration needs them; a backup bound for cloud
+# storage does not, so --no-secrets leaves every one out.
+SECRETS = (".env", "data/montrose/token.json")
 EXCLUDED_SUFFIXES = ("-wal", "-shm", "-journal", ".pyc", ".pyo")
 
 
@@ -165,7 +170,7 @@ def build_stage(root: Path, stage: Path, *, include_env: bool, home_dirs: list[P
                 live: bool, include_logs: bool = True) -> dict:
     files: list[dict] = []
     for rel in state_files(root):
-        if (rel == ".env" and not include_env) or (rel.startswith("data/logs/") and not include_logs):
+        if (rel in SECRETS and not include_env) or (rel.startswith("data/logs/") and not include_logs):
             continue
         src, dst = root / rel, stage / REPO_PREFIX / rel
         if is_sqlite(src):
@@ -240,7 +245,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     home_dirs = [] if args.no_financedata_cache else [Path.home() / ".financedata"]
     with tempfile.TemporaryDirectory() as tmp:
         stage = Path(tmp)
-        manifest = build_stage(root, stage, include_env=not args.no_env, home_dirs=home_dirs,
+        manifest = build_stage(root, stage, include_env=not args.no_secrets, home_dirs=home_dirs,
                                live=args.live, include_logs=not args.no_logs)
         (stage / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True))
         bad = [f["path"] for f in manifest["files"]
@@ -257,8 +262,8 @@ def cmd_export(args: argparse.Namespace) -> int:
         print(f"  ⚠ tracked files differ from git HEAD; saved as {PATCH} in the archive")
     if bad:
         print(f"  ⚠ integrity check failed on the source copy of: {', '.join(bad)}")
-    if not args.no_env:
-        print("  ⚠ the archive contains .env (API keys): copy it machine to machine, not to "
+    if not args.no_secrets:
+        print("  ⚠ the archive contains .env and the Montrose token: copy it machine to machine, not to "
               "cloud storage, and delete it once restored")
     print(f"{'live (trial/backup) ' if args.live else ''}archive: {out}")
     return 1 if bad else 0
@@ -371,8 +376,10 @@ def cmd_restore(args: argparse.Namespace) -> int:
                     if stale.exists():
                         stale.unlink()
             shutil.copy2(src, dst)
-            if dst.name == ".env":
+            if f["path"][len(REPO_PREFIX):] in SECRETS:
                 dst.chmod(0o600)
+                if dst.parent != root:
+                    dst.parent.chmod(0o700)
         record = root / "data" / "migration"
         record.mkdir(parents=True, exist_ok=True)
         shutil.copy2(stage / MANIFEST, record / f"MANIFEST-{manifest['created'][:19].replace(':', '')}.json")
@@ -426,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="allow running services and cron (backups, trial copies); "
                          "recorded in the manifest")
     ex.add_argument("--no-logs", action="store_true", help="leave data/logs out")
-    ex.add_argument("--no-env", action="store_true", help="leave .env (API keys) out")
+    ex.add_argument("--no-secrets", "--no-env", dest="no_secrets", action="store_true",
+                    help="leave credentials out: .env and the Montrose token")
     ex.add_argument("--no-financedata-cache", action="store_true",
                     help="leave ~/.financedata out (regenerable apart from aged-off news)")
     ex.set_defaults(func=cmd_export)

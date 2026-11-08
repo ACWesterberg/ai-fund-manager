@@ -80,7 +80,13 @@ def apply_guardrails(
 
     # Reserve cash, exposure and turnover as each trade is accepted. There is
     # no later pruning that could remove a sell another trade depended upon.
-    for action in sorted(decision.actions, key=lambda a: a.confidence, reverse=True):
+    #
+    # Sells first, then buys, each side highest confidence first. A sell only
+    # releases cash, a slot and bucket room, so every buy is checked against the
+    # book its funding sells leave behind. In pure confidence order a swap whose
+    # buy outranked its sell had the buy refused for the slot or cash the sell
+    # was about to free, and the sell went through alone.
+    for action in sorted(decision.actions, key=lambda a: (a.side == "buy", -a.confidence)):
         if counts[action.ticker] > 1:
             verdicts.append(GuardrailVerdict(action, False, rejection_reason="Duplicate ticker"))
             continue
@@ -155,8 +161,10 @@ def _check_action(
 ) -> GuardrailVerdict:
     v = GuardrailVerdict(action=action, approved=True)
 
-    # 1. Universe check
-    if action.ticker not in universe_tickers:
+    # 1. Universe check — for buys. A holding whose row was disabled, or that
+    # was never in the CSV, must still be sellable.
+    if action.ticker not in universe_tickers and not (
+            action.side != "buy" and action.ticker in current_positions):
         v.approved = False
         v.rejection_reason = f"Ticker {action.ticker!r} not in universe"
         return v

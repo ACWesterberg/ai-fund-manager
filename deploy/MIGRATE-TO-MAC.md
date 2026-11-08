@@ -16,6 +16,7 @@ Everything git does not hold is state, and most of it exists only on the Pi:
 | Shadow comparisons (immutable, scored later) | `data/shadow/` | **No** |
 | What-If results, ticker aliases, reports, logs | `data/whatif/`, `data/ticker_aliases.json`, `data/reports*/`, `data/logs/` | Mostly no |
 | API keys, Telegram, dashboard password | `.env` | Re-enterable |
+| Montrose OAuth token, instrument map | `data/montrose/` | Token: BankID login again; map: rebuilt by hand |
 | FinanceData cache (prices, fundamentals, news) | `~/.financedata/` | Prices yes; aged-off news no |
 
 The funds cannot be split across machines: each fund's optimizer pools training
@@ -86,16 +87,20 @@ python3 deploy/macos/launchd.py plan
 ```
 During the rehearsal, **do not start the bot or install the jobs on the Mac.** Two bots
 on one Telegram token fight over updates, and two sets of jobs would fill the
-simulations twice.
+simulations twice. Also **run no Montrose or account command on the Mac**
+(`montrose-*`, `account-sync`, `report-check`, `earnings-watch`) until cutover. The
+archive carries the Montrose OAuth token (`data/montrose/token.json`). If the Mac uses its
+refresh token, the Pi's copy can stop working and need a fresh BankID login.
 
 ## 2. Cut over
 
 Choose a Saturday: no market, no scheduled job, and Sunday's optimize run will be the
 first job on the Mac.
 
-On the Pi, stop everything that writes:
+First point deploys at the Mac (**Deploys** below), so that no deploy reaches the Pi
+after this point. Then, on the Pi, stop everything that writes:
 ```bash
-crontab -l > ~/crontab.before-mac && crontab -r
+crontab -l > ~/crontab.before-mac && crontab -r   # also removes the managed_cron.sh block
 pgrep -af fund        # wait until nothing but the services is left
 sudo systemctl disable --now fundmgr-bot fundmgr-web fundmgr-global-web
 cd ~/Documents/ai-fund-manager && python3 deploy/migrate.py export
@@ -120,6 +125,7 @@ by accident:
 ```bash
 cd ~/Documents/ai-fund-manager
 mv data data.moved-to-mac-$(date +%Y%m%d) && mkdir -p data/logs
+echo "$(date +%F), mac-studio" > data/moved-to-mac   # deploy.sh now refuses to run here
 crontab deploy/cron.pi-watchdog
 MAC_FUND_URL=http://mac-studio:8010/ deploy/watchdog.sh    # prints nothing when the Mac is up
 ```
@@ -128,7 +134,10 @@ Keep `data.moved-to-mac-*` for a few weeks. It is the fallback if the Mac copy h
 **Deploys:** in GitHub → Settings → Secrets, point `PI_TAILSCALE_IP`, `PI_SSH_USER`
 and `PI_SSH_KEY` at the Mac, and add `FUND_DIR=/Users/<you>/ai-fund-manager`. Turn on
 Remote Login on the Mac (System Settings → General → Sharing). `deploy.sh` detects macOS
-and restarts the launchd agents. Or use the 5-minute poll: add
+restarts the launchd agents, and regenerates the launchd jobs from `cron.example` plus the
+`managed_cron.sh` block (reloading only those that changed). A Mac never gets the
+managed jobs in cron. On the Pi, the `data/moved-to-mac` marker makes any deploy that
+still lands there fail without restarting anything. Or use the 5-minute poll: add
 `*/5 * * * * cd ~/ai-fund-manager && FUND_DIR=$PWD deploy/poll-deploy.sh` to the Mac's crontab,
 or ask for a launchd job for it.
 

@@ -214,6 +214,8 @@ Useful flags: `--force` (ignore the holiday gate), `--force-refresh` (re-fetch p
 
 ## Deployment
 
+**Moving to the Mac Studio:** [deploy/MIGRATE-TO-MAC.md](deploy/MIGRATE-TO-MAC.md). `deploy/migrate.py` exports every file git does not track (all SQLite DBs including `data/paper/`, `config/compiled/`, shadow, What-If, `.env`, `~/.financedata`) with a hash and row-count manifest, and `restore` verifies it. `deploy/backup.sh` takes the same export nightly. On macOS, `deploy/macos/launchd.py` generates launchd jobs from `cron.example` and agents from the systemd units, each job under ai-studio's `studio power run`. The Pi then runs only `deploy/watchdog.sh` (`cron.pi-watchdog`). The five funds move together, because pooling reads every fund's DB.
+
 `deploy/deploy.sh` runs **on the Pi**, pulls the `deploy` branch, checks the `FinanceData` checkout is on the right branch, waits for any in-flight `fund run` to finish, then restarts `fundmgr-bot`, `fundmgr-web` and `fundmgr-global-web` and verifies each came back. Triggered by GitHub Actions over SSH or by `deploy/poll-deploy.sh` (5-min cron). Full provisioning: **[deploy/SETUP.md](deploy/SETUP.md)**; backups: **[deploy/BACKUP.md](deploy/BACKUP.md)**.
 
 ---

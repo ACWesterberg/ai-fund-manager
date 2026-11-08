@@ -36,7 +36,9 @@ jobs:
           port: 22
           timeout: 300s
           script: |
-            EXPECTED_REVISION=${{ github.sha }} DEPLOY_BRANCH=deploy bash /home/${{ secrets.PI_SSH_USER }}/Documents/ai-fund-manager/deploy/deploy.sh
+            # FUND_DIR: the checkout on the host. Set it when the host is the Mac Studio
+            # (/Users/<you>/...); unset keeps the Pi's path. deploy/MIGRATE-TO-MAC.md
+            EXPECTED_REVISION=${{ github.sha }} DEPLOY_BRANCH=deploy bash "${{ secrets.FUND_DIR || format('/home/{0}/Documents/ai-fund-manager', secrets.PI_SSH_USER) }}/deploy/deploy.sh"
 
       - name: Notify Telegram on success
         if: success()
@@ -45,7 +47,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ✅ Fund Manager deployed to Pi
+            ✅ Fund Manager deployed
             Branch: ${{ github.ref_name }}
             Commit: ${{ github.sha }}
             By: ${{ github.actor }}

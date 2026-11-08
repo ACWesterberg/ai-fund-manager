@@ -82,3 +82,28 @@ def test_deploy_ref_must_match_tested_revision(deployment):
     assert result.returncode != 0
     assert not (repo / "data/events").exists()
     assert not (repo / "data/deployed-revision").exists()
+
+
+def test_macos_restarts_the_launchd_agents(deployment):
+    repo, env = deployment
+    binaries = Path(env["PATH"].split(":")[0])
+    for name, body in {
+        "uname": "echo Darwin",
+        "launchctl": 'echo "launchctl $*" >> "$FUND_DIR/data/events"\n'
+                     'case "$1" in print) test ! -f "$FUND_DIR/fail-health" && echo "state = running";; esac',
+    }.items():
+        (binaries / name).write_text("#!/bin/sh\n" + body + "\n")
+        (binaries / name).chmod(0o755)
+    run("bash", str(repo / "deploy/deploy.sh"), env=env)
+    events = (repo / "data/events").read_text()
+    assert "restart" not in events  # no sudo systemctl on a Mac
+    for svc in ("bot", "web", "global-web"):
+        assert f"kickstart -k gui/{os.getuid()}/com.fundmgr.{svc}" in events
+    assert (repo / "data/deployed-revision").exists()
+
+    (repo / "data/deployed-revision").unlink()
+    (repo / "fail-health").touch()
+    failed = subprocess.run(["bash", str(repo / "deploy/deploy.sh")], env=env,
+                            capture_output=True, check=False)
+    assert failed.returncode != 0
+    assert not (repo / "data/deployed-revision").exists()

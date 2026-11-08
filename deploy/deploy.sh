@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# deploy.sh — runs ON the Raspberry Pi to pull latest code and restart services.
-# Called by GitHub Actions (via SSH) or by the polling script.
+# deploy.sh — runs ON the host (Raspberry Pi, or the Mac Studio after the move) to pull
+# latest code and restart services. Called by GitHub Actions (via SSH) or by the polling
+# script. On macOS the services are launchd agents (deploy/macos/launchd.py).
 set -euo pipefail
 
 # Derive repo root from this script's location so it works regardless of username or path
@@ -46,8 +47,14 @@ check_financedata_branch() {
 
 mkdir -p "$(dirname "$LOG_FILE")"
 # Serialize webhook, polling and SSH deployments.
-exec 9>"$REPO_DIR/data/deploy.lock"
-flock -n 9 || { log "Another deployment is running"; exit 0; }
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$REPO_DIR/data/deploy.lock"
+    flock -n 9 || { log "Another deployment is running"; exit 0; }
+else
+    # macOS has no flock; shlock writes our pid and clears a lock whose pid has died.
+    shlock -f "$REPO_DIR/data/deploy.pid" -p $$ || { log "Another deployment is running"; exit 0; }
+    trap 'rm -f "$REPO_DIR/data/deploy.pid"' EXIT
+fi
 SUCCESS_FILE="$REPO_DIR/data/deployed-revision"
 log "=== Deploy started (branch: $BRANCH) ==="
 
@@ -125,19 +132,35 @@ if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ];
 fi
 
 log "Restarting services…"
-sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
+if [ "$(uname -s)" = "Darwin" ]; then
+    DOMAIN="gui/$(id -u)"
+    for svc in bot web global-web; do
+        launchctl kickstart -k "$DOMAIN/com.fundmgr.$svc" || true
+    done
+    sleep 2
+    for svc in bot web global-web; do
+        if launchctl print "$DOMAIN/com.fundmgr.$svc" 2>/dev/null | grep -q "state = running"; then
+            log "  ✓ com.fundmgr.$svc is running"
+        else
+            log "  ✗ com.fundmgr.$svc FAILED to start (see data/logs/service-$svc.log)"
+            exit 1
+        fi
+    done
+else
+    sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
 
-# Verify services came back up
-sleep 2
-for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
-    if systemctl is-active --quiet "$svc"; then
-        log "  ✓ $svc is running"
-    else
-        log "  ✗ $svc FAILED to start"
-        systemctl status "$svc" --no-pager -l >> "$LOG_FILE" 2>&1
-        exit 1
-    fi
-done
+    # Verify services came back up
+    sleep 2
+    for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
+        if systemctl is-active --quiet "$svc"; then
+            log "  ✓ $svc is running"
+        else
+            log "  ✗ $svc FAILED to start"
+            systemctl status "$svc" --no-pager -l >> "$LOG_FILE" 2>&1
+            exit 1
+        fi
+    done
+fi
 
 printf '%s\n' "$AFTER" > "$SUCCESS_FILE.tmp"
 mv "$SUCCESS_FILE.tmp" "$SUCCESS_FILE"

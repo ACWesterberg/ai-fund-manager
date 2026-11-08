@@ -1,0 +1,13 @@
+# The Pi's whole crontab once the fund runs on the Mac Studio (deploy/MIGRATE-TO-MAC.md).
+# Install with: crontab deploy/cron.pi-watchdog   (replaces the old table; keep a copy:
+#               crontab -l > ~/crontab.before-mac)
+#
+# Checks only while the Mac must be awake: 08:45 (before the first stops check at 09:00)
+# to 22:15 (after the last US one), well inside its trading-day window (ai-studio config
+# power.windows, weekdays 07:00-23:59). Outside a window the Mac is asleep on purpose and
+# silence is not an outage. Keep these inside the window if you ever narrow it.
+# Times are Europe/Stockholm (sudo timedatectl set-timezone Europe/Stockholm).
+
+45 8 * * 1-5      cd /home/alexander/Documents/ai-fund-manager && deploy/watchdog.sh >> data/logs/watchdog.log 2>&1
+*/15 9-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && deploy/watchdog.sh >> data/logs/watchdog.log 2>&1
+0,15 22 * * 1-5   cd /home/alexander/Documents/ai-fund-manager && deploy/watchdog.sh >> data/logs/watchdog.log 2>&1

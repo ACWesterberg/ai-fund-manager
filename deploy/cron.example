@@ -1,5 +1,9 @@
 # AI Fund Manager — crontab
 #
+# Also the Mac Studio's schedule: deploy/macos/launchd.py turns every active line here
+# into a launchd job (deploy/MIGRATE-TO-MAC.md), so change times here, not there. Keep
+# lines to plain 5-field schedules; it refuses @reboot and day-of-month + weekday.
+#
 # IMPORTANT: set the Pi timezone first so times here track DST automatically:
 #   sudo timedatectl set-timezone Europe/Stockholm
 #   date   # verify

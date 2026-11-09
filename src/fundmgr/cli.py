@@ -273,6 +273,17 @@ def _weekly_run(cfg, store, dry_run: bool, force_refresh: bool, skip_news: bool,
     click.echo(f"      {ok}/{len(tickers)} tickers resolved")
     if failed:
         click.echo(f"      ✗ Failed: {', '.join(failed)}")
+    # A matured outcome is scored from the cache, but only enabled names and
+    # holdings are fetched: a name bought, sold and then disabled (or skipped
+    # by the global rotation) never got its horizon close and stayed pending
+    # for good — and the losers that get dropped are exactly those.
+    unpriced = ({o.ticker for o in store.get_pending_outcomes(
+        older_than_days=cfg.evaluation_horizon_days)} - set(fetch_result))
+    if unpriced and not dry_run:
+        fetch_and_cache_prices(holding_rows(cfg.universe_path, unpriced), store,
+                               cfg.data.lookback_days, force_refresh)
+        click.echo(f"      + {len(unpriced)} name(s) with outcomes to score: "
+                   f"{', '.join(sorted(unpriced)[:8])}{' …' if len(unpriced) > 8 else ''}")
 
     # ── Step 2: Fetch / refresh fundamentals cache (weekly TTL) ───────────────
     feature_tickers = tickers_for_feature_build(tickers, fetch_tickers, store)
@@ -395,6 +406,12 @@ def _weekly_run(cfg, store, dry_run: bool, force_refresh: bool, skip_news: bool,
             f"{total_learnings} new learnings generated "
             f"({len(qual_learnings)} qualitative, {len(stat_learnings)} calibration)."
         )
+    if not dry_run:
+        waiting = store.get_pending_outcomes(older_than_days=horizon + 7)
+        if waiting:
+            click.echo(f"\n[*] {len(waiting)} outcome(s) a week past their horizon are still "
+                       "unscored (no close or benchmark at the horizon): "
+                       f"{', '.join(sorted({o.ticker for o in waiting})[:8])}")
 
     # ── Step 6: Build portfolio snapshot (attach live prices, native→SEK) ────
     from fundmgr.data.fx import rate_to_sek

@@ -116,6 +116,37 @@ def test_only_moves_on_a_report_become_events(store, cfg):
     assert by["NEWS.ST"]["source"] == "news"
 
 
+def test_a_report_before_the_open_is_logged_once_on_its_own_day(store, cfg):
+    """Pre-open on R: the calendar matches it on R's evening, and R+1 adds nothing."""
+    days = _days(26)
+    r_day, next_day = days[-2], days[-1]
+    _flat_bench(store, days)
+    history = lambda t: [{"date": r_day}]
+    _seed(store, "PRE.ST", [100.0] * 24 + [90], days[:-1])        # the cache as of R
+    [event] = rx.detect_events(store, cfg, [_ticker("PRE.ST")], rx._Bench(store.get_benchmark()),
+                               today=r_day, history=history, news_fn=lambda t: [])
+    assert (event["source"], event["report_date"], event["event_date"]) == ("calendar", r_day, r_day)
+    assert store.add_report_event(event) is not None
+
+    _seed(store, "PRE.ST", [100.0] * 24 + [90, 89], days)         # R+1's evening
+    again = rx.detect_events(store, cfg, [_ticker("PRE.ST")], rx._Bench(store.get_benchmark()),
+                             today=next_day, history=history, news_fn=lambda t: [])
+    assert [store.add_report_event(e) for e in again] in ([], [None])
+    assert len(store.get_report_events()) == 1
+
+
+def test_one_report_seen_from_overlapping_windows_is_stored_once(store):
+    base = {"ticker": "PRE.ST", "reaction_pct": -10.0, "abnormal_pct": -10.0,
+            "volume_ratio": 2.0, "source": "news"}
+    assert store.add_report_event({**base, "report_date": "2026-10-19",
+                                   "event_date": "2026-10-20"}) is not None
+    assert store.add_report_event({**base, "report_date": "2026-10-20", "event_date": "2026-10-21",
+                                   "source": "calendar"}) is None
+    assert store.add_report_event({**base, "report_date": "2027-01-28",
+                                   "event_date": "2027-01-29"}) is not None
+    assert len(store.get_report_events()) == 2
+
+
 # ── Judging ───────────────────────────────────────────────────────────────────
 
 SOURCE = [{"headline": "Q3 report", "publisher": "MFN", "published": "2026-10-20",

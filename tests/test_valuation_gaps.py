@@ -243,3 +243,25 @@ def test_a_dry_run_neither_scores_outcomes_nor_reports_failure(weekly):
     assert result.exit_code == 1
     assert seen["llm"] == 1
     assert not any("Weekly run failed" in t for t in seen["telegram"])
+
+
+def test_a_matured_outcome_on_a_dropped_name_is_still_priced(weekly):
+    """Bought, sold, then disabled: its horizon close must still be fetched."""
+    import json as _json
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from fundmgr.state.models import RecommendationLog
+    store, seen, go, monkeypatch = weekly
+    store.save_recommendation(RecommendationLog(
+        run_id="old", timestamp=_dt.utcnow() - _td(days=40), prompt_snapshot="{}",
+        llm_response="{}", guardrail_log="{}", actions_json="[]"))
+    store.seed_outcomes_for_run("old", _json.dumps([{"ticker": "GONE.ST", "side": "buy",
+                                                    "confidence": .7, "thesis": "t"}]),
+                                prices={"GONE.ST": 10.0})
+    fetched = []
+    monkeypatch.setattr(commands, "fetch_and_cache_prices",
+                        lambda tickers, *_a: fetched.extend(t.yahoo_ticker for t in tickers)
+                        or {t.yahoo_ticker: True for t in tickers})
+    go()
+    assert "GONE.ST" in fetched

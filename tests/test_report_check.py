@@ -94,6 +94,28 @@ def test_a_report_headline_stands_in_when_yahoo_has_no_date():
     assert found == {"date": _days_before(2), "source": "news"}
 
 
+def test_a_later_q3_headline_does_not_move_the_report_date():
+    news = [{"headline": "Interim report Q3 2026", "published": _days_before(2)},
+            {"headline": "Analyst: Q3 shows margin pressure", "published": _days_before(1)}]
+    found = rc.latest_report("HELD.ST", TODAY, rc.LOOKBACK_DAYS,
+                             history=lambda t: [], news_fn=lambda t: news)
+    assert found == {"date": _days_before(2), "source": "news"}
+
+
+def test_a_news_dated_report_is_not_reviewed_again_as_its_window_slides(store, cfg):
+    """Once the original headline ages out, a follow-up must not read as a new report."""
+    fake = _consensus([_sample()] * 3)
+    report = [{"headline": "Interim report Q3", "published": _days_before(2)}]
+    follow = report + [{"headline": "Q3: what the market missed", "published": TODAY}]
+    coverage = [{**COVERAGE[0], "published": _days_before(2)}]
+    rc.run_check(store, cfg, today=TODAY, history=lambda t: [], news_fn=lambda t: report,
+                 coverage_fn=lambda t, d: coverage, consensus=fake, echo=lambda *_: None)
+    later = (datetime.strptime(TODAY, "%Y-%m-%d") + timedelta(days=3)).strftime("%Y-%m-%d")
+    rc.run_check(store, cfg, today=later, history=lambda t: [], news_fn=lambda t: follow,
+                 coverage_fn=lambda t, d: COVERAGE, consensus=fake, echo=lambda *_: None)
+    assert len(fake.calls) == 1
+
+
 # ── Evidence ──────────────────────────────────────────────────────────────────
 
 def test_a_verdict_resting_on_a_real_sentence_stands(store, cfg):

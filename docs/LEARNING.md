@@ -17,6 +17,12 @@ they are not interchangeable with profitable allocations.
   requested horizon, no more than seven calendar days earlier. Store the actual
   evaluation date. No live-price fallback; missing history or benchmark data
   leaves the outcome pending instead of generating an incomplete lesson batch.
+  A bar dated today is still filling and is never a label (the outcome waits
+  for the next run), and the benchmark must be cached through the evaluation
+  date. The entry is rebased for a split only when the close before the
+  decision moved too, so a real decision-day collapse is scored, not erased.
+  The benchmark still starts at the decision day's close while the entry is
+  the decision-time price — a known, unfixed intraday mismatch.
 - **Thesis evidence:** include only news both published and cached inside the
   inclusive UTC date window, ending at the earlier of the actual evaluation date
   and the requested horizon. Undated/unparseable news is excluded. Repeated cache

@@ -87,6 +87,52 @@ def test_a_dividend_adjustment_keeps_the_recorded_decision_price(tmp_path):
     assert o.position_return_pct == pytest.approx(10.0)
 
 
+def _prior_close(store, close: float) -> None:
+    day = (datetime.strptime(_iso(40), "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    store.save_prices("AAA.ST", [{"date": day, "open": 0, "high": 0, "low": 0,
+                                  "close": close, "volume": 0}])
+
+
+def test_a_decision_day_collapse_is_scored_not_rebased_away(tmp_path):
+    """Bought at 100 at 09:30, closed the day at 80 and stayed there: −20%, not 0%."""
+    from fundmgr.engine.evaluator import evaluate_pending_outcomes
+    store = Store(tmp_path / "f.db")
+    _seed_outcome(store, price_at_decision=100.0, decision_close=80.0, eval_close=80.0)
+    _prior_close(store, 99.0)                         # the session before saw ~100
+    [o] = evaluate_pending_outcomes(store, lookback_days=28)
+    assert o.position_return_pct == pytest.approx(-20.0)
+
+
+def test_a_split_that_rebased_the_prior_close_too_is_still_rebased(tmp_path):
+    from fundmgr.engine.evaluator import evaluate_pending_outcomes
+    store = Store(tmp_path / "f.db")
+    _seed_outcome(store, price_at_decision=200.0, decision_close=100.0, eval_close=110.0)
+    _prior_close(store, 99.0)                         # 198 before the 2:1 rescale
+    [o] = evaluate_pending_outcomes(store, lookback_days=28)
+    assert o.position_return_pct == pytest.approx(10.0)
+
+
+def test_a_label_maturing_today_waits_for_a_completed_bar(tmp_path):
+    """The 09:30 run's cache holds today's still-filling bar."""
+    from fundmgr.engine.evaluator import evaluate_pending_outcomes
+    store = Store(tmp_path / "f.db")
+    _seed_outcome(store, price_at_decision=100.0, decision_close=100.0, eval_close=95.0)
+    target = (datetime.strptime(_iso(40), "%Y-%m-%d") + timedelta(days=28)).strftime("%Y-%m-%d")
+    assert evaluate_pending_outcomes(store, lookback_days=28, today=target) == []
+    [o] = evaluate_pending_outcomes(store, lookback_days=28)
+    assert o.evaluation_date == target
+
+
+def test_a_benchmark_that_stops_short_of_the_evaluation_date_leaves_it_pending(tmp_path):
+    from fundmgr.engine.evaluator import evaluate_pending_outcomes
+    store = Store(tmp_path / "f.db")
+    _seed_outcome(store, price_at_decision=100.0, decision_close=100.0, eval_close=110.0)
+    with store._conn() as conn:
+        conn.execute("DELETE FROM benchmark_cache WHERE date > ?", (_iso(40),))
+    store.save_benchmark([{"date": _iso(13), "close": 1010.0}])   # the session before target
+    assert evaluate_pending_outcomes(store, lookback_days=28) == []
+
+
 # ── Sleeve and account NAV ────────────────────────────────────────────────────
 
 def test_sleeve_nav_is_marked_at_market_not_cost(tmp_path):

@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[DecisionOutcome]:
+def evaluate_pending_outcomes(store: Store, lookback_days: int = 28,
+                              today: str | None = None) -> list[DecisionOutcome]:
     """
     For each pending outcome older than lookback_days, compute return vs
     benchmark over a *fixed* horizon and persist. Returns the evaluated outcomes.
@@ -31,7 +32,15 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
     is persisted regardless of when this evaluator runs. When the cache has no
     close on or before that target, the outcome stays pending. A later live
     quote must not masquerade as a fixed-horizon observation.
+
+    Nor may today's bar: the cache holds today's still-filling session, so the
+    09:30 run scored an outcome maturing that morning on the 09:30 print and
+    persisted it for good. A label whose close would be today's waits for the
+    next run. The benchmark must also be cached through the evaluation date —
+    its cache refreshes only every three days, and a series ending the session
+    before put a whole day of market move into "alpha".
     """
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pending = store.get_pending_outcomes(older_than_days=lookback_days)
     if not pending:
         return []
@@ -42,8 +51,10 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
             continue
 
         eval_price, eval_date = _evaluation_price(store, outcome, lookback_days)
-        if eval_price is None:
+        if eval_price is None or eval_date >= today:
             continue
+        if not store.get_benchmark(since_date=eval_date):
+            continue  # benchmark not yet cached through the evaluation date
 
         position_return = (eval_price / _entry_price(store, outcome) - 1) * 100
 
@@ -84,9 +95,17 @@ def _entry_price(store: Store, outcome: DecisionOutcome) -> float:
     can move, the history was rebased and both ends come from it.
     """
     cached = store.close_on_or_before(outcome.ticker, outcome.decision_date, max_delta_days=7)
-    if cached is not None and abs(cached[1] / outcome.price_at_decision - 1) > REBASE_TOLERANCE:
-        return cached[1]
-    return outcome.price_at_decision
+    if cached is None or abs(cached[1] / outcome.price_at_decision - 1) <= REBASE_TOLERANCE:
+        return outcome.price_at_decision
+    # A split rescales every close before it, the session before the decision
+    # included; a real decision-day move (a report-day collapse after the
+    # 09:30 run) leaves that close where the decision saw it. Rebasing on the
+    # decision-day close alone scored a −20% day as 0% and erased the tails.
+    before = (datetime.strptime(outcome.decision_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    prior = store.close_on_or_before(outcome.ticker, before, max_delta_days=7)
+    if prior is not None and abs(prior[1] / outcome.price_at_decision - 1) <= REBASE_TOLERANCE:
+        return outcome.price_at_decision
+    return cached[1]
 
 
 def _evaluation_price(

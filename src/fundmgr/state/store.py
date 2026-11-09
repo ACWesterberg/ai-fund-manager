@@ -380,9 +380,20 @@ class Store:
 
     # ── Report-reaction experiment ────────────────────────────────────────────
 
+    # Two logged reactions of one ticker this close are one report seen from
+    # overlapping two-session windows, not two reports.
+    REPORT_EVENT_GAP_DAYS = 4
+
     def add_report_event(self, event: dict) -> int | None:
         """Log a report reaction once. Returns its id, or None if already logged."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM report_events WHERE ticker = ? "
+                "AND ABS(julianday(event_date) - julianday(?)) <= ?",
+                (event["ticker"], event["event_date"], self.REPORT_EVENT_GAP_DAYS),
+            ).fetchone():
+                return None
             cur = conn.execute(
                 "INSERT OR IGNORE INTO report_events (ticker, report_date, event_date, "
                 "reaction_pct, abnormal_pct, volume_ratio, source, eps_estimate, "

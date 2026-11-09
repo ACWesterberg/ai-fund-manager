@@ -360,9 +360,14 @@ def detect_events(store, cfg, tickers: list, bench: _Bench, today: str | None = 
             except CalendarUnavailable as exc:
                 calendar_down = True
                 warn(f"  ⚠ {exc}\n    Falling back to report headlines for every name this run.")
-        rep = next((h for h in reports if before < h["date"] <= report_day), None)
+        # Up to the event day itself: a report released before the open on the
+        # event day is this move. Matching only the session before sent it to
+        # the headline fallback, and the next day logged it again from the
+        # calendar — one report, two events, two paid verdicts.
+        rep = next((h for h in reports if before < h["date"] <= series[i1]["date"]), None)
         if rep is not None:
             source = "calendar"
+            report_day = rep["date"]
         elif _headline_report(t.yahoo_ticker, before, series[i1]["date"], news_fn):
             source, rep = "news", {}
         else:

@@ -95,15 +95,29 @@ def latest_report(ticker: str, today: str, days: int,
     if dated:
         return {**dated[-1], "source": "calendar"}
 
-    newest = None
+    # The earliest report headline, not the newest: an analyst piece mentioning
+    # "Q3" the next day moved the date, missed the once-only key, and paid for a
+    # second review that `dated_since` then fed only the follow-up commentary.
+    earliest = None
     for item in news_fn(ticker) or []:
         when = _parse_date(item.get("published", ""))
         if when is None or not REPORT_WORDS.search(item.get("headline", "")):
             continue
         day = when.isoformat()
-        if since < day <= today and (newest is None or day > newest):
-            newest = day
-    return {"date": newest, "source": "news"} if newest else None
+        if since < day <= today and (earliest is None or day < earliest):
+            earliest = day
+    return {"date": earliest, "source": "news"} if earliest else None
+
+
+def _already_read(store: Store, ticker: str, report_date: str) -> bool:
+    """This report, or one dated within LOOKBACK_DAYS before it, was handled.
+
+    Two reports of one company inside four days don't happen; one report whose
+    headline-derived date shifted as the window slid does.
+    """
+    day = datetime.strptime(report_date, "%Y-%m-%d")
+    return any(store.get_meta(_meta_key(ticker, (day - timedelta(days=n)).strftime("%Y-%m-%d")))
+               for n in range(LOOKBACK_DAYS + 1))
 
 
 def build_prompt(ticker: str, report: dict, source_text: str, store: Store,
@@ -274,7 +288,7 @@ def run_check(store: Store, cfg: AppConfig, only: str | None = None,
             # Asked about by name with no dated report: read whatever is recent.
             report = {"date": today, "source": "on demand"}
         key = _meta_key(tk, report["date"])
-        if not only and store.get_meta(key):
+        if not only and _already_read(store, tk, report["date"]):
             continue
         echo(f"  {tk}: report {report['date']} [{report['source']}]")
         if dry_run:

@@ -197,3 +197,21 @@ def test_a_news_trigger_starts_no_run_within_a_day_of_the_last(tmp_path, monkeyp
     result = CliRunner().invoke(commands.cli, ["check-news"])
     assert result.exit_code == 0, result.output
     assert bool(started) is starts
+
+
+def test_backfill_nav_never_replaces_a_marked_point(tmp_path, monkeypatch):
+    from fundmgr.state.models import Transaction
+    cfg = AppConfig(db_path=tmp_path / "f.db", capital_sek=10_000)
+    store = Store(cfg.db_path)
+    store.initialise(10_000)
+    store.apply_fill(Transaction(ticker="AAA.ST", side="buy", shares=10, price_sek=100.0,
+                                 fee_sek=1.0, source="fill"))
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    store.upsert_nav(NavPoint(date=today, portfolio_nav_sek=10_500.0,
+                              benchmark_value=100.0, cash_sek=8_999.0))
+    monkeypatch.setattr(commands, "_get_store", lambda cfg_=None: (cfg, store))
+    result = CliRunner().invoke(commands.cli, ["backfill-nav"])
+    assert result.exit_code == 0, result.output
+    points = {n.date: n.portfolio_nav_sek for n in store.get_nav_history()}
+    assert points[today] == 10_500.0                    # the marked point stands
+    assert len(points) == 2                             # the day-before start was filled

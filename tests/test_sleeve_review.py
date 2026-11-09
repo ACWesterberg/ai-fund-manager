@@ -1974,3 +1974,9 @@ def test_ideas_never_add_to_a_name_already_held(env, sleeve, monkeypatch):
                                    sek_estimate=10_000, confidence=0.9, thesis="more")])
     result = sleeve_review.review_sleeve(sleeve, include_macro=False, ideas_sek=20_000)
     assert result["actions"] == [] and result["buy_count"] == 0
+
+
+def test_risk_caps_must_be_finite_percentages():
+    raw = {"max_position_pct": "inf", "max_turnover_pct": float("nan"),
+           "min_cash_pct": 250, "max_positions": 8}
+    assert sleeve_review.clean_risk(raw) == {"max_positions": 8}

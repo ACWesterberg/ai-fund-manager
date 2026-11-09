@@ -77,6 +77,8 @@ def test_clean_targets_keeps_known_regions_in_region_order():
     {"nordics": 140},          # past 100
     {"nordics": ""},           # blank field = no opinion
     {"nordics": None},
+    {"nordics": float("nan")},  # a NaN ceiling never binds
+    {"nordics": "inf"},
 ])
 def test_clean_targets_drops_anything_unusable(raw):
     assert regions.clean_targets(raw) == {}

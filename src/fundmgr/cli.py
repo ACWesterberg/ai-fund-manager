@@ -978,6 +978,18 @@ def backfill_nav():
         earlier = [d for d in bench_dates_sorted if d <= date_str]
         return bench_lookup[earlier[-1]] if earlier else bench_lookup[bench_dates_sorted[0]]
 
+    # Only dates with no point are filled. A replay at cost basis must never
+    # replace a point marked at market (the safety contract), and it misses
+    # dividends, tax, interest and set-cash corrections besides.
+    marked = {n.date for n in store.get_nav_history()}
+
+    def fill(point: NavPoint) -> bool:
+        if point.date in marked:
+            return False
+        store.upsert_nav(point)
+        marked.add(point.date)
+        return True
+
     # Replay transactions: simulate portfolio state at each transaction date
     sim_positions: dict[str, tuple[float, float]] = {}  # ticker -> (shares, avg_cost)
     cash = cfg.capital_sek
@@ -985,14 +997,12 @@ def backfill_nav():
     # Record starting NAV one day before first transaction (all cash)
     from datetime import timedelta
     start_date = (txns[0].timestamp - timedelta(days=1)).strftime("%Y-%m-%d")
-    store.upsert_nav(NavPoint(
+    inserted = int(fill(NavPoint(
         date=start_date,
         portfolio_nav_sek=cfg.capital_sek,
         benchmark_value=nearest_bench(start_date),
         cash_sek=cfg.capital_sek,
-    ))
-
-    inserted = 1
+    )))
     # Deposits and withdrawals move the replayed cash on their own dates, or
     # every point after a top-up would be short of the money that arrived.
     pending_flows = list(store.get_cash_flows())
@@ -1016,15 +1026,15 @@ def backfill_nav():
 
         date_str = txn.timestamp.strftime("%Y-%m-%d")
         nav_cost = sum(s * c for s, c in sim_positions.values()) + cash
-        store.upsert_nav(NavPoint(
+        inserted += fill(NavPoint(
             date=date_str,
             portfolio_nav_sek=nav_cost,
             benchmark_value=nearest_bench(date_str),
             cash_sek=cash,
         ))
-        inserted += 1
 
-    click.echo(f"✓ Backfilled {inserted} NAV points from {txns[0].timestamp.date()} to {txns[-1].timestamp.date()}")
+    click.echo(f"✓ Backfilled {inserted} missing NAV point(s) from {txns[0].timestamp.date()} "
+               f"to {txns[-1].timestamp.date()}; existing points were left as marked")
     click.echo("  (NAV uses cost-basis, not live prices — next 'fund run' will update today's point with live prices)")
 
 

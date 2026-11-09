@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -172,7 +173,8 @@ def clean_risk(raw: dict | None) -> dict:
             parsed = int(value) if key == "max_positions" else float(value)
         except (TypeError, ValueError):
             continue
-        if parsed > 0:
+        # inf passed `> 0` and was stored on the sleeve for every later review.
+        if parsed > 0 and math.isfinite(parsed) and (key == "max_positions" or parsed <= 100):
             out[key] = parsed
     return out
 

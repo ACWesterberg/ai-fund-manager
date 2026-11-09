@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import json
 import os
 import re
@@ -1112,7 +1113,7 @@ def _opt_float(value) -> float | None:
         out = float(str(value).replace(",", ".").strip())
     except (TypeError, ValueError):
         return None
-    return out if out > 0 else None
+    return out if out > 0 and math.isfinite(out) else None
 
 
 def _safe_confidence(value) -> float | None:

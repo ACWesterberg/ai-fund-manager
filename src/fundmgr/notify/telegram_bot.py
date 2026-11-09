@@ -41,6 +41,9 @@ from io import BytesIO
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# httpx logs every request URL at INFO, and Telegram's carry the bot token
+# (POST https://api.telegram.org/bot<TOKEN>/getUpdates) — into the service log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 try:

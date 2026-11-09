@@ -145,12 +145,31 @@ def run_consensus(system: str, user: str, cfg: AppConfig, schema, label: str) ->
     return parsed_all
 
 
-def majority(reviews: list) -> tuple[str, list, dict[str, int]]:
-    """(winning recommendation, the reviews backing it, full vote counts)."""
+def majority(reviews: list, requested: int | None = None) -> tuple[str, list, dict[str, int]]:
+    """(winning recommendation, the reviews backing it, full vote counts).
+
+    A winner needs more than half of the samples *requested*. Short of that the
+    call is HOLD: `most_common` broke a 2-2-1 split by thread arrival order, so
+    the same five samples could file EXIT or HOLD, and one survivor of five
+    counted as a consensus. The HOLD is backed by the samples that said hold,
+    or by all of them when none did (see `no_majority`).
+    """
     counts = Counter(r.recommendation for r in reviews)
-    winner, _ = counts.most_common(1)[0]
-    agreeing = [r for r in reviews if r.recommendation == winner]
-    return winner, agreeing, dict(counts)
+    winner, n = counts.most_common(1)[0]
+    if n * 2 > max(len(reviews), requested or 0):
+        return winner, [r for r in reviews if r.recommendation == winner], dict(counts)
+    holds = [r for r in reviews if r.recommendation == "hold"]
+    return "hold", holds or list(reviews), dict(counts)
+
+
+def no_majority(winner: str, counts: dict[str, int], requested: int) -> bool:
+    """True when `majority` fell back to HOLD rather than finding one."""
+    return counts.get(winner, 0) * 2 <= max(requested, sum(counts.values()))
+
+
+def no_majority_note(counts: dict[str, int], requested: int, text: str) -> str:
+    """`what_changed` for a fallback HOLD, saying so before the sample's own text."""
+    return f"[No majority ({votes_str(counts, requested)}) — holding.] {text}"[:400]
 
 
 # Review verbs → the buy/sell/hold vocabulary decision_outcomes is scored in.

@@ -226,7 +226,9 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
 
 # ── Consensus sampling ────────────────────────────────────────────────────────
 
-def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str, int]]:
+def _aggregate_decisions(
+    runs: list[DecisionRun], requested: int | None = None,
+) -> tuple[DecisionRun, dict[str, int]]:
     """
     Majority-vote aggregate of N DecisionRun objects.
 
@@ -234,9 +236,12 @@ def _aggregate_decisions(runs: list[DecisionRun]) -> tuple[DecisionRun, dict[str
     agree on the same side (buy/sell/hold). Numeric fields are averaged across
     the agreeing runs; the thesis is taken from the highest-confidence agreeing run.
 
+    "Half" is of the samples *requested*, not the ones that came back: with 3 of
+    5 failing, two agreeing survivors are 2-of-5, not a majority.
+
     Returns (consensus_decision, {ticker: n_agreeing_runs}).
     """
-    n = len(runs)
+    n = max(len(runs), requested or 0)
     threshold = n // 2 + 1  # e.g. 2 out of 3, 3 out of 5
 
     all_tickers: set[str] = {a.ticker for run in runs for a in run.actions}
@@ -321,8 +326,13 @@ def call_llm_consensus(
     if not results:
         raise LLMError(f"All {n} LLM calls failed: {'; '.join(errors)}")
 
+    if len(results) * 2 <= n:
+        # A lone survivor of five used to pass through as the whole decision.
+        raise LLMError(
+            f"Only {len(results)}/{n} LLM call(s) succeeded — no majority is possible: "
+            f"{'; '.join(e[:200] for e in errors)}"
+        )
     if errors:
-        # Partial failure — note it but continue with what we have
         print(f"  ⚠ {len(errors)}/{n} LLM call(s) failed; building consensus from {len(results)} run(s).")
 
     sampling = {
@@ -332,8 +342,5 @@ def call_llm_consensus(
         "errors":    [e[:200] for e in errors],  # truncated for storage
     }
 
-    if len(results) == 1:
-        return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}, sampling
-
-    consensus, vote_counts = _aggregate_decisions(results)
+    consensus, vote_counts = _aggregate_decisions(results, requested=n)
     return consensus, consensus.model_dump_json(), vote_counts, sampling

@@ -92,3 +92,8 @@ def test_an_unknown_formatted_command_says_so():
     asyncio.run(tb._formatted_command({})(types.SimpleNamespace(message=msg),
                                           types.SimpleNamespace(args=None)))
     assert msg.replies and "/nope" in msg.replies[0]
+
+
+def test_request_urls_carrying_the_token_are_not_logged():
+    import logging
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING

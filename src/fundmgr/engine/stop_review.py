@@ -20,6 +20,8 @@ from fundmgr.engine.review_common import (
     live_price_sek,
     log_review,
     majority,
+    no_majority,
+    no_majority_note,
     run_consensus,
     technicals_block,
     todo_line,
@@ -132,16 +134,18 @@ Return the StopReview JSON."""
     return system, user, tech_live
 
 
-def _vote(reviews: list[StopReview]) -> tuple[StopReview, dict[str, int]]:
+def _vote(reviews: list[StopReview], requested: int | None = None) -> tuple[StopReview, dict[str, int]]:
     """Majority-vote the recommendation; average confidence among agreeing reviews."""
-    winner, agreeing, counts = majority(reviews)
+    requested = max(requested or 0, len(reviews))
+    winner, agreeing, counts = majority(reviews, requested)
     best = max(agreeing, key=lambda r: r.confidence)
+    split = no_majority(winner, counts, requested)
     consensus = StopReview(
         ticker=best.ticker,
         recommendation=winner,
         confidence=round(sum(r.confidence for r in agreeing) / len(agreeing), 3),
-        trim_pct=best.trim_pct,
-        what_changed=best.what_changed,
+        trim_pct=None if split else best.trim_pct,
+        what_changed=no_majority_note(counts, requested, best.what_changed) if split else best.what_changed,
         rationale=best.rationale,
     )
     return consensus, counts
@@ -169,7 +173,8 @@ def review_position(
     if built is None:
         return None
     system, user, native_price = built
-    consensus, votes = _vote(run_consensus(system, user, cfg, StopReview, "stop-review"))
+    consensus, votes = _vote(run_consensus(system, user, cfg, StopReview, "stop-review"),
+                             requested=max(1, cfg.llm.n_samples))
     if log_decision:
         log_review(consensus, store, "stop_review", native_price,
                    votes=votes, n_samples=max(1, cfg.llm.n_samples))

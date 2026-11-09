@@ -36,6 +36,8 @@ from fundmgr.engine.review_common import (
     live_price_sek,
     log_review,
     majority,
+    no_majority,
+    no_majority_note,
     run_consensus,
     technicals_block,
     todo_line,
@@ -185,17 +187,22 @@ def _verified(sample: ReportCheck, source_text: str) -> ReportCheck:
     })
 
 
-def vote(samples: list[ReportCheck]) -> tuple[ReportCheck, dict[str, int]]:
+def vote(samples: list[ReportCheck], requested: int | None = None) -> tuple[ReportCheck, dict[str, int]]:
     """Majority recommendation; status, confidence and quotes from the samples behind it."""
-    winner, agreeing, counts = majority(samples)
+    requested = max(requested or 0, len(samples))
+    winner, agreeing, counts = majority(samples, requested)
     best = max(agreeing, key=lambda s: s.confidence)
     status, _ = max(((s, sum(a.thesis_status == s for a in agreeing))
                      for s in {a.thesis_status for a in agreeing}), key=lambda kv: kv[1])
-    return best.model_copy(update={
+    update = {
         "recommendation": winner,
         "thesis_status": status,
         "confidence": round(sum(s.confidence for s in agreeing) / len(agreeing), 3),
-    }), counts
+    }
+    if no_majority(winner, counts, requested):
+        update.update(trim_pct=None, thesis_status="unclear",
+                      what_changed=no_majority_note(counts, requested, best.what_changed))
+    return best.model_copy(update=update), counts
 
 
 def dated_since(items: list[dict], report_date: str) -> list[dict]:
@@ -235,8 +242,8 @@ def review_report(ticker: str, report: dict, store: Store, cfg: AppConfig,
 
     samples = [_verified(s, source_text)
                for s in consensus(system, user, cfg, ReportCheck, "report-check")]
-    verdict, votes = vote(samples)
     n = max(1, cfg.llm.n_samples)
+    verdict, votes = vote(samples, requested=n)
     review_id = log_review(verdict, store, SOURCE, native_price, votes=votes, n_samples=n)
     store.set_meta(_meta_key(ticker, report["date"]), review_id)
     return {"review": verdict, "votes": votes, "n": n, "report": report,

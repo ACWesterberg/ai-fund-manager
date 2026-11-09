@@ -222,6 +222,33 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if not force and _skip_on_market_holiday(cfg):
         return
 
+    try:
+        _weekly_run(cfg, store, dry_run, force_refresh, skip_news, skip_macro, skip_fundamentals)
+    except Exception as exc:
+        _notify_run_failed(cfg, exc, dry_run)
+        raise
+
+
+def _notify_run_failed(cfg, exc: Exception, dry_run: bool) -> None:
+    """Telegram the owner when a weekly run dies without a decision.
+
+    A failed consensus or a crash in fetch/macro/features used to leave a Monday
+    without a decision and only a stderr line in weekly.log. The holiday and
+    can't-value skips exit through SystemExit and notify themselves.
+    """
+    if dry_run:
+        return
+    from fundmgr.notify.send import send_telegram
+    send_telegram(
+        f"<b>{html.escape(cfg.display_name)}</b>\n⛔ Weekly run failed — no decision was saved\n"
+        f"{html.escape(type(exc).__name__)}: {html.escape(str(exc)[:500])}\n"
+        "See data/logs/weekly.log; /run once it's fixed."
+    )
+
+
+def _weekly_run(cfg, store, dry_run: bool, force_refresh: bool, skip_news: bool,
+                skip_macro: bool, skip_fundamentals: bool) -> None:
+    """The pipeline behind `fund run`, after the pause, lock and holiday gates."""
     tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}
     # Only enabled rows are buyable, but every holding is priced and shown so it
@@ -343,7 +370,12 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
     horizon = cfg.evaluation_horizon_days
-    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
+    # Scoring is permanent and the thesis check and lesson calls are paid, so a
+    # dry run ("nothing saved") leaves them to the next real run. The prompt
+    # still reads the lessons already learned.
+    evaluated = [] if dry_run else evaluate_pending_outcomes(store, lookback_days=horizon)
+    if dry_run:
+        click.echo("\n[*] Dry run: matured outcomes left unscored; no new learnings.")
     if evaluated:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
@@ -439,6 +471,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, effective_cfg)
     except LLMError as e:
         click.echo(f"  ✗ LLM call failed: {e}", err=True)
+        _notify_run_failed(cfg, e, dry_run)
         sys.exit(1)
     if sampling["failed"]:
         click.echo(f"      ⚠ {sampling['failed']}/{sampling['requested']} sample(s) failed to parse")

@@ -192,3 +192,36 @@ def test_the_run_prices_a_holding_whose_row_was_disabled(weekly):
     assert seen["llm"] == 1
     held = {p.ticker: p for p in seen["snap"].positions}
     assert held["HEM.ST"].current_price_sek == 100.0
+
+
+# ── A failed run says so; a dry run scores nothing ───────────────────────────
+
+def test_a_failed_consensus_is_reported_on_telegram(weekly):
+    store, seen, go, monkeypatch = weekly
+    result = go()
+    assert result.exit_code == 1
+    assert "Weekly run failed" in seen["telegram"][-1]
+    assert "stopped by the test" in seen["telegram"][-1]
+
+
+def test_a_crash_before_the_model_is_reported_on_telegram(weekly):
+    store, seen, go, monkeypatch = weekly
+
+    def broken(*_a, **_k):
+        raise RuntimeError("feature build exploded")
+
+    monkeypatch.setattr(commands, "build_all_features", broken)
+    result = go()
+    assert result.exit_code != 0
+    assert "RuntimeError: feature build exploded" in seen["telegram"][-1]
+
+
+def test_a_dry_run_neither_scores_outcomes_nor_reports_failure(weekly):
+    store, seen, go, monkeypatch = weekly
+    monkeypatch.setattr(commands, "evaluate_pending_outcomes",
+                        lambda *_a, **_k: pytest.fail("a dry run must not score outcomes"))
+    result = CliRunner().invoke(commands.cli, ["run", "--dry-run", "--force", "--skip-news",
+                                               "--skip-macro", "--skip-fundamentals"])
+    assert result.exit_code == 1
+    assert seen["llm"] == 1
+    assert not any("Weekly run failed" in t for t in seen["telegram"])

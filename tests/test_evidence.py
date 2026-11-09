@@ -462,8 +462,11 @@ def test_parse_verdict_rejects_noise():
     assert paper._parse_verdict("I'm not sure what you mean") is None
 
 
-def test_parse_verdict_defaults_unknown_verdict_to_no():
-    assert paper._parse_verdict('{"verdict": "maybe", "reason": "x"}')["verdict"] == "no"
+def test_parse_verdict_reads_an_unknown_verdict_as_unsettled_not_no():
+    """'maybe' or 'unclear' is a line nobody settled, not a clean bill of health."""
+    assert paper._parse_verdict('{"verdict": "maybe", "reason": "x"}')["verdict"] == "insufficient"
+    assert paper._parse_verdict('{"verdict": "unclear", "reason": "x"}')["verdict"] == "insufficient"
+    assert paper._parse_verdict('{"verdict": "No", "reason": "x"}')["verdict"] == "no"
 
 
 # ── check_kill_criteria with the tri-state verdict ────────────────────────────
@@ -610,12 +613,19 @@ def test_no_evidence_at_all_skips_the_judge(watched_book, monkeypatch, telegram)
 
 
 def test_judge_failure_is_not_a_verdict(watched_book, monkeypatch, telegram):
-    """An API failure must not be recorded as 'intact'."""
+    """An expired key or truncated reply used to read as 'checked, nothing to report'."""
     _pack_stub(monkeypatch)
     monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: None)
-    assert paper.check_kill_criteria(watched_book) == []
+    log = paper.check_kill_criteria(watched_book)
+    assert any("judge failed" in line for line in log)
     _meta, store = paper.open_portfolio(watched_book)
     assert store.get_meta("paper_killverdict:VIT-B.ST") is None
+    assert store.get_meta("paper_killwatch:VIT-B.ST") is None     # retried, not skipped
+
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "no", "reason": "growth intact", "unchecked": []})
+    paper.check_kill_criteria(watched_book)
+    assert json.loads(store.get_meta("paper_killverdict:VIT-B.ST"))["verdict"] == "no"
 
 
 def test_dashboard_flags_an_unverifiable_criterion(watched_book, monkeypatch):

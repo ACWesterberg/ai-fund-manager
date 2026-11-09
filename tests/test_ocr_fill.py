@@ -312,5 +312,62 @@ async def test_full_flow_unknown_isin_requests_ticker_then_confirmation(monkeypa
     confirmation = mock_message.reply_text.call_args
     assert "SEYE.ST" in confirmation.args[0]
     buttons = confirmation.kwargs["reply_markup"].inline_keyboard[0]
-    assert [button.callback_data for button in buttons] == ["fill_confirm", "fill_cancel"]
+    confirm, cancel = (button.callback_data for button in buttons)
+    assert confirm.startswith("fill_confirm:") and cancel == confirm.replace("confirm", "cancel")
     execute.assert_not_called()
+
+
+# ── 5. Each confirmation books its own fill, into the book it named ──────────
+
+@pytest.mark.asyncio
+async def test_each_confirm_button_books_its_own_fill_into_the_book_it_named(monkeypatch):
+    from fundmgr.notify import telegram_bot as tb
+
+    monkeypatch.setattr(tb, "_fill_offers", {})
+    monkeypatch.setattr(tb, "_pending_fills", {})
+    monkeypatch.setattr(tb, "_active_book", {})
+    calls = []
+    monkeypatch.setattr(tb, "_run_cli_ok", lambda *a, **k: calls.append(a) or (True, "ok"))
+
+    tb._active_book[7] = "sleeve-a"
+    first = tb._offer_fill(7, {"ticker": "AAA.ST", "side": "buy", "shares": 1,
+                               "price": 10.0, "fee": 1.0, "trade_date": None})
+    tb._active_book.pop(7)                                   # /ptarget off before the tap
+    second = tb._offer_fill(7, {"ticker": "BBB.ST", "side": "buy", "shares": 2,
+                                "price": 20.0, "fee": 1.0, "trade_date": None})
+
+    def tap(markup, which):
+        query = AsyncMock()
+        query.data = markup.inline_keyboard[0][which].callback_data
+        update = MagicMock(callback_query=query)
+        update.effective_chat.id = 7
+        return tb.fill_callback(update, MagicMock()), query
+
+    coro, query = tap(first, 0)
+    await coro
+    assert calls == [("paper-fill", "sleeve-a", "AAA.ST", "1", "10.0", "1.0", "--side", "buy")]
+
+    coro, query = tap(first, 0)                              # a second tap is stale
+    await coro
+    assert len(calls) == 1 and "expired" in query.edit_message_text.call_args.args[0]
+
+    coro, _ = tap(second, 1)                                 # cancel B; A already booked
+    await coro
+    assert len(calls) == 1 and tb._fill_offers == {}
+
+
+@pytest.mark.asyncio
+async def test_another_chat_cannot_use_a_confirmation(monkeypatch):
+    from fundmgr.notify import telegram_bot as tb
+
+    monkeypatch.setattr(tb, "_fill_offers", {})
+    calls = []
+    monkeypatch.setattr(tb, "_run_cli_ok", lambda *a, **k: calls.append(a) or (True, "ok"))
+    markup = tb._offer_fill(7, {"ticker": "AAA.ST", "side": "buy", "shares": 1,
+                                "price": 10.0, "fee": 1.0})
+    query = AsyncMock()
+    query.data = markup.inline_keyboard[0][0].callback_data
+    update = MagicMock(callback_query=query)
+    update.effective_chat.id = 8
+    await tb.fill_callback(update, MagicMock())
+    assert calls == []

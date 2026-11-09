@@ -16,6 +16,7 @@ map) is kept in that DB's app_meta table; the registry is just the directory.
 from __future__ import annotations
 
 import hashlib
+import logging
 import json
 import os
 import re
@@ -1523,13 +1524,17 @@ def check_kill_criteria(slug: str, store: Store | None = None) -> list[str]:
         if store.get_meta(f"paper_killwatch:{ticker}") == today:
             continue  # already checked today
         pack = build_pack(store, ticker)
-        store.set_meta(f"paper_killwatch:{ticker}", today)
         if not (pack["news"] or pack["fundamentals"]):
+            store.set_meta(f"paper_killwatch:{ticker}", today)
             continue  # nothing to judge against at all
 
         result = _judge_kill_hit(ticker, criterion, pack)
         if result is None:
+            # Not stamped as checked: an expired key, exhausted quota or a
+            # truncated reply used to read as "checked today, nothing to report".
+            log.append(f"⚠ {ticker}: kill-criterion judge failed — not checked, will retry")
             continue
+        store.set_meta(f"paper_killwatch:{ticker}", today)
         store.set_meta(f"paper_killverdict:{ticker}", json.dumps({
             "date": today, **result, "coverage": pack["coverage"],
         }))
@@ -1667,7 +1672,8 @@ def _judge_kill_hit(ticker: str, criterion: str, pack: dict) -> dict | None:
         except Exception:
             resp = client.chat.completions.create(**kwargs)
         return _parse_verdict((resp.choices[0].message.content or "").strip())
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).warning("kill judge for %s failed: %s", ticker, exc)
         return None
 
 
@@ -1694,10 +1700,12 @@ def _parse_verdict(answer: str) -> dict | None:
             unchecked = []
         if verdict.startswith("yes"):
             verdict = "yes"
-        elif verdict.startswith("insuff"):
-            verdict = "insufficient"
-        else:
+        elif verdict.startswith("no"):
             verdict = "no"
+        else:
+            # "unclear", "partially", "insufficient": anything but a plain no is
+            # a line that wasn't settled, never a clean bill of health.
+            verdict = "insufficient"
         return {
             "verdict": verdict,
             "reason": str(data.get("reason") or "").strip(),

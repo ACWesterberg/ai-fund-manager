@@ -108,12 +108,16 @@ def proposals(report: rec.Report, *, import_from: date, imports: dict[int, dict]
         if not t["ticker"]:
             p.problem = (f"no ledger symbol for {t.get('montrose') or t['orderbookId']} — "
                          f"fund montrose-map {t['orderbookId']} SYMBOL, then it is offered again")
+        elif not t["shares"] or t["shares"] <= 0:
+            # split_fee divides by it: one such row aborted every import run.
+            p.problem = "Montrose reports no quantity for this trade — book by hand"
         elif str(t.get("currency") or account_ccy).upper() != account_ccy:
             p.problem = f"settled in {t.get('currency')}, not {account_ccy} — book by hand"
         elif clash:
             p.problem = (f"the ledger has a {t['side']} of {rec._sh(clash[0]['shares'])} "
                          f"{t['ticker']} on {clash[0]['date']} that Montrose doesn't — fix that "
-                         "fill by hand first (/undo or /fill), or this would count it twice")
+                         "fill by hand first (fund undo-fill, or /fill to correct it), or "
+                         "this would count it twice")
         else:
             p.price_sek, p.fee_sek, p.fee_estimated = split_fee(
                 t["side"], t["shares"], t["price"], p.price_currency, t["amount"], fee_calc)

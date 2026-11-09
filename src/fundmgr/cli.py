@@ -4339,6 +4339,8 @@ def _montrose_report(cfg, store, since: date, offline: bool = False, notify: boo
         cash_tolerance=cfg.montrose.cash_tolerance_sek,
         cost_tolerance_pct=cfg.montrose.cost_tolerance_pct,
         booked_ids={i for i, row in imports.items() if row["status"] == "booked"},
+        booked_txns={i: row["ledger_txn_id"] for i, row in imports.items()
+                     if row["status"] == "booked" and row.get("ledger_txn_id") is not None},
     )
     props = []
     if cfg.montrose.import_from:

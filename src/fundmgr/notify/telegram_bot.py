@@ -67,7 +67,14 @@ ROOT     = Path(__file__).resolve().parents[3]
 FUND_BIN = ROOT / ".venv" / "bin" / "fund"
 
 # Pending vision-extracted fills awaiting user confirmation: chat_id -> data dict
+# (the latest per chat; a fill still waiting for its ticker reply lives here).
 _pending_fills: dict[int, dict] = {}
+
+# Each confirmation message's own fill, keyed by the token in its buttons.
+# One slot per chat let "✓ Record fill" under screenshot A book screenshot B,
+# and A's Cancel discard B; the destination book was read at tap time too.
+_fill_offers: dict[str, dict] = {}
+MAX_FILL_OFFERS = 50
 
 # Active paper/mirror book per chat: when set, /pfill and Montrose screenshots
 # record into this paper slug instead of the main fund. Set via /ptarget.
@@ -1082,16 +1089,26 @@ async def photo_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     _book = _active_book.get(chat_id)
     lines.append(f"\n📋 Records into: <b>{_book_name(_book) or _book if _book else 'main fund'}</b>")
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),
-        InlineKeyboardButton("✗ Cancel",      callback_data="fill_cancel"),
-    ]])
-
     await update.message.reply_text(
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=_offer_fill(chat_id, _pending_fills[chat_id]),
     )
+
+
+def _offer_fill(chat_id: int, data: dict) -> "InlineKeyboardMarkup":
+    """Confirm/Cancel buttons bound to this fill and the book named in its message."""
+    import secrets
+
+    token = secrets.token_hex(6)
+    while len(_fill_offers) >= MAX_FILL_OFFERS:
+        _fill_offers.pop(next(iter(_fill_offers)))
+    _fill_offers[token] = {"chat_id": chat_id, "data": dict(data),
+                           "book": _active_book.get(chat_id)}
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✓ Record fill", callback_data=f"fill_confirm:{token}"),
+        InlineKeyboardButton("✗ Cancel",      callback_data=f"fill_cancel:{token}"),
+    ]])
 
 
 async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
@@ -1100,15 +1117,19 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
     await query.answer()
     chat_id = update.effective_chat.id
 
-    if query.data == "fill_cancel":
+    action, _, token = (query.data or "").partition(":")
+    offer = _fill_offers.pop(token, None) if token else None
+    if offer is None or offer["chat_id"] != chat_id:
+        await query.edit_message_text("This confirmation has expired — send the screenshot again.")
+        return
+    if _pending_fills.get(chat_id) == offer["data"]:
         _pending_fills.pop(chat_id, None)
+
+    if action == "fill_cancel":
         await query.edit_message_text("Cancelled. Use /fill manually if needed.")
         return
 
-    data = _pending_fills.pop(chat_id, None)
-    if not data:
-        await query.edit_message_text("No pending fill — please send a new screenshot.")
-        return
+    data = offer["data"]
 
     ticker     = data.get("ticker", "")
     side       = data.get("side", "buy")
@@ -1124,7 +1145,7 @@ async def fill_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         )
         return
 
-    slug = _active_book.get(chat_id)
+    slug = offer["book"]
     if slug:
         cli_args = ["paper-fill", slug, ticker, str(shares), str(price), str(fee), "--side", side]
     else:
@@ -1172,11 +1193,8 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     _book = _active_book.get(chat_id)
     lines.append(f"\n📋 Records into: <b>{_book_name(_book) or _book if _book else 'main fund'}</b>")
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✓ Record fill", callback_data="fill_confirm"),
-        InlineKeyboardButton("✗ Cancel",      callback_data="fill_cancel"),
-    ]])
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=keyboard)
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML",
+                                    reply_markup=_offer_fill(chat_id, pending))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

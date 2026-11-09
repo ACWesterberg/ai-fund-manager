@@ -356,3 +356,66 @@ def test_the_evening_reconcile_books_too_when_auto_book_is_on(env, tmp_path):
     assert sorted(store.get_broker_imports()) == [4, 5, 6, 7, 8]
     assert any("Booked from Montrose" in t for t, _ in sent)
     assert not any(b for _, b in sent)       # nothing left to offer
+
+
+# ── Booked rows pair by id; the window's edge never re-books a fill ──────────
+
+def _inwi_twice(newest_first: bool):
+    a = _tx(10, "Buy", "2026-10-12", 610, 10, 180.0, "SEK", -1_801.8)
+    b = _tx(11, "Buy", "2026-10-12", 610, 10, 180.0, "SEK", -1_801.8)
+    return [b, a] if newest_first else [a, b]
+
+
+@pytest.mark.parametrize("newest_first", [False, True])
+def test_a_second_identical_fill_is_offered_whatever_order_montrose_lists_it(newest_first):
+    """#10 was booked as ledger txn 77; #11 must not pair with it and vanish."""
+    snap = _snapshot(txns=_inwi_twice(newest_first))
+    booked = rec.LedgerTrade(date(2026, 10, 12), "INWI.ST", "buy", 10, -1_801.8, txn_id=77)
+    report = rec.reconcile(snap, **_ledger(ledger_trades=[booked], ledger_flows=[]),
+                           universe=UNIVERSE, instruments=INSTRUMENTS, cash_tolerance=25.0,
+                           booked_ids={10}, booked_txns={10: 77})
+    props = imp.proposals(report, import_from=date(2026, 10, 1),
+                          imports={10: {"status": "booked"}}, fee_calc=FEES)
+    assert [(p.broker_id, p.bookable) for p in props] == [(11, True)]
+
+
+def test_a_fill_booked_before_the_window_edge_is_not_booked_again():
+    """Ledger 09-26, broker 09-28, window from 09-27: the pair straddles the edge."""
+    snap = _snapshot(txns=[_tx(20, "Buy", "2026-09-28", 610, 40, 182.0, "SEK", -7_287.28)])
+    early = _ledger_trade("2026-09-26", "INWI.ST", "buy", 40, -7_287.28)
+    report = rec.reconcile(snap, **_ledger(ledger_trades=[early], ledger_flows=[]),
+                           universe=UNIVERSE, instruments=INSTRUMENTS, cash_tolerance=25.0)
+    assert report.missing_in_ledger == [] and report.not_at_broker == []
+    assert imp.proposals(report, import_from=date(2026, 9, 1), imports={}, fee_calc=FEES) == []
+
+
+def test_ledger_rows_before_the_window_are_not_reported_as_extra():
+    snap = _snapshot(txns=[])
+    early = _ledger_trade("2026-09-25", "INWI.ST", "buy", 40, -7_287.28)
+    report = rec.reconcile(snap, **_ledger(ledger_trades=[early], ledger_flows=[
+        {"date": "2026-09-25", "amount_sek": 5_000.0, "note": ""}]),
+        universe=UNIVERSE, instruments=INSTRUMENTS, cash_tolerance=25.0)
+    assert report.not_at_broker == [] and report.flows_extra == []
+
+
+def test_a_deposit_booked_late_does_not_block_the_next_one():
+    """Booked a week after its Montrose date, it no longer sits in flows_extra."""
+    txns = [_tx(30, "Deposit", "2026-10-01", amount=20_000.0),
+            _tx(31, "Deposit", "2026-10-20", amount=5_000.0)]
+    report = rec.reconcile(_snapshot(txns=txns),
+                           **_ledger(ledger_trades=[], ledger_flows=[
+                               {"date": "2026-10-09", "amount_sek": 20_000.0, "note": ""}]),
+                           universe=UNIVERSE, instruments=INSTRUMENTS, cash_tolerance=25.0,
+                           booked_ids={30})
+    assert report.flows_extra == []
+    props = imp.proposals(report, import_from=date(2026, 10, 1),
+                          imports={30: {"status": "booked"}}, fee_calc=FEES)
+    assert [(p.broker_id, p.bookable) for p in props] == [(31, True)]
+
+
+def test_a_trade_with_no_quantity_is_named_not_a_crash():
+    snap = _snapshot(txns=[_tx(40, "Buy", "2026-10-12", 610, 0, 0.0, "SEK", -1_000.0)])
+    report = rec.reconcile(snap, **_ledger(ledger_trades=[], ledger_flows=[]),
+                           universe=UNIVERSE, instruments=INSTRUMENTS, cash_tolerance=25.0)
+    (p,) = imp.proposals(report, import_from=date(2026, 10, 1), imports={}, fee_calc=FEES)
+    assert not p.bookable and "no quantity" in p.problem

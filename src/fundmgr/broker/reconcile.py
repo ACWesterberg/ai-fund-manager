@@ -218,6 +218,7 @@ class LedgerTrade:
     side: str
     shares: float
     cash_effect: float          # SEK; buy negative, sell positive, fee included
+    txn_id: int | None = None   # the ledger's transaction id, to pair booked rows exactly
 
 
 @dataclass
@@ -260,14 +261,27 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
               ledger_flows: list[dict], universe: list[UniverseTicker],
               instruments: dict[str, dict], cash_tolerance: float = 25.0,
               cost_tolerance_pct: float = 1.0, booked_ids: set[int] | frozenset = frozenset(),
+              booked_txns: dict[int, int] | None = None,
               ) -> Report:
     """Compare a broker snapshot with the ledger. Pure: no I/O, no writes.
 
     `booked_ids` are Montrose rows already booked into the ledger (phase 2).
-    Fills and deposits match on their own; a booked dividend or tax row has no
-    ledger row to match, so this is how it stops being listed as unbooked.
+    A booked dividend or tax row has no ledger row to match, so this is how it
+    stops being listed as unbooked. `booked_txns` maps a booked fill's Montrose
+    id to the ledger transaction it created: those pair with each other before
+    anything is matched by content, or two identical same-day fills could pair
+    crosswise and leave the second one "booked" yet missing from the ledger.
+    A booked deposit pairs with a ledger flow of its amount whatever the dates.
+
+    Ledger rows up to DATE_SLACK_DAYS before `since` are read too, to match a
+    broker row inside the window; unmatched, they are outside it and ignored.
+    Without that, the day the window's edge passed between a fill's ledger
+    date and its later trade date, the broker row read as unbooked and was
+    booked a second time.
     """
+    booked_txns = booked_txns or {}
     since = date.fromisoformat(snapshot["since"])
+    reach = since - timedelta(days=DATE_SLACK_DAYS)
     known = known_symbols(list(ledger_positions), universe)
     account_ccy = (snapshot.get("currency") or "SEK").upper()
 
@@ -331,7 +345,7 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
 
     # Trades: exact date first, then within a few days (fills booked on the wrong day).
     explained = 0.0
-    open_ledger = [t for t in ledger_trades if t.date >= since]
+    open_ledger = [t for t in ledger_trades if t.date >= reach]
     broker_trades = []
     for t in snapshot.get("transactions") or []:
         if t.get("isCanceled"):
@@ -350,21 +364,28 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
                                        "amount": amount, "text": t.get("text") or ""})
             explained += amount
 
-    for exact in (True, False):
+    for rule in ("booked", "exact", "near"):
         for t in list(broker_trades):
             side = "buy" if t["category"] == "Buy" else "sell"
             qty = abs(_num(t.get("quantity")))
             d = date.fromisoformat(t["tradeDate"])
             y = yahoo_for(t.get("orderbookId"), currency=t.get("priceCurrency"))
-            match = next((lt for lt in open_ledger
-                          if lt.ticker == y and lt.side == side and abs(lt.shares - qty) <= SHARES_EPS
-                          and (lt.date == d if exact else abs((lt.date - d).days) <= DATE_SLACK_DAYS)),
-                         None)
+            if rule == "booked":
+                own = booked_txns.get(t.get("id"))
+                match = next((lt for lt in open_ledger
+                              if own is not None and lt.txn_id == own), None)
+            else:
+                match = next((lt for lt in open_ledger
+                              if lt.ticker == y and lt.side == side
+                              and abs(lt.shares - qty) <= SHARES_EPS
+                              and (lt.date == d if rule == "exact"
+                                   else abs((lt.date - d).days) <= DATE_SLACK_DAYS)),
+                             None)
             if match is None:
                 continue
             broker_trades.remove(t)
             open_ledger.remove(match)
-            if not exact:
+            if match.date != d:
                 report.date_diffs.append({"ticker": y, "side": side, "shares": qty,
                                           "broker_date": d.isoformat(),
                                           "ledger_date": match.date.isoformat()})
@@ -389,20 +410,32 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
         if str(t.get("currency", account_ccy)).upper() == account_ccy:
             explained += amount
     for lt in open_ledger:
+        if lt.date < since:
+            continue  # read only to match a row inside the window
         report.not_at_broker.append({"date": lt.date.isoformat(), "side": lt.side,
                                      "ticker": lt.ticker, "shares": lt.shares,
                                      "amount": lt.cash_effect})
         explained -= lt.cash_effect
 
     flows = [{"date": f["date"], "amount": _num(f["amount_sek"])}
-             for f in ledger_flows if date.fromisoformat(f["date"][:10]) >= since]
-    for t in snapshot.get("transactions") or []:
-        if t.get("isCanceled") or t.get("category") not in FLOW_CATEGORIES:
-            continue
+             for f in ledger_flows if date.fromisoformat(f["date"][:10]) >= reach]
+
+    def gap(f: dict, d: date) -> int:
+        return abs((date.fromisoformat(f["date"][:10]) - d).days)
+
+    flow_rows = [t for t in snapshot.get("transactions") or []
+                 if not t.get("isCanceled") and t.get("category") in FLOW_CATEGORIES]
+    # Booked rows first, by amount at any distance: a deposit booked days late
+    # (after a login lapse) is dated the booking day, and as "extra" it blocked
+    # every later deposit from auto-booking for the length of the window.
+    flow_rows.sort(key=lambda t: t.get("id") not in booked_ids)
+    for t in flow_rows:
         amount = _num(t.get("amount"))
         d = date.fromisoformat(t["tradeDate"])
-        match = next((f for f in flows if abs(f["amount"] - amount) <= AMOUNT_TOLERANCE_SEK
-                      and abs((date.fromisoformat(f["date"][:10]) - d).days) <= DATE_SLACK_DAYS), None)
+        same = [f for f in flows if abs(f["amount"] - amount) <= AMOUNT_TOLERANCE_SEK]
+        if t.get("id") not in booked_ids:
+            same = [f for f in same if gap(f, d) <= DATE_SLACK_DAYS]
+        match = min(same, key=lambda f: gap(f, d), default=None)
         if match:
             flows.remove(match)
             explained += amount - match["amount"]
@@ -412,6 +445,8 @@ def reconcile(snapshot: dict, *, ledger_cash: float, ledger_positions: dict[str,
                                          "amount": amount})
             explained += amount
     for f in flows:
+        if date.fromisoformat(f["date"][:10]) < since:
+            continue
         report.flows_extra.append(f)
         explained -= f["amount"]
 
@@ -423,12 +458,14 @@ def ledger_inputs(store: Any, since: date) -> dict:
     """Read what `reconcile` needs from the fund's Store. Reads only."""
     positions = store.get_positions()
     trades = []
+    reach = since - timedelta(days=DATE_SLACK_DAYS)
     for t in store.get_transactions(limit=100_000):
-        if t.side not in ("buy", "sell") or t.timestamp.date() < since:
+        if t.side not in ("buy", "sell") or t.timestamp.date() < reach:
             continue
         gross = t.shares * t.price_sek
         effect = -(gross + t.fee_sek) if t.side == "buy" else gross - t.fee_sek
-        trades.append(LedgerTrade(t.timestamp.date(), t.ticker.upper(), t.side, t.shares, effect))
+        trades.append(LedgerTrade(t.timestamp.date(), t.ticker.upper(), t.side, t.shares, effect,
+                                  txn_id=t.id))
     return {
         "ledger_cash": store.get_cash(),
         "ledger_positions": {p.ticker.upper(): p.shares for p in positions},

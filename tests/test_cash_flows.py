@@ -121,6 +121,21 @@ def test_reset_clears_the_flows_with_the_rest_of_the_book(store):
     assert store.get_cash_flows() == []
 
 
+def test_reset_forgets_which_montrose_rows_were_booked(store):
+    store.book_broker_cash(42, "Deposit", TODAY, 1_000.0, flow=True)
+    assert 42 in store.get_broker_imports()
+    store.reset(50_000)
+    assert store.get_broker_imports() == {}
+
+
+def test_a_deposit_and_a_cash_adjustment_both_land(store):
+    """Each is one locked read-modify-write; neither overwrites the other."""
+    before = store.get_cash()
+    store.adjust_cash(-250.0)
+    store.record_cash_flow(1_000)
+    assert store.get_cash() == pytest.approx(before + 750.0)
+
+
 # ── Everything that reads a return ────────────────────────────────────────────
 
 def test_the_chart_draws_no_jump_on_deposit_day(store):
@@ -183,3 +198,24 @@ def test_set_cash_upwards_points_at_deposit(cli_store):
     result = CliRunner().invoke(commands.cli, ["set-cash", "60000"])
     assert result.exit_code == 0
     assert "fund deposit 10000.00" in result.output
+
+
+def test_a_point_without_a_benchmark_does_not_fake_alpha():
+    navs = [_nav(_day(3), 100_000, 100.0), _nav(_day(2), 101_000, 101.0),
+            _nav(_day(1), 102_000, 0.0)]
+    stats = compute_stats(navs, 100_000)
+    assert stats["benchmark_return_pct"] == pytest.approx(1.0)
+
+
+def test_volatility_is_annualised_by_how_often_the_book_is_marked():
+    """The same ±1% steps are far less volatile a year if they are weekly."""
+    steps = [1.01, 0.99] * 5
+    def series(gap_days):
+        out, nav = [], 100_000.0
+        for i, step in enumerate([1.0] + steps):
+            nav *= step
+            out.append(_nav(_day(gap_days * (len(steps) - i)), nav))
+        return out
+    weekly = compute_stats(series(7), 100_000)["volatility_ann_pct"]
+    daily = compute_stats(series(1), 100_000)["volatility_ann_pct"]
+    assert weekly == pytest.approx(daily * (1 / 7) ** 0.5, rel=0.02)

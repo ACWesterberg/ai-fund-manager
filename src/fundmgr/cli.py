@@ -1240,12 +1240,15 @@ def check_stops(quiet: bool):
         except Exception:
             hist = None
 
-        if hist is None or hist.empty:
+        closes = None if hist is None or hist.empty else hist["Close"].dropna()
+        # A NaN last close made every comparison False and printed "✓ ok" with
+        # the stop unchecked; the last finite close is the price, or none is.
+        if closes is None or closes.empty or not float(closes.iloc[-1]) > 0:
             if not quiet:
                 click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}")
             continue
 
-        live_native = float(hist["Close"].iloc[-1])
+        live_native = float(closes.iloc[-1])
         live_price = _to_sek(live_native, p.ticker)  # SEK, for cost-basis comparison & display
         if live_price is None:
             if not quiet:
@@ -1261,11 +1264,12 @@ def check_stops(quiet: bool):
         # at market open yfinance still shows yesterday's close as last_price,
         # which would make the "daily" change show yesterday's move instead
         daily_chg = None
-        if len(hist) >= 2:
-            last_bar_date = hist.index[-1].date()
+        if len(closes) >= 2:
+            last_bar_date = closes.index[-1].date()
             if last_bar_date == today_date:
-                prev_day_close = float(hist["Close"].iloc[-2])
-                daily_chg = (live_native / prev_day_close - 1) * 100  # native ratio
+                prev_day_close = float(closes.iloc[-2])
+                if prev_day_close > 0:
+                    daily_chg = (live_native / prev_day_close - 1) * 100  # native ratio
         levels = stop_map.get(p.ticker, {})
         stop_pct = levels.get("stop_pct")
         tp_pct = levels.get("take_profit_pct")
@@ -3128,8 +3132,10 @@ def account_create(name: str, snapshot_file: str | None, montrose_account: str |
 @click.option("--dry-run", is_flag=True, help="Show what changed without writing anything.")
 @click.option("--no-plans", is_flag=True, help="Don't write plans for newly opened names.")
 @click.option("--quiet", is_flag=True, help="Don't send the Telegram summary.")
+@click.option("--allow-empty", is_flag=True,
+              help="Accept a snapshot with no holdings (closes every position).")
 def account_sync(slug: str | None, snapshot_file: str | None, sync_all: bool, dry_run: bool,
-                 no_plans: bool, quiet: bool):
+                 no_plans: bool, quiet: bool, allow_empty: bool):
     """Bring an account in line with its broker: whatever changed since the last
     sync is booked as your trade, new names get a monitoring plan, and the
     summary goes to Telegram. Reads the linked Montrose account unless a
@@ -3146,7 +3152,8 @@ def account_sync(slug: str | None, snapshot_file: str | None, sync_all: bool, dr
         snapshot = Path(snapshot_file).read_text() if snapshot_file else None
         result = accounts.sync_account(slug, snapshot,
                                        notify=not quiet and not dry_run,
-                                       write_plans=not no_plans, dry_run=dry_run)
+                                       write_plans=not no_plans, dry_run=dry_run,
+                                       allow_empty=allow_empty)
     except (KeyError, ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
         raise click.ClickException(str(e)) from e
     click.echo(html.unescape(_strip_tags(result["message"])))

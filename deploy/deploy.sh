@@ -71,19 +71,22 @@ log "=== Deploy started (branch: $BRANCH) ==="
 
 cd "$REPO_DIR"
 
-# Wait before changing the source or dependencies used by an active run.
-log "Checking for active fund run…"
+# Wait before changing the source or dependencies used by an active fund
+# command — not only `fund run`: montrose-import --auto books the real ledger
+# every 30 minutes, and cli.py imports modules lazily, so an old process could
+# load new code mid-booking after the reset below.
+log "Checking for active fund commands…"
 WAIT=0
-while pgrep -f "fund run" > /dev/null 2>&1; do
-    if [ $WAIT -eq 0 ]; then log "  Fund run in progress — waiting for it to finish…"; fi
+while pgrep -f "(bin/fund |fund run)" > /dev/null 2>&1; do
+    if [ $WAIT -eq 0 ]; then log "  A fund command is running — waiting for it to finish…"; fi
     WAIT=$((WAIT + 5))
     if [ $WAIT -gt 1800 ]; then
-        log "  ✗ Fund run still active — aborting deployment; retry later"
+        log "  ✗ Fund command still active — aborting deployment; retry later"
         exit 1
     fi
     sleep 5
 done
-[ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
+[ $WAIT -gt 0 ] && log "  Fund command finished after ${WAIT}s — proceeding with restart"
 
 # Ensure we're on the right branch
 git fetch origin "$BRANCH" --quiet

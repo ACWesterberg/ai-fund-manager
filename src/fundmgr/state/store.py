@@ -374,8 +374,17 @@ class Store:
             )
 
     def adjust_cash(self, delta_sek: float) -> float:
-        new_balance = self.get_cash() + delta_sek
-        self.set_cash(new_balance)
+        # One locked read-modify-write: read and write on two connections let a
+        # fill committed in between (the 30-minute import) be overwritten.
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT balance_sek FROM cash WHERE id = 1").fetchone()
+            new_balance = (float(row["balance_sek"]) if row else 0.0) + delta_sek
+            conn.execute(
+                "INSERT INTO cash (id, balance_sek) VALUES (1, ?) "
+                "ON CONFLICT(id) DO UPDATE SET balance_sek = excluded.balance_sek",
+                (new_balance,),
+            )
         return new_balance
 
     # ── Report-reaction experiment ────────────────────────────────────────────
@@ -466,6 +475,10 @@ class Store:
         `flow_date` must name the first NAV date that already shows the money.
         """
         with self._conn() as conn:
+            # Locked before the balance is read: the read used to run outside
+            # the implicit transaction, so a fill booked in between was lost
+            # when the deposit wrote back its stale balance plus the amount.
+            conn.execute("BEGIN IMMEDIATE")
             return self._record_cash_flow(conn, amount_sek, flow_date, note, adjust_cash)
 
     @staticmethod
@@ -1076,6 +1089,9 @@ class Store:
             nav_end   = nearest_nav(end_date)
             if nav_start is None or nav_end is None:
                 continue
+            if not nav_start["benchmark_value"] or not nav_end["benchmark_value"] \
+                    or not nav_start["portfolio_nav_sek"]:
+                continue  # a point written without a benchmark (0.0) can't be scored
 
             # Net out deposits in the window, or a top-up week would score as
             # the best decision the fund ever made.
@@ -2197,6 +2213,13 @@ class Store:
         "daily_price_alerts",
         "position_alerts",
         "app_meta",
+        # Left behind, every Montrose row booked before stayed "decided" against
+        # the emptied ledger and was never offered again; the old book's open
+        # reviews and earnings heads-ups outlived it too. report_events is a
+        # universe-wide experiment, not this book's state, and is kept.
+        "broker_imports",
+        "position_reviews",
+        "earnings_checks",
     )
     _CACHE_TABLES = (
         "price_cache",

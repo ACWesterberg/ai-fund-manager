@@ -31,6 +31,7 @@ a recorded cash flow rather than showing up as profit.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 
 from fundmgr import paper
@@ -292,7 +293,8 @@ def _buy_price(old_shares: float, old_avg: float, row: dict, delta: float,
 
 
 def sync_account(slug: str, snapshot=None, *, notify: bool = True,
-                 write_plans: bool = True, dry_run: bool = False) -> dict:
+                 write_plans: bool = True, dry_run: bool = False,
+                 allow_empty: bool = False) -> dict:
     """Bring an account book in line with a holdings snapshot.
 
     Returns {changes, cash, warnings, plans, message}. `changes` lists one entry
@@ -312,6 +314,15 @@ def sync_account(slug: str, snapshot=None, *, notify: bool = True,
                              "give it a holdings snapshot instead.")
         snapshot = montrose_snapshot(linked, store=store)
     parsed = parse_snapshot(snapshot)
+    held = store.get_positions()
+    if not parsed["holdings"] and held and not allow_empty:
+        # An empty read would sell every name at live prices and retire every
+        # plan, hand-written criteria included; the next good read re-opens
+        # them as new names. Far likelier a bad read than a sold-out account.
+        raise ValueError(
+            f"The snapshot lists no holdings while '{meta['name']}' holds {len(held)} — "
+            "not closing everything on one read. If the account really is empty, "
+            "sync again with --allow-empty.")
     holdings = resolve_snapshot(store, parsed["holdings"])
 
     warnings: list[str] = []
@@ -390,18 +401,22 @@ def sync_account(slug: str, snapshot=None, *, notify: bool = True,
     now = datetime.now(timezone.utc)
     # Sells first, so their proceeds are in the book before anything is bought.
     for ch in sorted(changes, key=lambda c: c["side"] != "sell"):
+        price = round(ch["price_sek"], 4)
         if ch["side"] == "buy":
-            need = ch["shares"] * ch["price_sek"]
-            short = need - store.get_cash()
+            # Sized from the price actually booked: from the unrounded one, a
+            # few hundred shares rounded up past the deposit, apply_fill refused
+            # with the deposit already committed, and every later sync failed
+            # the same way.
+            short = ch["shares"] * price - store.get_cash()
             if short > 0:
                 # The broker had the money; the mirror just hadn't been told. A
                 # deposit is money put in, not return.
-                store.record_cash_flow(round(short, 2) + 0.01,
+                store.record_cash_flow(math.ceil(short * 100) / 100 + 0.01,
                                        note="inferred from an account sync: buy "
                                             "larger than mirrored cash")
         store.apply_fill(Transaction(
             ticker=ch["ticker"], side=ch["side"], shares=ch["shares"],
-            price_sek=round(ch["price_sek"], 4), fee_sek=0.0, source="sync",
+            price_sek=price, fee_sek=0.0, source="sync",
             currency=currency_map.get(ch["ticker"], "SEK"), timestamp=now,
         ))
 

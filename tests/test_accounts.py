@@ -173,6 +173,29 @@ def test_sync_infers_a_deposit_for_an_unfunded_buy(paper_dir, mock_market, sent,
     assert sum(f["amount_sek"] for f in store.get_cash_flows()) == pytest.approx(14000, abs=1)
 
 
+def test_an_unfunded_buy_at_a_rounding_price_still_books(paper_dir, mock_market, sent, no_plans):
+    """1,000 shares at an implied 300.12346: the deposit must cover the booked price."""
+    slug = _account()
+    holdings = SNAPSHOT["holdings"] + [                       # no live price: broker cost
+        {"name": "Newco", "yahoo_ticker": "NEWCO.ST", "shares": 1000,
+         "avg_cost_sek": 300.12346}]
+    accounts.sync_account(slug, {"holdings": holdings})
+    _meta, store = paper.open_portfolio(slug)
+    assert {p.ticker: p.shares for p in store.get_positions()}.get("NEWCO.ST") == 1000
+    assert store.get_cash() >= 0
+
+
+def test_an_empty_read_does_not_close_the_whole_book(paper_dir, mock_market, sent, no_plans):
+    slug = _account()
+    with pytest.raises(ValueError, match="no holdings"):
+        accounts.sync_account(slug, {"cash_sek": 1000, "holdings": []})
+    _meta, store = paper.open_portfolio(slug)
+    assert {p.ticker for p in store.get_positions()} == {"VOLV-B.ST", "AAPL"}
+    accounts.sync_account(slug, {"cash_sek": 1000, "holdings": []}, allow_empty=True)
+    _meta, store = paper.open_portfolio(slug)
+    assert store.get_positions() == []
+
+
 def test_sync_refuses_a_non_account_book(paper_dir, mock_market):
     slug, _ = paper.create_portfolio("Sim", 10_000, "AAPL 100%")
     with pytest.raises(ValueError):

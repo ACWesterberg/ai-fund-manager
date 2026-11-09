@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -67,8 +68,10 @@ def compute_stats(
     # Time-weighted return: deposits and withdrawals don't move it
     twr = (index[-1] - 1) * 100
 
-    # Benchmark return over same window
-    bench_return = (benches[-1] / benches[0] - 1) * 100 if benches[0] else 0.0
+    # Benchmark return over same window. A point written with no benchmark
+    # cached carries 0.0: as the last point it read as −100% (+101% alpha).
+    marked = [b for b in benches if b and math.isfinite(b) and b > 0]
+    bench_return = (marked[-1] / marked[0] - 1) * 100 if len(marked) >= 2 else 0.0
 
     # Max drawdown — on the index, so a withdrawal is not a drawdown
     peak = index[0]
@@ -86,10 +89,15 @@ def compute_stats(
         daily_returns = [
             (index[i] / index[i - 1] - 1) for i in range(1, len(index)) if index[i - 1] > 0
         ]
-        import math
         mean = sum(daily_returns) / len(daily_returns)
         variance = sum((r - mean) ** 2 for r in daily_returns) / len(daily_returns)
-        vol = math.sqrt(variance) * math.sqrt(252) * 100
+        # Annualised by how often the book is actually marked: the real fund's
+        # points are mostly weekly, and √252 on weekly steps doubled the figure.
+        # Points every trading day give ~252 periods a year, as before.
+        span = (datetime.strptime(nav_history[-1].date, "%Y-%m-%d")
+                - datetime.strptime(nav_history[0].date, "%Y-%m-%d")).days
+        periods = 365.25 * (len(index) - 1) / span if span > 0 else 252
+        vol = math.sqrt(variance) * math.sqrt(periods) * 100
 
     gain_sek, gain_pct = gain(navs[-1], initial_capital, flows)
     return {

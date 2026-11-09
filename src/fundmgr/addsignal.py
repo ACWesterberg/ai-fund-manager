@@ -266,8 +266,15 @@ def proof_status(store: Store, ticker: str, plan: dict | None = None) -> dict:
 
 def evaluate(store: Store, ticker: str, *, price: float | None = None,
              weight_pct: float | None = None, killed: bool = False,
-             review: bool = False, today: date | None = None) -> dict:
+             review: bool = False, today: date | None = None,
+             native_price: float | None = None) -> dict:
     """Full add-signal assessment for one position.
+
+    `price` is SEK, like the review price it is dislocated from. The target
+    price is in the stock's own currency, so the valuation gate reads
+    `native_price` (falling back to `price` for a SEK name): comparing a USD
+    target with a SEK price made every USD/EUR name look 90% overvalued and a
+    pence-quoted one 900% cheap.
 
     Every gate reports its own pass/fail and why, so the dashboard can explain a
     HOLD rather than just asserting it — "which gate stopped this?" is the
@@ -312,7 +319,8 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
     horizon = watchplan.get_horizons(store).get(ticker) or {}
     days_left = watchplan.days_left(horizon.get("review_date"), today)
     months_left = (days_left / 30.44) if days_left and days_left > 0 else None
-    expected = expected_annual_return(plan.get("target_price"), price, months_left)
+    valuation_price = native_price if native_price is not None else price
+    expected = expected_annual_return(plan.get("target_price"), valuation_price, months_left)
     valuation_ok = (valuation["status"] == "fresh" and expected is not None
                     and expected >= gates["min_expected_annual_return"])
 
@@ -368,6 +376,7 @@ def evaluate(store: Store, ticker: str, *, price: float | None = None,
         "weight_ok": weight_ok,
         "over_max_weight": over_max,
         "price": price,
+        "native_price": valuation_price,
     }
 
 
@@ -490,9 +499,13 @@ def evaluate_all(store: Store, today: date | None = None) -> list[dict]:
     out = []
     for ticker in sorted(plans):
         weight = (market_value.get(ticker, 0.0) / nav * 100) if nav > 0 else None
+        sek = currency_map.get(ticker, "SEK") == "SEK"
+        # No cached native close for a foreign name: no valuation rather than
+        # one computed from its SEK price.
+        own = native.get(ticker, prices.get(ticker) if sek else 0.0)
         out.append(evaluate(store, ticker, price=prices.get(ticker),
                             weight_pct=weight, killed=ticker in killed,
-                            review=ticker in review, today=today))
+                            review=ticker in review, today=today, native_price=own))
     order = {STRONG_ADD: 0, ADD: 1, ADD_WATCH: 2, KILL: 3, HOLD: 4}
     out.sort(key=lambda r: (order.get(r["state"], 9), r["ticker"]))
     return out

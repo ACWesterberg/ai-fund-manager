@@ -131,6 +131,25 @@ def test_min_trade_size_blocks_small_buy():
     assert "minimum" in result.verdicts[0].rejection_reason.lower()
 
 
+def test_a_full_exit_below_the_minimum_still_closes_the_position():
+    """A 2,000 SEK sliver could otherwise never be sold by a run."""
+    cfg = _cfg(min_trade_sek=2500)
+    snap = _snap(cash=40_000, positions=[Position("VOLV-B.ST", shares=10, avg_cost_sek=200)])
+    features = {"VOLV-B.ST": _feat("VOLV-B.ST", 200)}
+    result = apply_guardrails(_decision([_sell("VOLV-B.ST", 0, 2_000)]), snap, features, UNIVERSE, cfg)
+    assert [a.ticker for a in result.approved_actions] == ["VOLV-B.ST"]
+
+
+def test_a_small_partial_sell_is_still_below_the_minimum():
+    cfg = _cfg(min_trade_sek=2500)
+    snap = _snap(cash=40_000, positions=[Position("VOLV-B.ST", shares=100, avg_cost_sek=200)])
+    features = {"VOLV-B.ST": _feat("VOLV-B.ST", 200)}
+    # NAV 60,000 with 20,000 held (33.3%): trimming to 31.4% is a ~1,160 SEK sale
+    result = apply_guardrails(_decision([_sell("VOLV-B.ST", 31.4, 1_200)]), snap, features, UNIVERSE, cfg)
+    assert result.approved_actions == []
+    assert "minimum" in result.verdicts[0].rejection_reason.lower()
+
+
 def test_min_trade_size_passes_large_buy():
     cfg = _cfg(min_trade_sek=2500)
     snap = _snap(cash=40_000)

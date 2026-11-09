@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import html
 
-from fundmgr.config import AppConfig, load_universe
+from fundmgr.config import AppConfig, holding_rows
 from fundmgr.engine.review_common import (
     context_blocks,
     live_price_sek,
@@ -49,7 +49,10 @@ def find_stop_breaches(store: Store, cfg: AppConfig | None = None) -> dict:
     fx_on = bool(cfg and cfg.fx_to_sek)
     cur_by_ticker = {}
     if fx_on:
-        cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+        # holding_rows, not the CSV: a name pinned to a symbol the CSV never
+        # listed took SEK by default, so an unchanged DKK holding read as −33%.
+        held = {p.ticker for p in store.get_positions()}
+        cur_by_ticker = {t.yahoo_ticker: t.currency for t in holding_rows(cfg.universe_path, held)}
     fx_cache: dict[str, float] = {}
 
     stop_map = store.get_effective_stops()
@@ -88,9 +91,8 @@ def _build_review_prompt(ticker: str, store: Store, cfg: AppConfig, live_price: 
     if pos is None:
         return None
 
-    uni = load_universe(cfg.universe_path)
-    name = {t.yahoo_ticker: t.name for t in uni}.get(ticker, ticker)
-    currency = {t.yahoo_ticker: t.currency for t in uni}.get(ticker, "SEK")
+    row = holding_rows(cfg.universe_path, {ticker})[0]
+    name, currency = row.name, row.currency
     stop = store.get_effective_stops().get(ticker, {})
     stop_pct = stop.get("stop_pct")
 

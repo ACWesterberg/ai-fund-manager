@@ -2160,7 +2160,11 @@ class Store:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def is_initialised(self) -> bool:
-        return self.get_cash() > 0
+        # The cash row, not its sign: a book that spent to exactly 0.00 read as
+        # uninitialised, refused `fund fill` for the sell that would refund it,
+        # and let `fund init` add the full capital on top of its positions.
+        with self._conn() as conn:
+            return conn.execute("SELECT 1 FROM cash WHERE id = 1").fetchone() is not None
 
     def initialise(self, capital_sek: float) -> None:
         if self.is_initialised():

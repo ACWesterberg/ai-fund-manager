@@ -22,8 +22,14 @@
 30 9 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund run >> data/logs/weekly.log 2>&1
 
 # News trigger checks — weekdays during Nordic trading hours
-# Covers morning open, mid-session, early and late afternoon
-0 9,11,14,16 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+# Covers morning open, mid-session, early and late afternoon.
+# Monday 09:00 alerts but never auto-runs: the 24 h guard passes (the last run
+# is a week old), so a pre-open report headline started a run at the open on
+# yesterday's prices and either became the week's decision (the 09:30 run
+# found the lock) or was followed by a second full consensus.
+0 11,14,16 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+0 9,11,14,16 * * 2-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+0 9 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news --no-auto-run >> data/logs/news.log 2>&1
 
 # Stop-loss checks — every 15 min during OMX trading hours (09:00–17:30 CET)
 # Matches yfinance's 15-min data delay — checking more often gives no benefit

@@ -141,7 +141,7 @@ The sidebar shows Nordic real money → Accounts → What-If Lab. The model-comp
 | `max_positions` | 10 | the real book runs **12** (since 2026-10-19); its mandate refers to the Risk Limits block rather than repeating the number, so a change here no longer edits the mandate (which shadow candidates pin) |
 | `max_sector_pct` | 35 | NAV weight in any one GICS sector |
 | `min_cash_pct` / `max_cash_pct` | 12 / 25 | per-fund — the real book runs **5 / 10** (ISK is taxed on total balance) |
-| `min_trade_sek` | 2,500 | below this, fees eat the edge |
+| `min_trade_sek` | 2,500 | below this, fees eat the edge; a full exit is exempt, or a sliver could never be sold |
 | `max_turnover_pct` | 25 | per run; sells take turnover before buys, each side by confidence |
 | `stale_after_days` | 5 | stale data blocks **buys** only |
 | `cold_start_*` | 80 / 50 | lift the turnover cap when deploying from cash |
@@ -161,7 +161,7 @@ Everything is cron on the Pi; there is no in-process scheduler.
 | Job | When | LLM? |
 |---|---|---|
 | `fund run` × 5 funds | Mon, staggered 09:30–17:30 CET | yes — the main spend |
-| `fund check-news` | weekdays ×3–4 | no (local FinBERT); `--auto-run` can trigger a run, never within 24 h of a saved one |
+| `fund check-news` | weekdays ×3–4 | no (local FinBERT); `--auto-run` can trigger a run, never within 24 h of a saved one, and not from the Monday 09:00 check (it would pre-empt the 09:30 run) |
 | `fund check-stops` | every 15 min, trading hours | no |
 | `fund paper-watch` | hourly, trading hours | cheap `gpt-4o-mini` only |
 | `fund earnings-watch` | weekdays 18:30 | no — heads-up the evening before a holding reports |

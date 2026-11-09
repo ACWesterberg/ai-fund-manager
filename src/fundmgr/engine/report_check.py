@@ -30,7 +30,7 @@ import html
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from fundmgr.config import AppConfig, load_universe
+from fundmgr.config import AppConfig, holding_rows
 from fundmgr.engine.review_common import (
     context_blocks,
     live_price_sek,
@@ -112,10 +112,8 @@ def build_prompt(ticker: str, report: dict, source_text: str, store: Store,
     pos = next((p for p in store.get_positions() if p.ticker == ticker), None)
     if pos is None:
         return None
-    uni = {t.yahoo_ticker: t for t in load_universe(cfg.universe_path)}
-    meta = uni.get(ticker)
-    name = meta.name if meta else ticker
-    currency = meta.currency if meta else "SEK"
+    row = holding_rows(cfg.universe_path, {ticker})[0]  # a pinned symbol's suffix, not SEK
+    name, currency = row.name, row.currency
 
     technicals, tech_live = technicals_block(ticker)
     live = live_price_sek(ticker, pos, cfg, store, currency, None, tech_live)

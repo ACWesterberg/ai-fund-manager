@@ -115,6 +115,24 @@ def test_stop_scan_skips_a_holding_it_cannot_convert(tmp_path, monkeypatch):
     assert scan["skipped"] == [{"ticker": "NOKIA.HE", "reason": "no EUR/SEK rate"}]
 
 
+def test_stop_and_target_scans_price_an_unlisted_holding_in_its_own_currency(tmp_path, monkeypatch):
+    """A holding pinned to a symbol the CSV never listed is DKK by suffix, not SEK."""
+    from fundmgr.engine.stop_review import find_stop_breaches
+    from fundmgr.engine.target_review import find_target_hits
+    path = tmp_path / "universe.csv"
+    path.write_text(HEADER + "Alfa,ALFA.ST,SE2,SE,OMXS,Tech,true\n")
+    store = Store(tmp_path / "fund.db")
+    store.initialise(100000)
+    store.upsert_position("BAVA.CO", 10, 375.0)          # bought at 250 DKK, 1.5 SEK/DKK
+    store.set_position_stop("BAVA.CO", stop_pct=10, take_profit_pct=10)
+    monkeypatch.setattr("fundmgr.data.quotes.live_price", lambda t: 250.0)
+    monkeypatch.setattr("fundmgr.data.fx.rate_to_sek",
+                        lambda cur, store=None: 1.5 if cur == "DKK" else None)
+    cfg = AppConfig(fx_to_sek=True, universe_path=path)
+    assert find_stop_breaches(store, cfg) == {"breaches": [], "skipped": []}
+    assert find_target_hits(store, cfg)["hits"] == []
+
+
 def test_a_review_refuses_to_price_a_holding_it_cannot_convert(monkeypatch):
     from fundmgr.engine.review_common import live_price_sek
     monkeypatch.setattr("fundmgr.data.fx.rate_to_sek", lambda cur, store=None: None)

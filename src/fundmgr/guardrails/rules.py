@@ -206,7 +206,10 @@ def _check_action(
 
     if trade_value <= 0:
         return GuardrailVerdict(action, False, rejection_reason="Already at target or position not held")
-    if trade_value < cfg.risk.min_trade_sek:
+    # A full exit is exempt: below the minimum it could never be closed by a run,
+    # and the sliver kept a position slot for good.
+    full_exit = action.side == "sell" and target_weight <= 0
+    if trade_value < cfg.risk.min_trade_sek and not full_exit:
         v.approved = False
         v.rejection_reason = f"Trade size {trade_value:.0f} SEK below minimum {cfg.risk.min_trade_sek:.0f} SEK"
         return v

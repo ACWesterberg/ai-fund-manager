@@ -133,3 +133,86 @@ def test_logout_ends_the_session():
     out = c.get("/logout", follow_redirects=False)
     assert out.status_code == 303 and out.headers["location"] == "/login"
     assert c.get("/", headers={"Accept": "application/json"}).status_code == 401
+
+
+# ── Every credential check is throttled ──────────────────────────────────────
+
+import base64  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def fresh_failures(monkeypatch):
+    from fundmgr.web import auth
+    monkeypatch.setattr(auth, "_failures", {})
+
+
+def _basic(code: str) -> dict:
+    return {"Authorization": "Basic " + base64.b64encode(f"fund:{code}".encode()).decode()}
+
+
+def test_basic_guesses_are_throttled_like_logins():
+    from fundmgr.web import auth
+    c = _anon()
+    for i in range(auth.MAX_FAILURES):
+        assert c.get("/", headers=_basic(f"guess{i}")).status_code == 401
+    assert c.get("/", headers=_basic("test-password")).status_code == 429
+
+
+def test_forged_cookies_are_throttled_and_cleared():
+    from fundmgr.web import auth
+    c = _anon()
+    for i in range(auth.MAX_FAILURES):
+        c.cookies.set(auth.COOKIE, f"9999999999.{i:064x}")
+        response = c.get("/", headers={"Accept": "application/json"})
+        assert response.status_code == 401
+        assert 'fund_session=""' in response.headers.get("set-cookie", "")
+    c.cookies.set(auth.COOKIE, auth._sign(9999999999, "test-password"))
+    assert c.get("/").status_code == 429
+
+
+def test_an_expired_session_is_not_a_guess():
+    """The wall display's lapsed cookie must not lock the owner out."""
+    from fundmgr.web import auth
+    c = _anon()
+    c.cookies.set(auth.COOKIE, auth._sign(1, "test-password"))
+    for _ in range(auth.MAX_FAILURES + 2):
+        assert c.get("/", headers={"Accept": "application/json"}).status_code == 401
+    assert _login(c).status_code == 303
+
+
+def test_a_spoofed_cloudflare_header_does_not_reset_the_count():
+    """Off the tunnel the header is the client's own claim."""
+    from fundmgr.web import auth
+    c = _anon()
+    for i in range(auth.MAX_FAILURES):
+        assert _login(c, password="nope").status_code == 401
+        c.headers["cf-connecting-ip"] = f"10.0.0.{i}"
+    assert _login(c).status_code == 429
+
+
+def test_the_tunnel_header_is_trusted_from_loopback():
+    from types import SimpleNamespace
+
+    from fundmgr.web import auth
+    req = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"),
+                          headers={"cf-connecting-ip": "203.0.113.9"})
+    assert auth._client(req) == "203.0.113.9"
+    req.client.host = "192.168.1.20"
+    assert auth._client(req) == "192.168.1.20"
+
+
+def test_non_ascii_credentials_are_refused_not_a_server_error():
+    from fundmgr.web import auth
+    raw = f"{auth.COOKIE}=9999999999.".encode() + b"\xe9"   # arrives as latin-1 'é'
+    assert _anon().get("/", headers={"Accept": "application/json", "Cookie": raw}).status_code == 401
+
+
+def test_the_webhook_refuses_oversized_and_non_ascii_requests(monkeypatch):
+    from fundmgr.web.app import MAX_WEBHOOK_BYTES, app
+    monkeypatch.setenv("DEPLOY_WEBHOOK_SECRET", "webhook-test-secret")
+    actual = TestClient(app, headers={"Authorization": ""})
+    assert actual.post("/deploy", content=b"x" * (MAX_WEBHOOK_BYTES + 1)).status_code == 413
+    assert actual.post("/deploy", content=b"{}",
+                       headers={"X-Hub-Signature-256": b"sha256=\xe9"}).status_code == 401

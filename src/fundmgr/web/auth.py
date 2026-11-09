@@ -31,7 +31,9 @@ COOKIE = "fund_session"
 SESSION_DAYS = 90            # the wall display should not have to log in every week
 MAX_FAILURES = 8             # per client, per window, before logins are refused
 FAILURE_WINDOW = 15 * 60
+MAX_TRACKED_CLIENTS = 1000   # bound on _failures; prune stale keys past this
 _failures: dict[str, list[float]] = {}
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 
 def _secret(password: str) -> bytes:
@@ -46,9 +48,17 @@ def _sign(expiry: int, password: str) -> str:
 
 def _valid_session(value: str, password: str) -> bool:
     expiry, _, mac = (value or "").partition(".")
-    if not expiry.isdigit() or int(expiry) < time.time():
+    if not expiry.isascii() or not expiry.isdigit() or int(expiry) < time.time():
         return False
-    return hmac.compare_digest(_sign(int(expiry), password), value)
+    # Bytes: compare_digest raises TypeError on a non-ASCII str (a 500).
+    return hmac.compare_digest(_sign(int(expiry), password).encode(),
+                               value.encode("utf-8", "replace"))
+
+
+def _forged_session(value: str) -> bool:
+    """A cookie that is unexpired but fails its MAC — a guess, not a stale login."""
+    expiry, _, _mac = (value or "").partition(".")
+    return expiry.isascii() and expiry.isdigit() and int(expiry) >= time.time()
 
 
 def _valid_basic(header: str, password: str) -> bool:
@@ -63,15 +73,32 @@ def _valid_basic(header: str, password: str) -> bool:
 
 
 def _client(request: Request) -> str:
-    # Behind the Cloudflare tunnel every request arrives from 127.0.0.1.
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
+    # Behind the Cloudflare tunnel every request arrives from 127.0.0.1, and
+    # cloudflared names the real client. Anywhere else (LAN, Tailscale, a port
+    # forward) the header is whatever the client sends: rotating it bypassed
+    # the throttle, and naming the owner's address locked the owner out.
+    host = request.client.host if request.client else "?"
+    if host in _LOOPBACK:
+        return request.headers.get("cf-connecting-ip") or host
+    return host
 
 
 def _throttled(key: str) -> bool:
     now = time.time()
     recent = [t for t in _failures.get(key, []) if now - t < FAILURE_WINDOW]
-    _failures[key] = recent
+    if recent:
+        _failures[key] = recent
+    else:
+        _failures.pop(key, None)
     return len(recent) >= MAX_FAILURES
+
+
+def _record_failure(key: str) -> None:
+    if len(_failures) >= MAX_TRACKED_CLIENTS:
+        now = time.time()
+        for stale in [k for k, ts in _failures.items() if not ts or now - ts[-1] >= FAILURE_WINDOW]:
+            del _failures[stale]
+    _failures.setdefault(key, []).append(time.time())
 
 
 def _safe_next(target: str | None) -> str:
@@ -136,7 +163,7 @@ async def _login(request: Request, password: str) -> Response:
     if _throttled(key):
         return _login_page(next_path, "För många försök. Vänta en stund och försök igen.", 429)
     if not hmac.compare_digest(str(form.get("password") or "").encode(), password.encode()):
-        _failures.setdefault(key, []).append(time.time())
+        _record_failure(key)
         return _login_page(next_path, "Fel kod.", 401)
     _failures.pop(key, None)
     expiry = int(time.time()) + SESSION_DAYS * 86400
@@ -163,16 +190,33 @@ async def protect_dashboard(
         response.delete_cookie(COOKIE, path="/")
         return response
 
-    valid = (_valid_session(request.cookies.get(COOKIE, ""), password)
-             or _valid_basic(request.headers.get("authorization", ""), password))
+    # Every credential check is throttled, not only the login form: a wrong
+    # Basic header or a forged cookie answered 401/200 as fast as the box
+    # could, which is an unthrottled oracle for the code.
+    key = _client(request)
+    cookie = request.cookies.get(COOKIE, "")
+    basic = request.headers.get("authorization", "")
+    if (basic or _forged_session(cookie)) and _throttled(key):
+        return JSONResponse({"detail": "Too many attempts; wait and try again"}, status_code=429)
+    valid = _valid_session(cookie, password) or _valid_basic(basic, password)
     if not valid:
+        forged = _forged_session(cookie)
+        if basic or forged:
+            _record_failure(key)
         wants_page = (request.method in {"GET", "HEAD"}
                       and "text/html" in request.headers.get("accept", ""))
         if wants_page:
             target = path + (f"?{request.url.query}" if request.url.query else "")
-            return RedirectResponse(f"/login?next={quote(target, safe='/')}", status_code=303)
-        # No WWW-Authenticate: that header is what made the browser pop its dialog.
-        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+            refused: Response = RedirectResponse(f"/login?next={quote(target, safe='/')}",
+                                                 status_code=303)
+        else:
+            # No WWW-Authenticate: that header is what made the browser pop its dialog.
+            refused = JSONResponse({"detail": "Authentication required"}, status_code=401)
+        if forged:
+            # A session signed with a since-changed code would otherwise be resent
+            # on every load and count toward the owner's own lockout.
+            refused.delete_cookie(COOKIE, path="/")
+        return refused
     if request.method not in {"GET", "HEAD", "OPTIONS"} and _cross_origin(request):
         # The session cookie rides along on a cross-site form post just as Basic
         # credentials did. SameSite=Lax already withholds it; this is belt and braces.

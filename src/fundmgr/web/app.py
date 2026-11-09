@@ -517,6 +517,7 @@ async def universe(request: Request):
 # (e.g. via Cloudflare Tunnel or port forwarding).
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
+MAX_WEBHOOK_BYTES = 1_000_000
 
 
 @app.post("/deploy")
@@ -529,13 +530,19 @@ async def github_webhook(
     if not webhook_secret:
         raise HTTPException(status_code=503, detail="Webhook not configured (DEPLOY_WEBHOOK_SECRET not set)")
 
+    # Unauthenticated until the signature checks out, so don't buffer an
+    # arbitrarily large body first. GitHub push payloads are far below this.
+    if int(request.headers.get("content-length") or 0) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Payload too large")
     body = await request.body()
+    if len(body) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Payload too large")
 
-    # Verify GitHub HMAC signature
+    # Verify GitHub HMAC signature (as bytes: a non-ASCII header was a 500)
     expected = "sha256=" + hmac.new(
         webhook_secret.encode(), body, hashlib.sha256  # type: ignore[attr-defined]
     ).hexdigest()
-    if not hmac.compare_digest(expected, x_hub_signature_256):
+    if not hmac.compare_digest(expected.encode(), x_hub_signature_256.encode("utf-8", "replace")):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     if x_github_event != "push":

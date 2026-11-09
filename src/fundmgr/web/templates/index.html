@@ -2212,33 +2212,58 @@
     if (!W || !H) return;
     const sorted = [...items].sort((a, b) => b.weight - a.weight);
     const rects = tileLayout(sorted, 0, 0, W, H);
-    el.innerHTML = rects.map(r => {
+    // Built as DOM nodes: a ticker is free text on sleeves and account books
+    // (a fill form, a photo, a broker snapshot), so it never reaches innerHTML.
+    const div = (css, text) => {
+      const d = document.createElement('div');
+      d.style.cssText = css;
+      if (text !== undefined) d.textContent = text;
+      return d;
+    };
+    el.replaceChildren(...rects.map(r => {
       const tiny = r.w < 55 || r.h < 44;
       const micro = r.w < 30 || r.h < 28;
       const short = r.ticker.replace(/[-.].*/, '');
       const sign = r.pnl_pct > 0 ? '+' : '';
       const pnlCol = r.pnl_pct > 0 ? '#34d399' : r.pnl_pct < 0 ? '#f87171' : '#475569';
-      return `<div style="
+      const tile = div(`
           position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;
           background:${r.color}1a;border:1px solid ${r.color}44;border-radius:7px;
           display:flex;flex-direction:column;align-items:center;justify-content:center;
-          overflow:hidden;box-sizing:border-box;transition:background .18s;"
-        onmouseenter="this.style.background='${r.color}33'"
-        onmouseleave="this.style.background='${r.color}1a'"
-        title="${r.name} · ${r.weight.toFixed(1)}% weight${r.pnl_pct ? ' · P&L ' + sign + r.pnl_pct.toFixed(1) + '%' : ''}">
-        ${micro ? '' : tiny ? `
-          <div style="font-size:9px;font-weight:700;color:#94a3b8;text-align:center;padding:0 3px;white-space:nowrap;overflow:hidden">${short}</div>
-        ` : `
-          <img src="${logoUrl(r)}" width="24" height="24"
-               style="object-fit:contain;margin-bottom:4px;flex-shrink:0"
-               data-fb="${logoDdg(r)}"
-               onerror="if(this.dataset.fb){this.src=this.dataset.fb;this.removeAttribute('data-fb')}else{this.style.display='none'}">
-          <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 12 : 10}px;font-weight:700;color:#e2e8f0;text-align:center;line-height:1.2;padding:0 4px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${short}</div>
-          <div style="font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 15 : 12}px;font-weight:800;color:${r.color};margin-top:1px">${r.weight.toFixed(1)}%</div>
-          ${r.pnl_pct !== 0 && r.h > 80 ? `<div style="font-size:10px;color:${pnlCol};margin-top:2px">${sign}${r.pnl_pct.toFixed(1)}%</div>` : ''}
-        `}
-      </div>`;
-    }).join('');
+          overflow:hidden;box-sizing:border-box;transition:background .18s;`);
+      tile.addEventListener('mouseenter', () => { tile.style.background = `${r.color}33`; });
+      tile.addEventListener('mouseleave', () => { tile.style.background = `${r.color}1a`; });
+      tile.title = `${r.name} · ${r.weight.toFixed(1)}% weight` +
+                   (r.pnl_pct ? ` · P&L ${sign}${r.pnl_pct.toFixed(1)}%` : '');
+      if (micro) return tile;
+      if (tiny) {
+        tile.appendChild(div('font-size:9px;font-weight:700;color:#94a3b8;text-align:center;' +
+                             'padding:0 3px;white-space:nowrap;overflow:hidden', short));
+        return tile;
+      }
+      const img = document.createElement('img');
+      img.src = logoUrl(r);
+      img.width = 24;
+      img.height = 24;
+      img.style.cssText = 'object-fit:contain;margin-bottom:4px;flex-shrink:0';
+      let fallback = logoDdg(r);
+      img.addEventListener('error', () => {
+        if (fallback) { img.src = fallback; fallback = null; } else { img.style.display = 'none'; }
+      });
+      tile.append(
+        img,
+        div(`font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 12 : 10}px;font-weight:700;` +
+            'color:#e2e8f0;text-align:center;line-height:1.2;padding:0 4px;max-width:100%;' +
+            'overflow:hidden;white-space:nowrap;text-overflow:ellipsis', short),
+        div(`font-family:Manrope,sans-serif;font-size:${r.h > 90 ? 15 : 12}px;font-weight:800;` +
+            `color:${r.color};margin-top:1px`, `${r.weight.toFixed(1)}%`),
+      );
+      if (r.pnl_pct !== 0 && r.h > 80) {
+        tile.appendChild(div(`font-size:10px;color:${pnlCol};margin-top:2px`,
+                             `${sign}${r.pnl_pct.toFixed(1)}%`));
+      }
+      return tile;
+    }));
   }
 
   // ── Bubble chart with physics ────────────────────────────────────────────

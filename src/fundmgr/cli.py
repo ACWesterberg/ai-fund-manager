@@ -30,6 +30,8 @@ from fundmgr.engine.evaluator import (
     evaluate_pending_outcomes,
     generate_learnings,
     generate_qualitative_learnings,
+    learning_batch,
+    settle_learning_batch,
 )
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.engine.thesis_check import verify_theses
@@ -387,10 +389,11 @@ def _weekly_run(cfg, store, dry_run: bool, force_refresh: bool, skip_news: bool,
     evaluated = [] if dry_run else evaluate_pending_outcomes(store, lookback_days=horizon)
     if dry_run:
         click.echo("\n[*] Dry run: matured outcomes left unscored; no new learnings.")
-    if evaluated:
+    batch = [] if dry_run else learning_batch(store, evaluated)
+    if batch:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
-        funnel = verify_theses(store, evaluated, cfg, lookback_days=horizon)
+        funnel = verify_theses(store, batch, cfg, lookback_days=horizon)
         verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
         click.echo(
             f"\n[*] Thesis check: {funnel['outcomes']} outcome(s) → "
@@ -399,7 +402,12 @@ def _weekly_run(cfg, store, dry_run: bool, force_refresh: bool, skip_news: bool,
             f"{verdicts or 'no verdicts'}"
         )
         stat_learnings = generate_learnings(store, horizon_days=horizon)
-        qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
+        lesson_report: dict = {}
+        qual_learnings = generate_qualitative_learnings(store, batch, cfg, report=lesson_report)
+        settle_learning_batch(store, batch, bool(funnel.get("failed") or lesson_report.get("failed")))
+        if len(batch) > len(evaluated):
+            click.echo(f"\n[*] Retried {len(batch) - len(evaluated)} outcome(s) whose audit "
+                       "or lessons failed last time.")
         total_learnings = len(stat_learnings) + len(qual_learnings)
         click.echo(
             f"\n[*] Evaluated {len(evaluated)} past decisions; "

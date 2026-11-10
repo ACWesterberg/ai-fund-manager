@@ -207,12 +207,38 @@ MAX_BATCH_LESSONS = 3       # most a single evaluation batch may contribute
 MIN_SUPPORTING_TICKERS = 2  # a lesson must repeat across names to count as one
 
 
+# Outcomes are marked evaluated before their batch is audited and distilled,
+# and only newly evaluated ones are ever passed in — so a failed thesis-check or
+# lesson call lost that batch for good, and the coverage report then counted
+# its outcomes as "no evidence", reading a provider outage as a news gap.
+LEARNING_RETRY_KEY = "learning_retry_outcome_ids"
+
+
+def learning_batch(store: Store, evaluated: list[DecisionOutcome]) -> list[DecisionOutcome]:
+    """This run's newly scored outcomes plus any whose audit or lessons failed before."""
+    try:
+        retry = set(json.loads(store.get_meta(LEARNING_RETRY_KEY) or "[]"))
+    except (ValueError, TypeError):
+        retry = set()
+    fresh = {o.id for o in evaluated}
+    carried = [o for o in store.get_outcomes_by_ids(sorted(retry - fresh))
+               if o.outperformed is not None]
+    return list(evaluated) + carried
+
+
+def settle_learning_batch(store: Store, batch: list[DecisionOutcome], failed: bool) -> None:
+    """Keep a failed batch for the next run's retry; clear it once it went through."""
+    store.set_meta(LEARNING_RETRY_KEY,
+                   json.dumps(sorted(o.id for o in batch if o.id)) if failed else "")
+
+
 def generate_qualitative_learnings(
     store: Store,
     outcomes: list[DecisionOutcome],
     cfg: "AppConfig | None" = None,
     benchmark_label: str | None = None,
     max_lessons: int = MAX_BATCH_LESSONS,
+    report: dict | None = None,
 ) -> list[Learning]:
     """
     Distil at most `max_lessons` lessons from a whole evaluation batch, in one call.
@@ -254,6 +280,8 @@ def generate_qualitative_learnings(
 
     parsed = _call_for_batch_lessons(cfg, user_msg, cfg.evaluation_horizon_days)
     if parsed is None:
+        if report is not None:
+            report["failed"] = True
         return []
 
     new_learnings: list[Learning] = []
@@ -327,14 +355,25 @@ def _batch_review_message(
                 )
         lines.append("")
 
-    alphas = [a for a in (_alpha(o) for rl in by_run.values() for o in rl) if a is not None]
+    scored = [(o, _alpha(o)) for rl in by_run.values() for o in rl if _alpha(o) is not None]
+    alphas = [a for _, a in scored]
     if alphas:
         beat = sum(1 for a in alphas if a > 0)
         mean = sum(alphas) / len(alphas)
         spread = max(alphas) - min(alphas)
+        # The names' own alphas show a common move; whether a call was right
+        # depends on its side. Pooled, a batch of good exits (their stocks
+        # lagged) read as a batch that lost to the market.
+        right = []
+        for side, wins in (("buy", lambda a: a > 0), ("sell", lambda a: a < 0)):
+            calls = [a for o, a in scored if o.action == side]
+            if calls:
+                right.append(f"{sum(map(wins, calls))} of {len(calls)} {side}s right")
         lines.append(
-            f"Batch dispersion: {len(alphas)} trades, {beat} beat {bench_name} and "
+            f"Batch dispersion: {len(alphas)} names, {beat} beat {bench_name} and "
             f"{len(alphas) - beat} lagged; mean alpha {mean:+.1f}pp, spread {spread:.1f}pp."
+            + (f" By call: {', '.join(right)} (a sell is right when its stock lagged)."
+               if right else "")
         )
         lines.append("")
 
@@ -536,6 +575,12 @@ def _call_for_learning_consolidations(
 
 
 CALIBRATION_MIN_SAMPLE = 20  # evaluated buys in a bucket before its rate is reported
+CALIBRATION_MIN_WEEKS = 8    # ...and the distinct decision weeks they came from
+
+
+def _band_qualifies(data: dict, min_sample: int) -> bool:
+    return (data.get("n", 0) >= min_sample and data.get("hits") is not None
+            and data.get("weeks", data.get("n", 0)) >= CALIBRATION_MIN_WEEKS)
 
 _BUCKET_LABELS = {
     "high":   "high (>=0.7)",
@@ -607,13 +652,18 @@ def calibration_body(
     reported, bands = [], {}
     for bucket in ("high", "medium", "low"):
         data = stats.get(bucket) or {}
-        n, hits = data.get("n", 0), data.get("hits")
-        if n < min_sample or hits is None:
+        if not _band_qualifies(data, min_sample):
             continue
-        lo, hi = wilson_interval(hits, n)
+        n, hits = data["n"], data["hits"]
+        # The interval is over decision weeks, not trades: buys decided in the
+        # same week share its market, and treating them as independent made the
+        # bands tight enough to tell the model to size on its own conviction.
+        weeks = min(data.get("weeks", n), n)
+        lo, hi = wilson_interval(hits / n * weeks, weeks)
         bands[bucket] = (lo, hi)
         reported.append(
-            f"{_BUCKET_LABELS[bucket]} {hits / n:.0%} [95% CI {lo:.0%}-{hi:.0%}, n={n}]"
+            f"{_BUCKET_LABELS[bucket]} {hits / n:.0%} [95% CI {lo:.0%}-{hi:.0%}, "
+            f"n={n} over {weeks} decision weeks]"
         )
 
     if not reported:
@@ -643,7 +693,7 @@ def generate_learnings(
     retired rather than left running: it is injected into every prompt, so an
     unsupported claim left active keeps steering decisions.
     """
-    stats = store.get_calibration_stats()
+    stats = store.get_calibration_stats(horizon_days=horizon_days)
     body = calibration_body(stats, min_sample=min_sample, horizon_days=horizon_days)
 
     if body is None:
@@ -654,9 +704,9 @@ def generate_learnings(
         lrn for lrn in store.get_active_learnings() if lrn.category == "calibration"
     ]
     qualifying_buckets = {
-        bucket for bucket, values in stats.items() if values.get("n", 0) >= min_sample
+        bucket for bucket, values in stats.items() if _band_qualifies(values, min_sample)
     }
-    run_ids = store.get_calibration_run_ids(qualifying_buckets)
+    run_ids = store.get_calibration_run_ids(qualifying_buckets, horizon_days=horizon_days)
     if any(lrn.body == body and lrn.run_ids == run_ids for lrn in existing):
         return []  # unchanged reading — keep the original timestamp
 

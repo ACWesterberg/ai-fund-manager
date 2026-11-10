@@ -88,7 +88,10 @@ def verify_theses(
         "verdicts": {},
     }
 
-    judgeable = [o for o in outcomes if (o.thesis or "").strip() and o.id]
+    # An outcome already judged (a batch retried because its lesson call
+    # failed) is not paid for twice.
+    judgeable = [o for o in outcomes
+                 if (o.thesis or "").strip() and o.id and not getattr(o, "thesis_verdict", None)]
     funnel["with_thesis"] = len(judgeable)
     if not judgeable:
         return funnel
@@ -116,6 +119,7 @@ def verify_theses(
         cfg, _review_message(judgeable, evidence), lookback_days
     )
     if parsed is None:
+        funnel["failed"] = True  # retried with the next batch, not read as "no evidence"
         return funnel
 
     by_id = {o.id: o for o in judgeable}

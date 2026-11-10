@@ -422,9 +422,26 @@ def _normalise(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip().lower()
 
 
+# A quote has to be a statement, not a fragment: any 20 characters passed,
+# so "Interim report January-September 2026", "net sales amounted to" or the
+# synthetic "[Cision, 2026-10-29] X AB" header line kept a verdict alive while
+# saying nothing about it.
+MIN_QUOTE_CHARS = 40
+MIN_QUOTE_WORDS = 6
+_HEADER_LINE = re.compile(r"^\[[^\]\n]*\] .*$", re.MULTILINE)
+
+
 def quote_in_source(quote: str, source: str) -> bool:
+    """The quote is a real sentence-length passage from an article's text.
+
+    Matched against the bodies only: the `[publisher, date] headline` lines that
+    `_source_text` adds are labels, and a headline asserts nothing a verdict
+    can rest on.
+    """
     q = _normalise(quote).strip(" .\"'“”‘’")
-    return len(q) >= 20 and q in _normalise(source)
+    if len(q) < MIN_QUOTE_CHARS or len(q.split()) < MIN_QUOTE_WORDS:
+        return False
+    return q in _normalise(_HEADER_LINE.sub("", source or ""))
 
 
 def _fmt(v, spec: str, unit: str = "") -> str:

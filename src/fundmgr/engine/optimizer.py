@@ -151,6 +151,28 @@ def decision_metric(example, prediction, trace=None) -> float:
     return 0.5 + 0.5 * math.tanh(signal)
 
 
+# A candidate's win is only evidence where its trades have outcomes. Buys of
+# names the history never traded score as neutral, so a candidate that bought
+# entirely different names "beat" an incumbent reproducing a lagging week on
+# no evidence at all. Below this share of labelled trades, no winner is named.
+MIN_LABEL_COVERAGE = 0.5
+
+
+def label_coverage(example, prediction) -> float:
+    """Share of the prediction's buys and sells that have a realised outcome.
+
+    A prediction that trades nothing has no coverage: sitting out is not
+    evidence of deciding better.
+    """
+    alphas = getattr(example, "ticker_alphas", None) or {}
+    actions = getattr(getattr(prediction, "decision", None), "actions", None) or []
+    traded = [str(getattr(a, "ticker", "")).upper() for a in actions
+              if str(getattr(a, "side", "")).lower() in ("buy", "sell")]
+    if not traded:
+        return 0.0
+    return sum(t in alphas for t in traded) / len(traded)
+
+
 # ── Trainset ─────────────────────────────────────────────────────────────────
 
 def build_trainset(store: "Store", source: str = "") -> list[dict]:

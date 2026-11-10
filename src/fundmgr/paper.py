@@ -1463,14 +1463,17 @@ def track_portfolio(slug: str) -> list[str]:
         evaluate_pending_outcomes,
         generate_learnings,
         generate_qualitative_learnings,
+        learning_batch,
+        settle_learning_batch,
     )
     from fundmgr.config import AppConfig
     from fundmgr.engine.thesis_check import verify_theses
     # A paper book has no fund config; the default horizon applies.
     horizon = AppConfig().evaluation_horizon_days
     evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
-    if evaluated:
-        funnel = verify_theses(store, evaluated, lookback_days=horizon)
+    batch = learning_batch(store, evaluated)
+    if batch:
+        funnel = verify_theses(store, batch, lookback_days=horizon)
         verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
         log.append(
             f"Thesis check: {funnel['outcomes']} outcome(s) → "
@@ -1480,9 +1483,11 @@ def track_portfolio(slug: str) -> list[str]:
         stat = generate_learnings(store, horizon_days=horizon)
         # A paper book has no fund config of its own: the lesson writer comes
         # from the default config, the book's own benchmark from its meta.
+        lesson_report: dict = {}
         qual = generate_qualitative_learnings(
-            store, evaluated, benchmark_label=meta.get("benchmark")
+            store, batch, benchmark_label=meta.get("benchmark"), report=lesson_report
         )
+        settle_learning_batch(store, batch, bool(funnel.get("failed") or lesson_report.get("failed")))
         log.append(f"Evaluated {len(evaluated)} outcomes → "
                    f"{len(stat)} calibration + {len(qual)} qualitative learnings")
     return log

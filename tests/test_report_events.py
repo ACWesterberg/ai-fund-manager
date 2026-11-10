@@ -179,6 +179,22 @@ def test_a_verdict_resting_on_an_invented_quote_is_unclear(cfg):
     assert "No quote survived" in out["what_changed"]
 
 
+@pytest.mark.parametrize("quote", [
+    "Q3 report",                                             # far too short
+    "The company reiterates its outlook",                    # a fragment
+    "[MFN, 2026-10-20] Q3 report",                           # the label line, not text
+])
+def test_a_fragment_or_a_label_is_not_a_quote(quote):
+    from fundmgr.data.release import _source_text
+    assert not rx.quote_in_source(quote, _source_text(SOURCE))
+
+
+def test_a_real_sentence_from_the_body_is_a_quote():
+    from fundmgr.data.release import _source_text
+    assert rx.quote_in_source("Order intake fell 4 percent, mainly due to delayed deliveries "
+                              "in Germany.", _source_text(SOURCE))
+
+
 def test_no_coverage_means_no_call(cfg):
     out = rx.judge_event(EVENT, cfg, coverage_fn=lambda *a: [],
                          llm=lambda *a: pytest.fail("paid for a verdict with nothing to read"))

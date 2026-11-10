@@ -167,8 +167,16 @@ def test_batch_review_message_reports_dispersion():
         _outcome("BBB.ST", ret=-4.0, bench=2.0),  # -6pp
     ]}
     msg = _batch_review_message(by_run, {"r1": ""}, "^OMXSPI", max_lessons=3)
-    assert "2 trades, 1 beat" in msg
+    assert "2 names, 1 beat" in msg
     assert "mean alpha +0.0pp" in msg and "spread 12.0pp" in msg
+    assert "1 of 2 buys right" in msg
+
+
+def test_a_sell_whose_stock_lagged_counts_as_right():
+    good_exit = _outcome("CCC.ST", ret=-10.0, bench=2.0)
+    good_exit.action = "sell"
+    msg = _batch_review_message({"r1": [good_exit]}, {"r1": ""}, "^OMXSPI", max_lessons=3)
+    assert "1 of 1 sells right" in msg
 
 
 def test_generate_qualitative_learnings_no_outcomes_makes_no_call(store):
@@ -362,16 +370,42 @@ def test_calibration_single_band_makes_no_comparison_claim():
     assert "n=4" not in body  # the under-powered band is not reported at all
 
 
-def _seed_buys(store, run_id, rows):
-    """rows: (confidence, outperformed)"""
-    import sqlite3
+def _seed_buys(store, run_id, rows, one_week: bool = False):
+    """rows: (confidence, outperformed), one decision week each unless `one_week`."""
     with store._conn() as conn:
         for i, (conf, won) in enumerate(rows):
+            day = datetime(2026, 1, 5) + timedelta(weeks=0 if one_week else i)
             conn.execute(
                 "INSERT INTO decision_outcomes (run_id, ticker, action, confidence, "
-                "outperformed, source) VALUES (?, ?, 'buy', ?, ?, 'run')",
-                (run_id, f"T{i}.ST", conf, 1 if won else 0),
+                "outperformed, source, decision_date) VALUES (?, ?, 'buy', ?, ?, 'run', ?)",
+                (run_id, f"T{i}.ST", conf, 1 if won else 0, day.strftime("%Y-%m-%d")),
             )
+
+
+def test_many_buys_from_one_week_are_not_a_calibration_reading(store):
+    """Twenty-five buys sharing one market week are closer to one data point."""
+    _seed_buys(store, "r1", [(0.8, True)] * 25 + [(0.2, False)] * 25, one_week=True)
+    assert store.get_calibration_stats()["high"]["weeks"] == 1
+    assert generate_learnings(store) == []
+
+
+def test_calibration_intervals_are_counted_in_weeks_not_trades():
+    narrow = calibration_body(_stats(high=(20, 40), low=(10, 40)))
+    stats = _stats(high=(20, 40), low=(10, 40))
+    for band in stats.values():
+        if band:
+            band["weeks"] = 10
+    wide = calibration_body(stats)
+    assert "over 10 decision weeks" in wide
+    assert narrow != wide
+
+
+def test_a_buy_without_a_recorded_confidence_belongs_to_no_band(store):
+    with store._conn() as conn:
+        conn.execute("INSERT INTO decision_outcomes (run_id, ticker, action, confidence, "
+                     "outperformed, source, decision_date) VALUES ('r', 'X', 'buy', NULL, 1, 'run', "
+                     "'2026-01-05')")
+    assert store.get_calibration_stats() == {}
 
 
 def test_two_qualifying_bands_no_longer_delete_each_other(store):
@@ -505,3 +539,31 @@ def test_missing_benchmark_cannot_produce_a_learning_batch(store):
                               "close": 110, "volume": 0}])
     assert evaluate_pending_outcomes(store) == []
     assert store.get_all_outcomes()[0].evaluation_date is None
+
+
+# ── A failed audit or lesson call is retried, not lost ───────────────────────
+
+def test_a_failed_learning_batch_is_carried_to_the_next_run(store):
+    from fundmgr.engine.evaluator import learning_batch, settle_learning_batch
+    _seed_buys(store, "r1", [(0.8, True), (0.8, False)])   # no run row, like a review
+    first = store.get_outcomes_by_ids([1, 2])
+    assert len(first) == 2
+    assert learning_batch(store, first) == first
+
+    settle_learning_batch(store, first, failed=True)
+    carried = learning_batch(store, [])
+    assert sorted(o.id for o in carried) == sorted(o.id for o in first)
+
+    settle_learning_batch(store, carried, failed=False)
+    assert learning_batch(store, []) == []
+
+
+def test_a_failed_lesson_call_says_so(store, monkeypatch):
+    from fundmgr.engine import evaluator
+    monkeypatch.setattr(evaluator, "_call_for_batch_lessons", lambda *a: None)
+    _seed_buys(store, "r1", [(0.8, True)])
+    report: dict = {}
+    batch = store.get_outcomes_by_ids([1])
+    assert batch
+    assert evaluator.generate_qualitative_learnings(store, batch, AppConfig(), report=report) == []
+    assert report == {"failed": True}

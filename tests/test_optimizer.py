@@ -625,3 +625,13 @@ def test_optimization_uses_bounded_search_without_dspy(cfg, monkeypatch):
     store = SimpleNamespace(get_evaluated_outcomes=lambda: [object()])
     assert optimizer.run_optimization(cfg, store, min_outcomes=1, min_examples=2)
     assert len(called) == 1 and len(called[0]["cases"]) == 1
+
+
+
+def test_label_coverage_counts_only_traded_names_with_outcomes():
+    from fundmgr.engine.optimizer import label_coverage
+    ex = _example(**{"AAA.ST": 3.0})
+    assert label_coverage(ex, _prediction(("AAA.ST", "buy"), ("ZZZ.ST", "buy"))) == 0.5
+    assert label_coverage(ex, _prediction(("AAA.ST", "sell"))) == 1.0
+    assert label_coverage(ex, _prediction(("AAA.ST", "hold"))) == 0.0
+    assert label_coverage(ex, _prediction()) == 0.0

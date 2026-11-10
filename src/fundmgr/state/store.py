@@ -1561,14 +1561,31 @@ class Store:
             for r in rows
         ]
 
+    def get_outcomes_by_ids(self, ids: list[int]) -> list["DecisionOutcome"]:
+        """These outcome rows, review decisions included (they have no run row)."""
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT do.*, COALESCE(do.decision_date, r.timestamp) as run_ts "
+                "FROM decision_outcomes do LEFT JOIN recommendations r ON do.run_id = r.run_id "
+                f"WHERE do.id IN ({marks})", tuple(ids)
+            ).fetchall()
+        return self._outcomes_from_rows(rows)
+
     def get_all_outcomes(self) -> list["DecisionOutcome"]:
         """Every outcome row (evaluated or pending) with its run date — used by repair-outcomes."""
-        from fundmgr.state.models import DecisionOutcome as DO
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT do.*, r.timestamp as run_ts FROM decision_outcomes do "
                 "JOIN recommendations r ON do.run_id = r.run_id"
             ).fetchall()
+        return self._outcomes_from_rows(rows)
+
+    @staticmethod
+    def _outcomes_from_rows(rows) -> list["DecisionOutcome"]:
+        from fundmgr.state.models import DecisionOutcome as DO
         return [
             DO(
                 id=r["id"], run_id=r["run_id"], ticker=r["ticker"],
@@ -1583,7 +1600,7 @@ class Store:
                 thesis_verdict=r["thesis_verdict"],
                 thesis_evidence=r["thesis_evidence"],
                 horizon_days=r["horizon_days"],
-                decision_date=r["run_ts"][:10],
+                decision_date=(r["run_ts"] or "")[:10] or None,
             )
             for r in rows
         ]
@@ -1732,53 +1749,66 @@ class Store:
             "hold_rate": held / resolved if resolved else None,
         }
 
-    def get_calibration_stats(self) -> dict:
-        """Return accuracy stats by confidence bucket for use in learnings generation."""
-        with self._conn() as conn:
-            # Run decisions only: "your high-confidence buy calls" must keep
-            # meaning the weekly whole-portfolio calls. A stop review's ADD is a
-            # buy too, but made under a different prompt about one name, and
-            # folding it in here would quietly redefine the hit rate.
-            rows = conn.execute(
-                "SELECT confidence, outperformed FROM decision_outcomes "
-                "WHERE outperformed IS NOT NULL AND action = 'buy' "
-                "AND (source IS NULL OR source = 'run')"
-            ).fetchall()
+    @staticmethod
+    def _calibration_bucket(confidence: float) -> str:
+        return "high" if confidence >= 0.7 else "medium" if confidence >= 0.4 else "low"
 
+    def _calibration_rows(self, horizon_days: int | None) -> list:
+        # Run decisions only: "your high-confidence buy calls" must keep
+        # meaning the weekly whole-portfolio calls. A stop review's ADD is a
+        # buy too, but made under a different prompt about one name, and
+        # folding it in here would quietly redefine the hit rate. A buy with
+        # no recorded confidence was bucketed as "low"; it belongs to no band.
+        # Outcomes scored at another horizon answer a different question.
+        sql = ("SELECT run_id, confidence, outperformed, decision_date FROM decision_outcomes "
+               "WHERE outperformed IS NOT NULL AND action = 'buy' AND confidence IS NOT NULL "
+               "AND (source IS NULL OR source = 'run')")
+        args: tuple = ()
+        if horizon_days is not None:
+            sql += " AND (horizon_days IS NULL OR horizon_days = ?)"
+            args = (horizon_days,)
+        with self._conn() as conn:
+            return conn.execute(sql + " ORDER BY run_id", args).fetchall()
+
+    def get_calibration_stats(self, horizon_days: int | None = None) -> dict:
+        """Accuracy by confidence bucket, with the number of decision weeks behind it.
+
+        `weeks` is the count of distinct ISO weeks the bucket's buys were decided
+        in. Buys from one run share a market week and a benchmark window, and a
+        name bought in consecutive weeks has largely overlapping 28-day windows,
+        so they are not independent observations: twenty buys from four weeks
+        are closer to four data points than to twenty.
+        """
+        rows = self._calibration_rows(horizon_days)
         if not rows:
             return {}
 
         buckets: dict[str, list[int]] = {"high": [], "medium": [], "low": []}
+        weeks: dict[str, set] = {"high": set(), "medium": set(), "low": set()}
         for r in rows:
-            c = r["confidence"] or 0.0
-            bucket = "high" if c >= 0.7 else "medium" if c >= 0.4 else "low"
+            bucket = self._calibration_bucket(r["confidence"])
             buckets[bucket].append(r["outperformed"])
+            try:
+                week = datetime.strptime(r["decision_date"][:10], "%Y-%m-%d").isocalendar()[:2]
+            except (TypeError, ValueError):
+                week = r["run_id"]
+            weeks[bucket].add(week)
 
         # `hits` rides along so callers can put an interval on the rate: a hit
         # rate without its sample size reads as a fact at n=5.
         return {
-            k: {"n": len(v), "hits": sum(v), "hit_rate": sum(v) / len(v) if v else None}
+            k: {"n": len(v), "hits": sum(v), "hit_rate": sum(v) / len(v) if v else None,
+                "weeks": len(weeks[k])}
             for k, v in buckets.items()
         }
 
-    def get_calibration_run_ids(self, qualifying_buckets: set[str]) -> list[str]:
+    def get_calibration_run_ids(self, qualifying_buckets: set[str],
+                                horizon_days: int | None = None) -> list[str]:
         """Run provenance behind the calibration bands that cleared the sample bar."""
         if not qualifying_buckets:
             return []
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT run_id, confidence FROM decision_outcomes "
-                "WHERE outperformed IS NOT NULL AND action = 'buy' "
-                "AND (source IS NULL OR source = 'run') ORDER BY run_id"
-            ).fetchall()
-
-        def bucket(confidence: float | None) -> str:
-            value = confidence or 0.0
-            return "high" if value >= 0.7 else "medium" if value >= 0.4 else "low"
-
-        return sorted({
-            r["run_id"] for r in rows if bucket(r["confidence"]) in qualifying_buckets
-        })
+        return sorted({r["run_id"] for r in self._calibration_rows(horizon_days)
+                       if self._calibration_bucket(r["confidence"]) in qualifying_buckets})
 
     # ── Learnings ─────────────────────────────────────────────────────────────
 

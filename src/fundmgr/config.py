@@ -102,7 +102,7 @@ def default_heavy_model(provider: str) -> str:
     Both run a handful of times a week and their output conditions every
     subsequent decision, so neither should be served by a cheap model.
     """
-    return "claude-opus-4-8" if provider == "anthropic" else "gpt-5.6-sol"
+    return "claude-opus-5-5" if provider == "anthropic" else "gpt-5.6-sol"
 
 
 @dataclass

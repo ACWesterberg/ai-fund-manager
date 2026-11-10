@@ -13,7 +13,7 @@ universe_path: "config/universe_global.csv"
 
 llm:
   provider: anthropic
-  model_id: "claude-opus-4-8"
+  model_id: "claude-opus-5-5"
   max_tokens: 32000        # thinking tokens share this budget; streamed (see _call_anthropic)
   reasoning_effort: "high"  # low | medium | high — maps to Opus adaptive thinking + effort (parity with the GPT funds)
   n_samples: 3

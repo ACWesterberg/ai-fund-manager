@@ -14,9 +14,9 @@ The fund never places orders. For the real book you execute in your broker and r
 |---|---|---|---|
 | 🇸🇪 Nordic — REAL money | Nordic (1,605 names) | `gpt-5.6-sol` | **real** |
 | 🌍 Global SIM | Global (17,117) | `gpt-5.6-sol` | sim |
-| 🤖 Global SIM | Global (17,117) | `claude-opus-4-8` | sim |
+| 🤖 Global SIM | Global (17,117) | `claude-opus-5-5` | sim |
 | 🧱 Buffett Screen | Quality screen (96) | `gpt-5.6-sol` | sim |
-| 🧱 Buffett Screen | Quality screen (96) | `claude-opus-4-8` | sim |
+| 🧱 Buffett Screen | Quality screen (96) | `claude-opus-5-5` | sim |
 
 The Global and Buffett funds are deliberately **paired across providers on an identical universe and mandate**, so the only variable is the decision model. Each config bundles mandate + universe + risk limits + model, so a profile can never mix e.g. the Buffett mandate with the Nordic universe.
 

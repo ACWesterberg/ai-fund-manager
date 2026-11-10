@@ -24,11 +24,11 @@ Each `config/config*.yaml` bundles a mandate + universe + risk limits + model, s
 |---|---|---|---|---|---|
 | `config.yaml` | 🇸🇪 Nordic — REAL money | `universe.csv` (1,605) | 75 | `gpt-5.6-sol` | **REAL** |
 | `config_global.yaml` | 🌍 Global SIM — GPT-5.6-sol | `universe_global.csv` (17,117) | 120 | `gpt-5.6-sol` | sim |
-| `config_claude.yaml` | 🤖 Global SIM — Claude | `universe_global.csv` (17,117) | 120 | `claude-opus-4-8` | sim |
+| `config_claude.yaml` | 🤖 Global SIM — Claude | `universe_global.csv` (17,117) | 120 | `claude-opus-5-5` | sim |
 | `config_buffett_gpt.yaml` | 🧱 Buffett Screen — GPT-5.6 | `universe_buffett.csv` (96) | 100 | `gpt-5.6-sol` | sim |
-| `config_buffett_claude.yaml` | 🧱 Buffett Screen — Claude | `universe_buffett.csv` (96) | 100 | `claude-opus-4-8` | sim |
+| `config_buffett_claude.yaml` | 🧱 Buffett Screen — Claude | `universe_buffett.csv` (96) | 100 | `claude-opus-5-5` | sim |
 
-All five run `reasoning_effort: high`. The Nordic fund votes over `n_samples: 5` (since 2026-10-12: the week's one marginal buy split 2-of-3 differently across four sample sets of the same prompt); the paused sims keep 3.
+All five run `reasoning_effort: high`. The two Claude sims moved from `claude-opus-4-8` to `claude-opus-5-5` on 2026-11-10, together so the pairing holds; their outcomes before that date were decided by 4.8. Claude request parameters are derived from the model's family and version (`client.claude_capabilities`), not a prefix list: no sampling params from Claude 4 on, and an explicit effort (Opus 5.5 defaults to `medium`). Opus 5.5, Fable 5.2 and Sonnet 5.5 run with a server-side refusal fallback (`REFUSAL_FALLBACK`); a sample another model answered is named in the run log. The Nordic fund votes over `n_samples: 5` (since 2026-10-12: the week's one marginal buy split 2-of-3 differently across four sample sets of the same prompt); the paused sims keep 3.
 
 **The four sims are paused (since 2026-10-09)** to save API cost while the real Nordic book is the focus: `paused: true` in each config. A paused fund keeps its holdings and is still valued daily (`check-stops` marks NAV at live prices instead of trading), but `run`, `optimize`, `check-news`, `review-stop`/`review-target`, `compare-guidance` and `consolidate-learnings` exit before doing anything — `--force` does not override it. The gate is per command, not in `call_llm`, because live sleeves and the What-If Lab borrow sim *profiles* and must keep working. Their past outcomes still feed the Nordic fund's pooled trainset. Delete the line to resume.
 

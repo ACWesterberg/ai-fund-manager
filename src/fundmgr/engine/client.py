@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -9,6 +11,8 @@ from pydantic import ValidationError
 
 from fundmgr.config import AppConfig
 from fundmgr.engine.schema import Action, DecisionRun
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -149,6 +153,46 @@ def _call_openai(system: str, user: str, cfg: AppConfig, schema: type = Decision
 
 # ── Anthropic ─────────────────────────────────────────────────────────────────
 
+# Server-side refusal fallback (beta): a request the safety classifiers decline
+# is re-run on the named model inside the same call, instead of costing the
+# sample. Only for models that can decline this way; the run log names any
+# sample another model answered.
+REFUSAL_FALLBACK: dict[str, str] = {
+    "claude-opus-5-5": "claude-opus-4-8",
+    "claude-fable-5-2": "claude-opus-4-8",
+    "claude-sonnet-5-5": "claude-sonnet-5",
+}
+
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+_CLAUDE_ID = re.compile(r"^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?:-|$)")
+
+
+def claude_capabilities(model_id: str) -> dict[str, bool]:
+    """Which request knobs a Claude model takes, read from its family and version.
+
+    A hard-coded prefix list went stale with every release: `claude-opus-5-5`
+    matched neither the no-temperature list (sampling params are a 400 from
+    4.7 on) nor the effort list (so it would have run at its medium default),
+    and `claude-sonnet-5` was being sent a temperature.
+
+    - sampling: only pre-Claude-4 IDs (`claude-3-…`) still take a temperature.
+    - effort:  adaptive thinking + output_config.effort, from Opus/Sonnet 4.6,
+               Haiku 5 and every Fable/Mythos.
+    """
+    m = _CLAUDE_ID.match(model_id or "")
+    if not m:
+        return {"sampling": True, "effort": False}
+    family, major, minor = m.group(1), int(m.group(2)), int(m.group(3) or 0)
+    if family in ("fable", "mythos"):
+        effort = True
+    elif family == "haiku":
+        effort = major >= 5
+    else:
+        effort = (major, minor) >= (4, 6)
+    return {"sampling": False, "effort": effort}
+
+
 def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = DecisionRun,
                     *, max_retries: int | None = None, on_usage=None) -> tuple:
     try:
@@ -165,19 +209,7 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
     # Same in-context schema text as the OpenAI path (fair head-to-head).
     schema_hint = _schema_hint(schema)
 
-    # Claude 4+ models (opus-4-x, sonnet-4-x, haiku-4-x) do not accept temperature
-    _TEMPERATURE_FREE = ("claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")
-    use_temperature = not any(cfg.llm.model_id.startswith(p) for p in _TEMPERATURE_FREE)
-
-    # Reasoning parity with the OpenAI funds: Opus/Sonnet 4.6+ and Fable/Sonnet 5
-    # use adaptive thinking + an `effort` level (their equivalent of the
-    # gpt-5 `reasoning_effort` knob) rather than a reasoning_effort string.
-    _EFFORT_MODELS = (
-        "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
-        "claude-sonnet-4-6", "claude-sonnet-5", "claude-fable-5",
-    )
-    supports_effort = any(cfg.llm.model_id.startswith(p) for p in _EFFORT_MODELS)
-
+    caps = claude_capabilities(cfg.llm.model_id)
     try:
         kwargs = dict(
             model=cfg.llm.model_id,
@@ -185,23 +217,45 @@ def _call_anthropic(system: str, user: str, cfg: AppConfig, schema: type = Decis
             system=system + schema_hint,
             messages=[{"role": "user", "content": user}],
         )
-        if use_temperature:
+        if caps["sampling"]:
             kwargs["temperature"] = cfg.llm.temperature
-        if cfg.llm.reasoning_effort and supports_effort:
+        if caps["effort"] and cfg.llm.reasoning_effort:
+            # Reasoning parity with the OpenAI funds: adaptive thinking plus an
+            # explicit effort (their equivalent of gpt-5's reasoning_effort).
+            # Always sent when configured: Opus 5.5 defaults to medium, every
+            # earlier model to high, so leaving it out would quietly lower it.
+            effort = cfg.llm.reasoning_effort
             kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": cfg.llm.reasoning_effort}
+            kwargs["output_config"] = {"effort": effort if effort in CLAUDE_EFFORTS else "high"}
         # Stream: with adaptive thinking on, thinking tokens share the max_tokens
         # budget, so the budget is set high; the SDK requires streaming above
         # ~21k non-streaming (10-min guard). Streaming accumulates the same
         # Message and sidesteps that guard.
-        with client.messages.stream(**kwargs) as stream:
-            response = stream.get_final_message()
+        fallback = REFUSAL_FALLBACK.get(cfg.llm.model_id)
+        if fallback:
+            stream = client.beta.messages.stream(
+                **kwargs, betas=["server-side-fallback-2026-07-01"],
+                fallbacks=[{"model": fallback}])
+        else:
+            stream = client.messages.stream(**kwargs)
+        with stream as live:
+            response = live.get_final_message()
     except Exception as e:
         raise LLMError(f"Anthropic API call failed: {e}") from e
 
     _report_usage(response, "anthropic", on_usage)
     if getattr(response, "stop_reason", None) == "max_tokens":
         raise LLMError("Anthropic response exceeded the output token limit")
+    if getattr(response, "stop_reason", None) == "refusal":
+        details = getattr(response, "stop_details", None)
+        raise LLMError(f"{cfg.llm.model_id} declined the request "
+                       f"(category: {getattr(details, 'category', None) or 'unstated'})")
+    served = getattr(response, "model", cfg.llm.model_id)
+    if served != cfg.llm.model_id:
+        # A paired fund's comparison is a difference in models; a sample another
+        # model answered has to show up in the log, not pass as the configured one.
+        logger.warning("%s declined; %s answered this sample instead", cfg.llm.model_id, served)
+        print(f"  ⚠ {cfg.llm.model_id} declined; {served} answered this sample (refusal fallback)")
 
     # With thinking enabled the first block is a thinking block — take the text.
     raw_text = next(

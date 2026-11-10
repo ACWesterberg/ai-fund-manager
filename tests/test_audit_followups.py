@@ -174,6 +174,17 @@ def test_a_second_run_of_the_same_fund_is_refused_while_one_holds_the_lock(tmp_p
     again.close()
 
 
+def test_stop_checks_take_their_own_lock_not_the_runs(tmp_path):
+    """A running stop check skips the next cycle; it never blocks the weekly run."""
+    cfg = AppConfig(db_path=tmp_path / "fund.db")
+    stops = commands._run_lock(cfg, "stops")
+    assert commands._run_lock(cfg, "stops") is None
+    run = commands._run_lock(cfg)
+    assert run is not None
+    stops.close()
+    run.close()
+
+
 @pytest.mark.parametrize("hours_ago, starts", [(3, False), (30, True)])
 def test_a_news_trigger_starts_no_run_within_a_day_of_the_last(tmp_path, monkeypatch,
                                                                hours_ago, starts):

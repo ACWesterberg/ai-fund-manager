@@ -144,16 +144,17 @@ def reset(capital: float | None, purge_cache: bool, yes: bool):
 AUTO_RUN_MIN_GAP_HOURS = 24
 
 
-def _run_lock(cfg):
+def _run_lock(cfg, name: str = "run"):
     """An exclusive per-fund lock for `fund run`, or None when one is running.
 
     Nothing stopped two runs of one fund at once: a check-news auto-run could
     start while Monday's run (consensus, shadow pairs, tickets) was still going,
     and both seeded outcomes and sent tickets. Held until the process exits.
+    `name` gives another command its own lock (check-stops: `stops`).
     """
     import fcntl
 
-    handle = (cfg.db_path.parent / f"{cfg.db_path.stem}.run.lock").open("a")
+    handle = (cfg.db_path.parent / f"{cfg.db_path.stem}.{name}.lock").open("a")
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -1241,6 +1242,15 @@ def check_stops(quiet: bool):
     if datetime.utcnow().weekday() >= 5:
         if not quiet:
             click.echo("Weekend — markets closed, skipping stop-loss check.")
+        return
+
+    # A stop review (five heavy calls) can outlast the 15-minute cron cycle,
+    # and its once-a-day marker is written only when it returns: the next cycle
+    # started a second review of the same breach. One check at a time per fund.
+    stops_lock = _run_lock(cfg, "stops")
+    if stops_lock is None:
+        if not quiet:
+            click.echo("Previous stop check still running — skipping this cycle.")
         return
 
     positions = store.get_positions()

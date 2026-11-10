@@ -130,7 +130,10 @@ def test_a_cross_site_post_is_refused_even_with_a_session():
 def test_logout_ends_the_session():
     c = _anon()
     _login(c)
-    out = c.get("/logout", follow_redirects=False)
+    asked = c.get("/logout", follow_redirects=False)
+    assert asked.status_code == 200 and 'action="/logout"' in asked.text
+    assert c.get("/", headers={"Accept": "application/json"}).status_code == 200  # still signed in
+    out = c.post("/logout", follow_redirects=False)
     assert out.status_code == 303 and out.headers["location"] == "/login"
     assert c.get("/", headers={"Accept": "application/json"}).status_code == 401
 
@@ -216,3 +219,11 @@ def test_the_webhook_refuses_oversized_and_non_ascii_requests(monkeypatch):
     assert actual.post("/deploy", content=b"x" * (MAX_WEBHOOK_BYTES + 1)).status_code == 413
     assert actual.post("/deploy", content=b"{}",
                        headers={"X-Hub-Signature-256": b"sha256=\xe9"}).status_code == 401
+
+
+
+def test_another_site_cannot_sign_the_owner_out():
+    c = _anon()
+    _login(c)
+    assert c.post("/logout", headers={"Origin": "https://attacker.example"}).status_code == 403
+    assert c.get("/", headers={"Accept": "application/json"}).status_code == 200

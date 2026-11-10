@@ -164,6 +164,25 @@ def test_execution_respects_cash_if_earlier_sell_did_not_fill(filler):
     assert outcome.skipped == {"NEW": "risk_limit"}
 
 
+def test_a_buy_waits_when_the_sell_that_freed_its_slot_did_not_fill(filler, monkeypatch):
+    """Two slots, both held; the funding sell's venue is shut, so the buy must wait."""
+    from fundmgr.engine.schema import Action
+    auto_fill, store, cfg = filler
+    cfg.risk.max_positions = 2
+    store.upsert_position("JP", 10, 200)
+    store.upsert_position("SE", 10, 200)
+    monkeypatch.setattr("fundmgr.config.load_universe", lambda *a: [
+        type("Row", (), {"yahoo_ticker": "JP", "exchange": "TSE", "currency": "SEK"})()])
+    monkeypatch.setattr("fundmgr.data.market_hours.is_exchange_open",
+                        lambda exchange: exchange != "TSE")
+    sell = Action(ticker="JP", side="sell", target_weight_pct=0, sek_estimate=2000,
+                  confidence=.8, thesis="Exit")
+    outcome = auto_fill.execute_paper_fills(
+        [sell.model_dump(), buy(weight=5, estimate=5000).model_dump()], store, cfg)
+    assert {p.ticker for p in store.get_positions()} == {"JP", "SE"}
+    assert outcome.skipped == {"JP": "market_closed", "NEW": "risk_limit"}
+
+
 def test_fills_preserve_unrealised_profit_in_nav(filler):
     auto_fill, store, cfg = filler
     store.set_cash(20000)

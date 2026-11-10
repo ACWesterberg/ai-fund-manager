@@ -152,6 +152,21 @@ def _login_page(next_path: str, message: str = "", status: int = 200) -> HTMLRes
     return HTMLResponse(body, status_code=status)
 
 
+_LOGOUT_PAGE = """<!doctype html>
+<html lang="sv"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fund Manager — logga ut</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+         background:#0b1220; color:#e2e8f0; font:16px system-ui, sans-serif; }
+  button { padding:12px 20px; border:0; border-radius:10px; background:#2563eb;
+           color:#fff; font-size:16px; font-weight:600; }
+</style></head>
+<body><form method="post" action="/logout"><button type="submit">Logga ut</button></form></body>
+</html>"""
+
+
 async def _login(request: Request, password: str) -> Response:
     if request.method != "POST":
         return _login_page(_safe_next(request.query_params.get("next")))
@@ -186,6 +201,13 @@ async def protect_dashboard(
     if path == "/login":
         return await _login(request, password)
     if path == "/logout":
+        # A GET that signed out let any page sign the owner (or the wall
+        # display) out with an <img src="/logout">. GET asks; a same-origin
+        # POST does it.
+        if request.method != "POST":
+            return HTMLResponse(_LOGOUT_PAGE)
+        if _cross_origin(request):
+            return JSONResponse({"detail": "Cross-origin writes are not allowed"}, status_code=403)
         response = RedirectResponse("/login", status_code=303)
         response.delete_cookie(COOKIE, path="/")
         return response

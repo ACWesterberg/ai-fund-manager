@@ -317,7 +317,9 @@ def _headline_report(ticker: str, after: str, upto: str, news_fn) -> bool:
     from fundmgr.data.release import _parse_date
     for item in news_fn(ticker) or []:
         when = _parse_date(item.get("published", ""))
-        if when is not None and not (after < when.isoformat() <= upto):
+        # An undated "Q3…" item matched every window, turning any ±5% move
+        # into a "report reaction".
+        if when is None or not (after < when.isoformat() <= upto):
             continue
         if REPORT_WORDS.search(item.get("headline", "")):
             return True
@@ -467,6 +469,22 @@ Return the ReportReaction JSON."""
     return _SYSTEM, user
 
 
+def _until_event(items: list[dict], event_date: str) -> list[dict]:
+    """Coverage published by the close the verdict is scored from.
+
+    An event left unjudged by the daily cap can be judged up to four days
+    later, and find_coverage's ±10-day window then holds articles about the
+    move that followed — the outcome the verdict is meant to predict.
+    Undated items stay: nothing says when they appeared, and a feed without
+    timestamps would otherwise lose the release itself.
+    """
+    from fundmgr.data.release import _parse_date
+
+    end = datetime.strptime(event_date, "%Y-%m-%d").date()
+    return [i for i in items or []
+            if (when := _parse_date(i.get("published", ""))) is None or when <= end]
+
+
 def judge_event(event: dict, cfg, coverage_fn: Callable | None = None,
                 llm: Callable | None = None) -> dict:
     """One model call per drop, its quotes checked against the coverage it was shown.
@@ -480,7 +498,7 @@ def judge_event(event: dict, cfg, coverage_fn: Callable | None = None,
 
     coverage_fn = coverage_fn or find_coverage
     llm = llm or call_llm
-    items = coverage_fn(event["ticker"], event["report_date"])
+    items = _until_event(coverage_fn(event["ticker"], event["report_date"]), event["event_date"])
     if not items:
         return {"verdict": "unclear", "what_changed": "No coverage of the report was found.",
                 "n_sources": 0, "judge_model": ""}

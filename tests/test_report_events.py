@@ -397,3 +397,24 @@ def test_a_name_with_too_short_a_history_is_fetched_again_forced(store, cfg, mon
     monkeypatch.setattr(rx, "_ensure_benchmark", lambda s, c, d: rx._Bench([]))
     rx.run_study(store, cfg, [_ticker("SHORT.ST")], history=lambda t: [], echo=lambda *_: None)
     assert forced == ["SHORT.ST"]
+
+
+def test_a_late_judgement_never_reads_coverage_from_after_the_event(cfg):
+    later = {"headline": "Shares rebound sharply after selloff", "publisher": "X",
+             "published": "2026-10-24",
+             "body": "The stock recovered most of its losses as investors reassessed the report."}
+    seen = {}
+
+    def llm(system, user, jcfg, schema):
+        seen["user"] = user
+        return _reaction("Order intake fell 4 percent, mainly due to delayed deliveries in "
+                         "Germany."), "{}"
+
+    rx.judge_event(EVENT, cfg, coverage_fn=lambda t, d: SOURCE + [later], llm=llm)
+    assert "rebound" not in seen["user"]
+    assert "Order intake fell" in seen["user"]
+
+
+def test_an_undated_headline_is_not_a_report(store, cfg):
+    assert not rx._headline_report("A.ST", "2026-10-01", "2026-10-03",
+                                   lambda t: [{"headline": "Q3 report", "published": ""}])

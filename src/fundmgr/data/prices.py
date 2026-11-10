@@ -69,10 +69,14 @@ class TickerFeatures:
     # FX
     currency: str = "SEK"
     needs_fx: bool = False
+    # The fund's risk.stale_after_days, set by build_all_features: the STALE tag
+    # in the prompt and the screener's penalty used a hard-coded 5 while the
+    # guardrail read the config, so a changed limit split the three.
+    stale_after_days: int = 5
 
     @property
     def is_stale(self) -> bool:
-        return self.data_age_trading_days > 5
+        return self.data_age_trading_days > self.stale_after_days
 
     def to_prompt_block(self, show_region: bool = False, show_style: bool = False) -> str:
         """Compact text block for the LLM prompt.
@@ -347,5 +351,6 @@ def build_all_features(
             continue
         feat = compute_features(t, store, since)
         if feat is not None:
+            feat.stale_after_days = cfg.risk.stale_after_days
             features[t.yahoo_ticker] = feat
     return features

@@ -551,3 +551,11 @@ def test_a_buy_must_clear_both_dials():
     result = apply_guardrails(
         _decision([_buy("VOLV-B.ST", 50.0, 50_000)]), snap, features, UNIVERSE, cfg)
     assert "Regional cap breach" in result.verdicts[0].rejection_reason
+
+
+def test_the_stale_tag_follows_the_configured_limit():
+    feat = _feat("VOLV-B.ST")
+    feat.data_age_trading_days = 7
+    assert feat.is_stale
+    feat.stale_after_days = 10
+    assert not feat.is_stale

@@ -159,8 +159,8 @@
 0 18 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-review --all >> data/logs/paper_review.log 2>&1
 
 # Optional: intraday kill-line + horizon checks, if a daily sweep is too slow to
-# hear that a position has broken its max-drop line. Cheap (no LLM, cached
-# prices) and alerts are transition-based, so this cannot spam you. Uncomment to
+# hear that a position has broken its max-drop line. Cheap (no LLM, live quotes)
+# and alerts are transition-based, so this cannot spam you. Uncomment to
 # check hourly during the NYSE session instead of only after the close.
 # 30 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-watch >> data/logs/paper_watch.log 2>&1
 

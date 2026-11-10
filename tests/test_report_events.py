@@ -121,7 +121,8 @@ def test_a_report_before_the_open_is_logged_once_on_its_own_day(store, cfg):
     days = _days(26)
     r_day, next_day = days[-2], days[-1]
     _flat_bench(store, days)
-    history = lambda t: [{"date": r_day}]
+    def history(_t):
+        return [{"date": r_day}]
     _seed(store, "PRE.ST", [100.0] * 24 + [90], days[:-1])        # the cache as of R
     [event] = rx.detect_events(store, cfg, [_ticker("PRE.ST")], rx._Bench(store.get_benchmark()),
                                today=r_day, history=history, news_fn=lambda t: [])

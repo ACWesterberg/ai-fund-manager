@@ -33,7 +33,6 @@ says so rather than reporting an empty result.
 """
 from __future__ import annotations
 
-import json
 import os
 
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"

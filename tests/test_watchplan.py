@@ -622,3 +622,14 @@ def test_seeded_targets_account_for_idle_cash(seeded):
     _meta, store = paper.open_portfolio(slug)
     targets = _json.loads(store.get_meta("paper_target_weights"))
     assert targets["VOLV-B.ST"] == pytest.approx(0.3)
+
+
+def test_the_intraday_watch_reads_live_quotes_not_last_nights_close(tmp_path, monkeypatch):
+    from fundmgr import watchplan
+    from fundmgr.state.store import Store
+    store = Store(tmp_path / "w.db")
+    store.save_prices("AAA.ST", [{"date": "2026-11-09", "open": 0, "high": 0, "low": 0,
+                                  "close": 100.0, "volume": 0}])
+    monkeypatch.setattr("fundmgr.data.quotes.live_prices", lambda tickers: {"AAA.ST": 80.0})
+    assert watchplan._latest_native_prices(store, ["AAA.ST"]) == {"AAA.ST": 100.0}
+    assert watchplan._latest_native_prices(store, ["AAA.ST"], live=True) == {"AAA.ST": 80.0}

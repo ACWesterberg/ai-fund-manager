@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fundmgr.config import AppConfig
-from fundmgr.state.models import NavPoint, PortfolioSnapshot
+from fundmgr.state.models import NavPoint
 from fundmgr.state.store import Store
 
 
@@ -233,7 +233,6 @@ def format_text_report(store: Store, cfg: AppConfig) -> str:
         lines.append("\n  ── Open Positions ──────────────────────────────────")
         lines.append(f"  {'Ticker':<16} {'Shares':>8} {'Avg Cost':>10} {'P&L':>8}")
         for p in sorted(positions, key=lambda x: x.shares * x.avg_cost_sek, reverse=True):
-            cost_val = p.shares * p.avg_cost_sek
             pnl_str = f"{p.unrealised_pnl_pct:+.1f}%" if p.current_price_sek else "  n/a"
             lines.append(f"  {p.ticker:<16} {p.shares:>8.0f} {p.avg_cost_sek:>10.2f} {pnl_str:>8}")
 

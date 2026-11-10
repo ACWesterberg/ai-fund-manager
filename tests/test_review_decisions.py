@@ -165,7 +165,7 @@ def test_run_decisions_still_evaluate_off_their_recommendation(store):
 
 def test_evaluation_results_survive_on_a_review_row(store):
     """update_outcome must not clear source/decision_date."""
-    run_id = store.log_review_decision(
+    store.log_review_decision(
         ticker="TRUE-B.ST", action="sell", confidence=0.8, thesis="banked",
         price_at_decision=20.0, source="target_review", decision_date=_days_ago(30),
     )

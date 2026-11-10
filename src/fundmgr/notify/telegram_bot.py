@@ -1182,7 +1182,7 @@ async def text_handler(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -
     _pending_fills[chat_id] = pending
 
     data = pending
-    lines = [f"🧾 <b>Confirm fill</b>\n"]
+    lines = ["🧾 <b>Confirm fill</b>\n"]
     lines.append(f"Ticker: <b>{text}</b>")
     lines.append(f"Side: <b>{data['side'].upper()}</b>")
     lines.append(f"Shares: <b>{data['shares']}</b>")

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fundmgr import regions, styles
-from fundmgr.config import AppConfig, UniverseTicker
+from fundmgr.config import AppConfig
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.state.models import Learning, PortfolioSnapshot

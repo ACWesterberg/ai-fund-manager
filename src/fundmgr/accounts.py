@@ -292,6 +292,32 @@ def _buy_price(old_shares: float, old_avg: float, row: dict, delta: float,
     return None, ""
 
 
+# A share count that moves at an unchanged total cost is a split, not a trade.
+# Booked as a trade, a 2:1 split read as "Added 10 @ 150" with a phantom deposit
+# and withdrawal pair, and a reverse split as a +380% "trim" whose cash showed
+# up in the return index as a gain.
+_SPLIT_COST_TOLERANCE = 0.01
+_SPLIT_MIN_RATIO = 1.5
+
+
+def _detect_splits(positions: dict, wanted: dict) -> list[dict]:
+    out = []
+    for t, pos in positions.items():
+        row = wanted.get(t)
+        if not row or not row.get("avg_cost_sek") or not pos.shares or not pos.avg_cost_sek:
+            continue
+        if abs(row["shares"] - pos.shares) <= _SHARE_EPS or row["shares"] <= 0:
+            continue
+        ratio = row["shares"] / pos.shares
+        book_cost = pos.shares * pos.avg_cost_sek
+        snap_cost = row["shares"] * row["avg_cost_sek"]
+        if (abs(snap_cost / book_cost - 1) <= _SPLIT_COST_TOLERANCE
+                and (ratio >= _SPLIT_MIN_RATIO or ratio <= 1 / _SPLIT_MIN_RATIO)):
+            out.append({"ticker": t, "from": pos.shares, "to": row["shares"],
+                        "avg_cost_sek": book_cost / row["shares"]})
+    return out
+
+
 def sync_account(slug: str, snapshot=None, *, notify: bool = True,
                  write_plans: bool = True, dry_run: bool = False,
                  allow_empty: bool = False) -> dict:
@@ -349,8 +375,13 @@ def sync_account(slug: str, snapshot=None, *, notify: bool = True,
             currency_map[t] = wanted[t].get("currency") or paper.detect_currency(t)
     market = _market_prices_sek(store, sorted(set(wanted) | set(positions)), currency_map)
 
+    splits = _detect_splits(positions, wanted)
+    split_tickers = {sp["ticker"] for sp in splits}
+
     changes: list[dict] = []
     for t, pos in positions.items():
+        if t in split_tickers:
+            continue
         row = wanted.get(t)
         new_shares = row["shares"] if row else 0.0
         delta = pos.shares - new_shares
@@ -375,6 +406,8 @@ def sync_account(slug: str, snapshot=None, *, notify: bool = True,
             "remaining": max(new_shares, 0.0),
         })
     for t, row in wanted.items():
+        if t in split_tickers:
+            continue
         pos = positions.get(t)
         old = pos.shares if pos else 0.0
         delta = row["shares"] - old
@@ -392,11 +425,26 @@ def sync_account(slug: str, snapshot=None, *, notify: bool = True,
             "remaining": row["shares"], "name": row.get("name"),
         })
 
-    result = {"changes": changes, "warnings": warnings, "plans": [],
+    for sp in splits:
+        warnings.append(f"{sp['ticker']}: looks like a split ({sp['from']:g} → {sp['to']:g} "
+                        "shares at an unchanged cost) — shares rescaled, no trade booked. "
+                        "Check its price-level plan lines (target, max-drop anchor).")
+    if (parsed.get("cash_sek") or 0) < 0:
+        # A credit account: the ledger can't hold negative cash, and the
+        # withdrawal that would take it there raised after the fills had
+        # booked, so the summary and plans never ran and every sync repeated it.
+        warnings.append(f"Broker cash is {parsed['cash_sek']:,.0f} SEK (credit in use) — "
+                        "the mirror holds 0 and doesn't track the loan.")
+        parsed["cash_sek"] = 0.0
+
+    result = {"changes": changes, "splits": splits, "warnings": warnings, "plans": [],
               "cash": None, "message": ""}
     if dry_run:
         result["message"] = format_sync_message(meta["name"], changes, None, warnings, [])
         return result
+
+    for sp in splits:
+        store.upsert_position(sp["ticker"], sp["to"], sp["avg_cost_sek"])
 
     now = datetime.now(timezone.utc)
     # Sells first, so their proceeds are in the book before anything is bought.

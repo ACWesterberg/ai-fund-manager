@@ -1,3 +1,5 @@
+import pytest
+
 from fundmgr.config import FeeConfig
 
 
@@ -24,5 +26,3 @@ def test_fee_at_cap_boundary():
     # 98,000 SEK × 0.001 = 98.00 — just under cap
     assert fee.calc(98_000) == pytest.approx(98.0)
 
-
-import pytest

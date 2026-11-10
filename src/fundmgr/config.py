@@ -88,7 +88,7 @@ class WebConfig:
 
 @dataclass
 class ScreenerConfig:
-    top_n: int = 75  # candidates passed to LLM; held + pinned always added on top
+    top_n: int = 75  # names passed to the LLM; held + pinned are always in it and count toward it
     pinned_tickers: list[str] = field(default_factory=list)  # always price-fetch + screen
     price_fetch_limit: int | None = None  # cap weekly refreshes for large universes
     rotate_weeks: int = 8  # spread the rest across N ISO-week buckets

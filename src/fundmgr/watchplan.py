@@ -740,16 +740,28 @@ def suggested_rules(analysis: dict | None, store: Store | None = None) -> list[d
 
 # ── Numeric kill-rule watch ───────────────────────────────────────────────────
 
-def _latest_native_prices(store: Store, tickers: list[str]) -> dict[str, float]:
+def _latest_native_prices(store: Store, tickers: list[str], live: bool = False) -> dict[str, float]:
     """Latest cached close per ticker, falling back to a live quote.
 
     track_portfolio refreshes the price cache before the watches run, so the
     cache is the normal path; the live fallback covers a ticker whose history
     hasn't been fetched yet (e.g. a plan entry that isn't held).
+
+    `live` quotes every ticker first. The intraday `paper-watch` read the cache,
+    which only the 22:15 track refreshes, so it re-checked last night's close
+    every hour and could never see a max-drop line break during the session.
     """
     out: dict[str, float] = {}
+    if live:
+        try:
+            from fundmgr.data.quotes import live_prices
+            out.update({t: p for t, p in live_prices(list(tickers)).items() if p})
+        except Exception:
+            pass
     missing: list[str] = []
     for t in tickers:
+        if t in out:
+            continue
         rows = store.get_prices(t)
         if rows and rows[-1].get("close"):
             out[t] = float(rows[-1]["close"])
@@ -764,7 +776,7 @@ def _latest_native_prices(store: Store, tickers: list[str]) -> dict[str, float]:
     return out
 
 
-def evaluate_kill_rules(store: Store) -> list[dict]:
+def evaluate_kill_rules(store: Store, live: bool = False) -> list[dict]:
     """Evaluate every numeric kill rule against current prices.
 
     Returns one row per rule-carrying ticker: {ticker, hit, reasons, drawdown_pct,
@@ -780,7 +792,7 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
     currency_map = _load(store, "paper_currency_map")
     positions = {p.ticker: p for p in store.get_positions()}
     tickers = sorted(rules)
-    native = _latest_native_prices(store, tickers)
+    native = _latest_native_prices(store, tickers, live=live)
     prices_sek = paper.sek_prices_for(store, tickers, currency_map, native)
 
     rows: list[dict] = []
@@ -919,7 +931,7 @@ def _recovered(row: dict) -> bool:
     return True
 
 
-def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
+def check_kill_rules(slug: str, store: Store | None = None, live: bool = False) -> list[str]:
     """Alert when a position crosses one of its numeric kill lines.
 
     Transition-based like the drift watch: fires on the crossing, then re-arms
@@ -933,7 +945,7 @@ def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
     else:
         name = store.get_meta("paper_name") or slug
 
-    rows = evaluate_kill_rules(store)
+    rows = evaluate_kill_rules(store, live=live)
     if not rows:
         return []
 

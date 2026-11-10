@@ -554,3 +554,28 @@ def test_account_page_offers_ideas(client):
     page = client.get("/accounts/svenska-aktier").text
     assert "Suggest new stocks" in page and 'id="rv-ideas"' in page
     assert 'id="rv-ideas"' not in client.get("/live/").text
+
+
+def test_a_split_rescales_the_holding_instead_of_booking_a_trade(paper_dir, mock_market, sent, no_plans):
+    slug = _account()
+    holdings = [dict(SNAPSHOT["holdings"][0], shares=20, avg_cost_sek=125),   # 2:1 Volvo
+                SNAPSHOT["holdings"][1]]
+    result = accounts.sync_account(slug, {"cash_sek": 1000, "holdings": holdings})
+    assert result["changes"] == []
+    assert [sp["ticker"] for sp in result["splits"]] == ["VOLV-B.ST"]
+    _meta, store = paper.open_portfolio(slug)
+    volvo = {p.ticker: p for p in store.get_positions()}["VOLV-B.ST"]
+    assert (volvo.shares, volvo.avg_cost_sek) == (20, pytest.approx(125))
+    assert store.get_cash_flows() == []
+    assert store.get_cash() == pytest.approx(1000)
+
+
+def test_a_credit_account_syncs_instead_of_jamming(paper_dir, mock_market, sent, no_plans):
+    slug = _account()
+    holdings = SNAPSHOT["holdings"] + [
+        {"name": "Microsoft", "yahoo_ticker": "MSFT", "shares": 3, "avg_cost_sek": 5000}]
+    result = accounts.sync_account(slug, {"cash_sek": -2000, "holdings": holdings})
+    assert any("credit" in w for w in result["warnings"])
+    _meta, store = paper.open_portfolio(slug)
+    assert "MSFT" in {p.ticker for p in store.get_positions()}
+    assert store.get_cash() == pytest.approx(0, abs=0.02)

@@ -324,8 +324,18 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     path = config_path or (Path(env_config) if env_config else CONFIG_DIR / "config.yaml")
     raw = yaml.safe_load(path.read_text())
 
+    # FUND_MODEL_ID / FUND_LLM_PROVIDER / FUND_CAPITAL_SEK override the default
+    # profile only. `.env` is loaded for every command and every FUND_CONFIG, so
+    # an override meant for the real fund rewrote all five: a GPT model id on
+    # the Claude sims failed every call, and FUND_LLM_PROVIDER=openai turned the
+    # paired Claude funds into GPT ones without a word.
+    default_profile = path.resolve() == (CONFIG_DIR / "config.yaml").resolve()
+
+    def env(name: str, fallback):
+        return os.getenv(name, fallback) if default_profile else fallback
+
     cfg = AppConfig(
-        capital_sek=float(os.getenv("FUND_CAPITAL_SEK", raw.get("capital_sek", 50000))),
+        capital_sek=float(env("FUND_CAPITAL_SEK", raw.get("capital_sek", 50000))),
         cadence=raw.get("cadence", "weekly"),
         benchmark=raw.get("benchmark", "^OMXSPI"),
     )
@@ -362,8 +372,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     if llm_raw := raw.get("llm"):
         cfg.llm = LLMConfig(
-            provider=os.getenv("FUND_LLM_PROVIDER", llm_raw.get("provider", "openai")),
-            model_id=os.getenv("FUND_MODEL_ID", llm_raw.get("model_id", "gpt-4o")),
+            provider=env("FUND_LLM_PROVIDER", llm_raw.get("provider", "openai")),
+            model_id=env("FUND_MODEL_ID", llm_raw.get("model_id", "gpt-4o")),
             temperature=llm_raw.get("temperature", 0.2),
             max_tokens=llm_raw.get("max_tokens", 4096),
             reasoning_effort=llm_raw.get("reasoning_effort", None),

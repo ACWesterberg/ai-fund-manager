@@ -77,3 +77,18 @@ def test_a_missing_price_marks_nothing_rather_than_a_loss(paused, monkeypatch):
     assert result.exit_code == 1
     assert "no price for AAPL" in result.output
     assert store.get_nav_history() == []
+
+
+# ── .env model/capital overrides reach the real fund's profile only ──────────
+
+def test_env_overrides_apply_to_the_default_profile_only(monkeypatch):
+    from fundmgr.config import CONFIG_DIR, load_config
+    monkeypatch.setenv("FUND_MODEL_ID", "gpt-test")
+    monkeypatch.setenv("FUND_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("FUND_CAPITAL_SEK", "123")
+    monkeypatch.delenv("FUND_CONFIG", raising=False)
+    nordic = load_config(CONFIG_DIR / "config.yaml")
+    assert (nordic.llm.model_id, nordic.capital_sek) == ("gpt-test", 123.0)
+    claude = load_config(CONFIG_DIR / "config_claude.yaml")
+    assert (claude.llm.provider, claude.llm.model_id) == ("anthropic", "claude-opus-5-5")
+    assert claude.capital_sek != 123.0

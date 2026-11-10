@@ -1184,6 +1184,35 @@ def mark():
         sys.exit(1)
 
 
+# A stop review that answered HOLD changes nothing, so the same breach was
+# reviewed again every trading day — five heavy calls, a new review row and a
+# new scored outcome each time — until the price recovered. A HOLD (or ADD)
+# stands until the price falls this much further, a week passes, or the
+# holding changes; the stop alert itself still fires as before.
+STOP_REREVIEW_DROP_PCT = 5.0
+STOP_REREVIEW_DAYS = 7
+
+
+def _stop_hold_standing(store, ticker: str, live: float, shares: float | None,
+                        today: str) -> str | None:
+    """The date of a still-standing HOLD on this stop breach, or None to review."""
+    raw = store.get_meta(f"stop_review_hold:{ticker}")
+    if not raw:
+        return None
+    try:
+        held = json.loads(raw)
+        age = (datetime.strptime(today, "%Y-%m-%d")
+               - datetime.strptime(held["date"], "%Y-%m-%d")).days
+        price = float(held["price"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if age >= STOP_REREVIEW_DAYS or held.get("shares") != shares:
+        return None
+    if not price > 0 or live <= price * (1 - STOP_REREVIEW_DROP_PCT / 100):
+        return None
+    return held["date"]
+
+
 @cli.command("check-stops")
 @click.option("--quiet", is_flag=True, help="Suppress output unless a stop or warning fires")
 def check_stops(quiet: bool):
@@ -1378,9 +1407,16 @@ def check_stops(quiet: bool):
     review_snippets: list[str] = []
     if stops_hit and not cfg.auto_fill:
         from fundmgr.engine.stop_review import review_position, format_review_html
+        shares_now = {p.ticker: p.shares for p in store.get_positions()}
         for ticker, _chg, _stop, live in stops_hit:
             meta_key = f"stop_review:{ticker}:{today}"
             if store.get_meta(meta_key):
+                continue
+            held_at = _stop_hold_standing(store, ticker, live, shares_now.get(ticker), today)
+            if held_at:
+                if not quiet:
+                    click.echo(f"  {ticker}: last stop review held at {held_at} — not re-reviewed "
+                               f"until {STOP_REREVIEW_DROP_PCT:.0f}% lower or a week on")
                 continue
             try:
                 result = review_position(ticker, store, cfg, live_price=live)
@@ -1391,6 +1427,12 @@ def check_stops(quiet: bool):
                 continue
             consensus, votes = result
             store.set_meta(meta_key, today)
+            hold_key = f"stop_review_hold:{ticker}"
+            if consensus.recommendation in ("hold", "add"):
+                store.set_meta(hold_key, json.dumps({"date": today, "price": live,
+                                                     "shares": shares_now.get(ticker)}))
+            else:
+                store.set_meta(hold_key, "")  # a trim/exit verdict: review afresh next breach
             review_snippets.append(format_review_html(consensus, votes, max(1, cfg.llm.n_samples)))
             click.echo(
                 f"  Stop review {ticker}: {consensus.recommendation.upper()} "

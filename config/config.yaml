@@ -8,7 +8,8 @@ fx_to_sek: true   # Convert native market prices (yfinance) -> SEK at valuation,
 
 llm:
   provider: openai          # openai | anthropic
-  model_id: "gpt-5.6-sol"   # locked to gpt-5.6-sol for reproducibility; override in .env
+  model_id: "gpt-5.6-sol"   # locked to gpt-5.6-sol for reproducibility; FUND_MODEL_ID in .env
+                            # overrides this profile only, never the sims
   temperature: 0.2
   max_tokens: 16000
   reasoning_effort: "high"  # low | medium | high — activates extended reasoning on gpt-5+/o-series

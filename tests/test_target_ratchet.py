@@ -357,3 +357,30 @@ def test_portfolio_block_without_levels_is_unchanged():
     snap = _Snap([_Pos("OET.OL", 5.0)])
     assert "[" not in _portfolio_block(snap, 2.6, {})
     assert "[" not in _portfolio_block(snap, 2.6, None)
+
+
+# ── A HOLD on a stop breach stands; it isn't re-bought every day ─────────────
+
+def _held(store, date="2026-11-02", price=100.0, shares=10):
+    import json as _json
+    store.set_meta("stop_review_hold:AAA.ST",
+                   _json.dumps({"date": date, "price": price, "shares": shares}))
+
+
+@pytest.mark.parametrize("today,live,shares,stands", [
+    ("2026-11-03", 98.0, 10, True),     # next day, barely moved: no new review
+    ("2026-11-03", 95.0, 10, False),    # 5% further down: review again
+    ("2026-11-09", 99.0, 10, False),    # a week on: review again
+    ("2026-11-03", 99.0, 5, False),     # the holding changed: review again
+])
+def test_a_hold_stands_until_the_price_falls_further(store, today, live, shares, stands):
+    from fundmgr.cli import _stop_hold_standing
+    _held(store)
+    assert bool(_stop_hold_standing(store, "AAA.ST", live, shares, today)) is stands
+
+
+def test_no_hold_or_a_cleared_one_means_review(store):
+    from fundmgr.cli import _stop_hold_standing
+    assert _stop_hold_standing(store, "AAA.ST", 99.0, 10, "2026-11-03") is None
+    store.set_meta("stop_review_hold:AAA.ST", "")
+    assert _stop_hold_standing(store, "AAA.ST", 99.0, 10, "2026-11-03") is None

@@ -1,6 +1,4 @@
-import tempfile
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 
@@ -22,6 +20,18 @@ def test_initialise_twice_raises(store):
     store.initialise(50_000)
     with pytest.raises(RuntimeError):
         store.initialise(50_000)
+
+
+def test_a_book_spent_to_zero_is_still_initialised(store):
+    """`fund init` used to add the full capital again on top of the positions."""
+    assert not store.is_initialised()
+    store.initialise(10_000)
+    store.apply_fill(Transaction(ticker="VOLV-B.ST", side="buy", shares=99,
+                                 price_sek=100.0, fee_sek=100.0, source="fill"))
+    assert store.get_cash() == 0
+    assert store.is_initialised()
+    with pytest.raises(RuntimeError):
+        store.initialise(10_000)
 
 
 def test_buy_updates_position_and_cash(store):

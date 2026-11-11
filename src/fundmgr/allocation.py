@@ -97,7 +97,9 @@ def clean_targets(raw: Mapping[str, object] | None, scheme: Scheme) -> dict[str,
             parsed = float(value)
         except (TypeError, ValueError):
             continue
-        if parsed < 0 or parsed > 100:
+        # NaN passes both comparisons: min(100, NaN + tol) is 100, a cap that
+        # never binds. The JSON body parser hands NaN/Infinity through.
+        if not math.isfinite(parsed) or parsed < 0 or parsed > 100:
             continue
         out[bucket.code] = round(parsed, 2)
 
@@ -117,7 +119,7 @@ def clean_tolerance(raw: object, default: float = DEFAULT_TOLERANCE_PCT) -> floa
         parsed = float(raw)
     except (TypeError, ValueError):
         return default
-    return parsed if 0 <= parsed <= 100 else default
+    return parsed if math.isfinite(parsed) and 0 <= parsed <= 100 else default
 
 
 def ceilings(targets: Mapping[str, float], tolerance_pct: float) -> dict[str, float]:

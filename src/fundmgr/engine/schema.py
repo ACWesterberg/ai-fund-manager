@@ -179,6 +179,57 @@ class TargetReview(BaseModel):
         return v.upper()
 
 
+class ReportQuote(BaseModel):
+    quote: str = Field(
+        max_length=400,
+        description="One sentence copied verbatim from the coverage given. It is checked "
+                    "against the source; a quote that is not there is discarded.",
+    )
+    shows: str = Field(max_length=200, description="What this sentence shows about the business.")
+
+
+class ReportReaction(BaseModel):
+    """Was a report-day drop justified by what the report actually said?"""
+    ticker: str = Field(description="The company under review")
+    verdict: Literal["overreaction", "justified", "unclear"] = Field(
+        description=(
+            "overreaction = the report does not change the company's competitiveness, "
+            "capital allocation or multi-year earnings power by anything like the drop; "
+            "justified = it does (guidance cut, lost share, structurally weaker margins, "
+            "balance-sheet stress, a broken business model); unclear = the coverage "
+            "given is not enough to tell."
+        ),
+    )
+    confidence: float = Field(ge=0, le=1, description="Conviction in the verdict, 0.0-1.0.")
+    what_changed: str = Field(
+        max_length=500,
+        description="What the report actually changed: guidance, orders, margins, cash flow, "
+                    "market share, capital allocation.",
+    )
+    temporary_factors: str = Field(
+        max_length=400,
+        description="Effects likely to pass: currency, product mix, delayed deliveries, "
+                    "one-off costs, timing. '' if none.",
+    )
+    structural_factors: str = Field(
+        max_length=400,
+        description="Effects that change the long-term picture. '' if none.",
+    )
+    expectations_vs_results: str = Field(
+        max_length=300,
+        description="Did the business disappoint, or did results merely miss high expectations?",
+    )
+    quotes: list[ReportQuote] = Field(
+        default_factory=list, max_length=4,
+        description="Up to four verbatim sentences from the coverage supporting the verdict.",
+    )
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper_ticker(cls, v: str) -> str:
+        return v.upper()
+
+
 class StopReview(BaseModel):
     """Focused reassessment of a single position after its stop-loss is hit."""
     ticker: str = Field(description="The position under review")
@@ -204,6 +255,48 @@ class StopReview(BaseModel):
         max_length=600,
         description="1-4 sentences: why this call, weighing the recent thesis against the stop being hit.",
     )
+
+
+class ReportCheck(BaseModel):
+    """A held company has just reported: does the report break the thesis it was bought on?"""
+    ticker: str = Field(description="The position under review")
+    thesis_status: Literal["intact", "strengthened", "weakened", "broken", "unclear"] = Field(
+        description=(
+            "intact = the report leaves the reasons the position is held standing; "
+            "strengthened = it confirms them beyond what was expected; "
+            "weakened = it dents them without overturning them; "
+            "broken = it contradicts the core of the thesis; "
+            "unclear = the coverage given is not enough to tell."
+        ),
+    )
+    recommendation: Literal["exit", "trim", "hold", "add"] = Field(
+        description=(
+            "exit = sell the whole position; trim = reduce it; "
+            "hold = keep as-is; add = conviction improved, buy more."
+        ),
+    )
+    confidence: float = Field(ge=0, le=1, description="Conviction in this recommendation, 0.0-1.0.")
+    trim_pct: float | None = Field(
+        default=None, ge=0, le=100,
+        description="If recommendation=trim, what % of the current position to sell.",
+    )
+    what_changed: str = Field(
+        max_length=400,
+        description="What the report changed: guidance, orders, margins, cash flow, market share.",
+    )
+    rationale: str = Field(
+        max_length=600,
+        description="1-4 sentences: why this call, weighing the thesis against what was reported.",
+    )
+    quotes: list[ReportQuote] = Field(
+        default_factory=list, max_length=4,
+        description="Up to four verbatim sentences from the coverage supporting the verdict.",
+    )
+
+    @field_validator("ticker")
+    @classmethod
+    def _upper_ticker(cls, v: str) -> str:
+        return v.upper()
 
     @field_validator("ticker")
     @classmethod

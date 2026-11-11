@@ -17,6 +17,14 @@ they are not interchangeable with profitable allocations.
   requested horizon, no more than seven calendar days earlier. Store the actual
   evaluation date. No live-price fallback; missing history or benchmark data
   leaves the outcome pending instead of generating an incomplete lesson batch.
+  A bar dated today is still filling and is never a label (the outcome waits
+  for the next run), and the benchmark must be cached through the evaluation
+  date. Labels are close-to-close on both legs: the stock's entry is its close
+  on the decision day (the first cached close on or after it), the same point
+  the benchmark starts from. Both ends come from one split-adjusted price
+  cache, so splits need no special case. The decision day's own move (09:30 to
+  close) is deliberately in neither leg; before 2026-11-11 the stock leg ran
+  from the 09:30 decision price while the benchmark ran from the close.
 - **Thesis evidence:** include only news both published and cached inside the
   inclusive UTC date window, ending at the earlier of the actual evaluation date
   and the requested horizon. Undated/unparseable news is excluded. Repeated cache
@@ -273,6 +281,34 @@ actions. There is no delisting settlement feed, tax model, slippage model, lot
 rounding or intraday execution simulation. Collection timestamps establish when
 this system retrieved evidence, not when the provider first published it. All
 forward results therefore remain **ineligible for automatic promotion**.
+
+## The traded decision is the incumbent arm
+
+A saved weekly run passes its own consensus (decision, votes, sampling) to
+`record_forward`, so the incumbent arm is what was actually traded rather than a
+second sample set of the same prompt. The first shadow week showed why: two
+re-asked incumbents bought IVSO on 2-of-3 votes while the traded run had bought
+BONEX on its own 2-of-3. Guardrails and allocation are recomputed identically for
+both arms; an incomplete production vote makes the pair unscoreable. The
+registration records `incumbent_source`, and `aggregate` groups by it, so
+re-run and traded incumbents never pool.
+
+## Variant arms: does each learning channel help?
+
+`shadow.variants` adds a further registered pair per saved run, using the same
+reservation, scoring and audit chain as the guidance candidate. A variant keeps
+the incumbent guidance and changes the frozen prompt in one named way
+(`experiments.VARIANTS`):
+
+- `no_lessons`: the incumbent user prompt with exactly the run's lessons block
+  (`fields["learnings"]`) removed. Its candidate arm is the prompt the run would
+  have had with no lessons, so `candidate_advantage_pp > 0` means the lessons
+  cost return. A run that carried no lessons is refused before reservation.
+
+Create the variant once, before the runs it is compared on:
+`fund shadow-variant no_lessons`. It pins the mandate and incumbent guidance;
+after either changes, registration refuses it until it is written again with
+`--replace`, which starts a separate evidence group.
 
 ## Aggregate evidence audit
 

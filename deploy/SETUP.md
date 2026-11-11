@@ -458,8 +458,12 @@ The deploy script serializes deployments using `flock`, waits for active fund
 runs before changing source or dependencies, and writes `data/deployed-revision`
 only after all services report that they are running. Polling retries an unfinished deployment
 even when Git HEAD is already current. A missing marker causes one full deployment.
-The poller and direct webhook are independent of GitHub's test job; use protected
-`deploy` branches with required checks if those deployment paths are enabled.
+Only a tested revision goes live. The Actions deploy runs after the test job and
+records its revision in `data/tested-revision`; the poller and the direct webhook have
+no test result of their own, so they deploy (or retry) only that recorded revision. A
+newer push waits until its own Actions run passes. A host with no `tested-revision`
+yet (fresh install, just migrated) is first deployed by Actions or by hand with
+`EXPECTED_REVISION=$(git rev-parse origin/deploy) deploy/deploy.sh`.
 
 The installed `FinanceData` source on the Pi still follows its configured branch;
 CI's pin does not change that operational policy.

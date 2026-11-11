@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# deploy.sh — runs ON the Raspberry Pi to pull latest code and restart services.
-# Called by GitHub Actions (via SSH) or by the polling script.
+# deploy.sh — runs ON the host (Raspberry Pi, or the Mac Studio after the move) to pull
+# latest code and restart services. Called by GitHub Actions (via SSH) or by the polling
+# script. On macOS the services are launchd agents (deploy/macos/launchd.py).
 set -euo pipefail
 
 # Derive repo root from this script's location so it works regardless of username or path
@@ -45,38 +46,80 @@ check_financedata_branch() {
 }
 
 mkdir -p "$(dirname "$LOG_FILE")"
+# A host the fund has moved off (deploy/MIGRATE-TO-MAC.md) must never be deployed to
+# again: systemctl restart would start its disabled services (a second bot on the same
+# token) and managed_cron.sh would put the old jobs back in its crontab. Fail, so a
+# deploy still pointed here is noticed (the workflow reports failures on Telegram).
+if [ -f "$REPO_DIR/data/moved-to-mac" ]; then
+    log "✗ This host is retired: the fund runs on the Mac ($(cat "$REPO_DIR/data/moved-to-mac")). Not deploying."
+    exit 1
+fi
 # Serialize webhook, polling and SSH deployments.
-exec 9>"$REPO_DIR/data/deploy.lock"
-flock -n 9 || { log "Another deployment is running"; exit 0; }
+# A re-exec (below) inherits fd 9 and with it the lock already held; on macOS, where
+# there is no flock, exec keeps the pid shlock recorded.
+if [ -z "${DEPLOY_REEXEC:-}" ]; then
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$REPO_DIR/data/deploy.lock"
+        flock -n 9 || { log "Another deployment is running"; exit 0; }
+    else
+        shlock -f "$REPO_DIR/data/deploy.pid" -p $$ || { log "Another deployment is running"; exit 0; }
+    fi
+fi
+command -v flock >/dev/null 2>&1 || trap 'rm -f "$REPO_DIR/data/deploy.pid"' EXIT
 SUCCESS_FILE="$REPO_DIR/data/deployed-revision"
 log "=== Deploy started (branch: $BRANCH) ==="
 
 cd "$REPO_DIR"
 
-# Wait before changing the source or dependencies used by an active run.
-log "Checking for active fund run…"
+# Wait before changing the source or dependencies used by an active fund
+# command — not only `fund run`: montrose-import --auto books the real ledger
+# every 30 minutes, and cli.py imports modules lazily, so an old process could
+# load new code mid-booking after the reset below.
+log "Checking for active fund commands…"
 WAIT=0
-while pgrep -f "fund run" > /dev/null 2>&1; do
-    if [ $WAIT -eq 0 ]; then log "  Fund run in progress — waiting for it to finish…"; fi
+while pgrep -f "(bin/fund |fund run)" > /dev/null 2>&1; do
+    if [ $WAIT -eq 0 ]; then log "  A fund command is running — waiting for it to finish…"; fi
     WAIT=$((WAIT + 5))
     if [ $WAIT -gt 1800 ]; then
-        log "  ✗ Fund run still active — aborting deployment; retry later"
+        log "  ✗ Fund command still active — aborting deployment; retry later"
         exit 1
     fi
     sleep 5
 done
-[ $WAIT -gt 0 ] && log "  Fund run finished after ${WAIT}s — proceeding with restart"
+[ $WAIT -gt 0 ] && log "  Fund command finished after ${WAIT}s — proceeding with restart"
 
 # Ensure we're on the right branch
 git fetch origin "$BRANCH" --quiet
 TARGET=$(git rev-parse "origin/$BRANCH")
-if [ -n "${EXPECTED_REVISION:-}" ] && [ "$TARGET" != "$EXPECTED_REVISION" ]; then
-    log "Branch advanced beyond the tested revision — aborting; run checks again"
-    exit 1
+# Only a revision whose tests passed goes live. GitHub Actions calls this with
+# EXPECTED_REVISION after its test job, and that revision is recorded as tested.
+# The webhook and the 5-minute poll have no test result of their own: they used
+# to deploy any push at once, so a red commit reached the live host before (or
+# whatever) the tests said. Now they may only deploy — or retry — the revision
+# Actions recorded; anything newer waits for its own passing run.
+TESTED_FILE="$REPO_DIR/data/tested-revision"
+if [ -n "${EXPECTED_REVISION:-}" ]; then
+    if [ "$TARGET" != "$EXPECTED_REVISION" ]; then
+        log "Branch advanced beyond the tested revision — aborting; run checks again"
+        exit 1
+    fi
+    echo "$TARGET" > "$TESTED_FILE"
+elif [ "$TARGET" != "$(cat "$TESTED_FILE" 2>/dev/null || true)" ]; then
+    log "Not deploying $TARGET: no passing test run on record for it — GitHub Actions deploys it once its tests pass"
+    exit 0
 fi
-BEFORE=$(git rev-parse HEAD)
+BEFORE="${DEPLOY_BEFORE:-$(git rev-parse HEAD)}"
 git reset --hard "origin/$BRANCH" --quiet
 AFTER=$(git rev-parse HEAD)
+
+# The reset replaces this file with a new one, but bash keeps reading the old
+# copy it has open — so a deploy that changes deploy.sh used to finish on the
+# previous version (the managed-cron step first shipped that way and did not
+# run). Carry on in the updated copy instead, once.
+if [ -z "${DEPLOY_REEXEC:-}" ] && ! git diff --quiet "$BEFORE" "$AFTER" -- deploy/deploy.sh; then
+    log "deploy.sh itself changed — continuing in the updated copy"
+    DEPLOY_REEXEC=1 DEPLOY_BEFORE="$BEFORE" exec bash "$REPO_DIR/deploy/deploy.sh"
+fi
 
 if [ -f "$SUCCESS_FILE" ] && [ "$(cat "$SUCCESS_FILE")" = "$AFTER" ]; then
     log "Already up to date ($AFTER). Nothing to do."
@@ -124,20 +167,50 @@ if [ -x "$UV" ] && [ -f "$REPO_DIR/scripts/sync_universe_from_financedata.py" ];
     fi
 fi
 
-log "Restarting services…"
-sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
-
-# Verify services came back up
-sleep 2
-for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
-    if systemctl is-active --quiet "$svc"; then
-        log "  ✓ $svc is running"
-    else
-        log "  ✗ $svc FAILED to start"
-        systemctl status "$svc" --no-pager -l >> "$LOG_FILE" 2>&1
-        exit 1
+# Cron jobs owned by the code (deploy/managed_cron.sh): a marked block only,
+# the rest of the crontab stays hand-maintained. Advisory — never fails a deploy.
+# On macOS the same jobs are launchd jobs, regenerated from cron.example plus that
+# block (only changed ones reload), so a Mac never runs fund jobs from cron, which
+# skips what the Mac slept through.
+if [ "$(uname -s)" = "Darwin" ]; then
+    if [ -f "$REPO_DIR/deploy/macos/launchd.py" ]; then
+        "$REPO_DIR/.venv/bin/python" "$REPO_DIR/deploy/macos/launchd.py" install 2>&1 \
+            | while read -r line; do log "  $line"; done || true
     fi
-done
+elif [ -f "$REPO_DIR/deploy/managed_cron.sh" ]; then
+    bash "$REPO_DIR/deploy/managed_cron.sh" "$REPO_DIR" 2>&1 | while read -r line; do log "  $line"; done || true
+fi
+
+log "Restarting services…"
+if [ "$(uname -s)" = "Darwin" ]; then
+    DOMAIN="gui/$(id -u)"
+    for svc in bot web global-web; do
+        launchctl kickstart -k "$DOMAIN/com.fundmgr.$svc" || true
+    done
+    sleep 2
+    for svc in bot web global-web; do
+        if launchctl print "$DOMAIN/com.fundmgr.$svc" 2>/dev/null | grep -q "state = running"; then
+            log "  ✓ com.fundmgr.$svc is running"
+        else
+            log "  ✗ com.fundmgr.$svc FAILED to start (see data/logs/service-$svc.log)"
+            exit 1
+        fi
+    done
+else
+    sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web
+
+    # Verify services came back up
+    sleep 2
+    for svc in fundmgr-bot fundmgr-web fundmgr-global-web; do
+        if systemctl is-active --quiet "$svc"; then
+            log "  ✓ $svc is running"
+        else
+            log "  ✗ $svc FAILED to start"
+            systemctl status "$svc" --no-pager -l >> "$LOG_FILE" 2>&1
+            exit 1
+        fi
+    done
+fi
 
 printf '%s\n' "$AFTER" > "$SUCCESS_FILE.tmp"
 mv "$SUCCESS_FILE.tmp" "$SUCCESS_FILE"

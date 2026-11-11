@@ -27,6 +27,11 @@ from fundmgr.state.models import PortfolioSnapshot, Position
 VERSION = 1
 CONVENTION = "fractional-shares_at-frozen-quotes_fees_buy-and-hold_v1"
 FORWARD_CONVENTION = "fractional-shares_at-next-common-close_fees_total-return_v1"
+# Candidates that change something other than the guidance text. A variant arm
+# keeps the incumbent's guidance and alters the frozen prompt in one named way.
+VARIANTS = {
+    "no_lessons": "The incumbent prompt with its lessons block removed: do lessons help?",
+}
 Number = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Positive = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
@@ -214,7 +219,15 @@ def validate_candidate(case: Case, candidate: dict) -> datetime:
     incumbent_hash = hashlib.sha256(case.guidance.encode()).hexdigest()[:12] if case.guidance else None
     if candidate.get("incumbent_guidance_hash") != incumbent_hash:
         raise ValueError("Candidate was compiled against a different incumbent")
-    if candidate.get("status") != "pending_evaluation" or not str(candidate.get("instructions", "")).strip():
+    if candidate.get("status") != "pending_evaluation":
+        raise ValueError("Expected an inactive candidate")
+    variant = candidate.get("variant")
+    if variant is not None:
+        if variant not in VARIANTS:
+            raise ValueError(f"Unknown candidate variant: {variant}")
+        if str(candidate.get("instructions", "")) != case.guidance:
+            raise ValueError("A variant keeps the incumbent's guidance unchanged")
+    elif not str(candidate.get("instructions", "")).strip():
         raise ValueError("Expected an inactive candidate with instructions")
     candidate_created = datetime.fromisoformat(candidate["created_at"])
     if candidate_created.tzinfo is None:
@@ -222,19 +235,58 @@ def validate_candidate(case: Case, candidate: dict) -> datetime:
     return candidate_created
 
 
-def compare_guidance(snapshot: dict, candidate: dict) -> dict:
-    """Call both arms on identical frozen input. No future labels are accepted."""
+def candidate_prompt(case: Case, snapshot: dict, candidate: dict) -> tuple[str, str]:
+    """(system, user) the candidate arm is asked with. Raises before any paid call.
+
+    `no_lessons` removes exactly the lessons block the run injected — the text
+    `build_prompt` placed between the risk limits and the universe — leaving the
+    prompt it would have built with no lessons at all. A run that carried no
+    lessons is refused: its two arms would be the same prompt paid for twice.
+    """
+    variant = candidate.get("variant")
+    if variant is None:
+        return assemble_system_prompt(case.mandate, candidate["instructions"]), case.user
+    if variant == "no_lessons":
+        block = str((snapshot.get("fields") or {}).get("learnings") or "")
+        if not block.strip():
+            raise ValueError("Run carried no lessons; a no-lessons arm would repeat the incumbent")
+        needle = block + "\n\n"
+        if case.user.count(needle) != 1:
+            raise ValueError("The lessons block does not appear exactly once in the frozen prompt")
+        return case.system, case.user.replace(needle, "", 1)
+    raise ValueError(f"Unknown candidate variant: {variant}")
+
+
+def compare_guidance(snapshot: dict, candidate: dict, incumbent: dict | None = None) -> dict:
+    """Call both arms on identical frozen input. No future labels are accepted.
+
+    `incumbent` is the production run's own consensus on this very prompt
+    ({decision, response, votes, sampling}). Re-asking the incumbent cost a
+    sample set per pair and answered a different question: the first shadow
+    week re-ran it twice and got IVSO both times, while the run the owner
+    traded on had bought BONEX on a 2-of-3 vote. Guardrails and allocation are
+    still recomputed here, identically for both arms.
+    """
     case = load_case(snapshot)
     candidate_created = validate_candidate(case, candidate)
     candidate_hash = digest(candidate)
     start = datetime.now(timezone.utc)
     if case.decision_time > start:
         raise ValueError("Cannot compare a snapshot dated in the future")
+    prompts = {"incumbent": (assemble_system_prompt(case.mandate, case.guidance), case.user),
+               "candidate": candidate_prompt(case, snapshot, candidate)}
     arms = {}
-    for name, instructions in (("incumbent", case.guidance), ("candidate", candidate["instructions"])):
-        arm = {"system": assemble_system_prompt(case.mandate, instructions)}
+    for name, (system, user) in prompts.items():
+        arm = {"system": system}
+        if user != case.user:
+            arm["user"] = user
         try:
-            decision, raw, votes, sampling = call_llm_consensus(arm["system"], case.user, case.config())
+            if name == "incumbent" and incumbent is not None:
+                decision, raw = incumbent["decision"], incumbent["response"]
+                votes, sampling = incumbent.get("votes"), incumbent["sampling"]
+                arm["source"] = "production_run"
+            else:
+                decision, raw, votes, sampling = call_llm_consensus(system, user, case.config())
             arm.update(decision=decision.model_dump(), response=raw, votes=votes, sampling=sampling)
             if sampling.get("failed") or sampling.get("succeeded") != case.llm.n_samples:
                 raise ValueError("Incomplete consensus sample set; comparison is not scoreable")

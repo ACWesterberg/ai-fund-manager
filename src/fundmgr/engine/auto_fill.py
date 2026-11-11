@@ -162,6 +162,16 @@ def execute_paper_fills(
                 skipped[ticker] = SKIP_RISK
                 log.append(f"  ⚠ {ticker}: missing approved trade budget — skipped")
                 continue
+            # The guardrails approved this buy against a book its sells had
+            # already emptied. When a funding sell didn't fill (its venue shut,
+            # no price), the slot it would have freed is still taken.
+            open_slots = sum(1 for p in pos_map.values() if p.shares > 0)
+            if ticker not in pos_map and open_slots >= cfg.risk.max_positions:
+                skipped[ticker] = SKIP_RISK
+                log.append(f"  ⚠ {ticker}: no free position slot ({open_slots}/"
+                           f"{cfg.risk.max_positions}; a sell that would free one didn't fill) "
+                           "— skipped")
+                continue
             buy_sek = min(budget, nav * weight_gap / 100.0)
             if store.get_cash() - buy_sek - cfg.fees.calc(buy_sek) < nav * cfg.risk.min_cash_pct / 100:
                 skipped[ticker] = SKIP_RISK
@@ -192,7 +202,10 @@ def execute_paper_fills(
                     log.append(f"  {ticker}: sell size {sell_sek:.0f} SEK below minimum — skipped")
                     continue
                 shares = sell_sek / price
-            if "sek_estimate" in action:
+            # A full exit sells what is held, not what the budget buys back: the
+            # budget was priced at the run's close, so on an up day it fell short
+            # and left a sliver that still held a position slot.
+            if "sek_estimate" in action and target_weight_pct != 0:
                 budget = action["sek_estimate"]
                 if not math.isfinite(budget) or budget <= 0:
                     skipped[ticker] = SKIP_RISK

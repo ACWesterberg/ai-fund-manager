@@ -62,6 +62,7 @@ def test_evaluation_pinned_to_fixed_horizon(store):
     )
     # Pinned close at the 28-day mark = 110; a much higher "live" close today = 200.
     store.save_prices("AAA.ST", [
+        {"date": decision, "open": 0, "high": 0, "low": 0, "close": 100.0, "volume": 0},
         {"date": target, "open": 0, "high": 0, "low": 0, "close": 110.0, "volume": 0},
         {"date": _iso(0), "open": 0, "high": 0, "low": 0, "close": 200.0, "volume": 0},
     ])
@@ -167,23 +168,29 @@ def test_batch_review_message_reports_dispersion():
         _outcome("BBB.ST", ret=-4.0, bench=2.0),  # -6pp
     ]}
     msg = _batch_review_message(by_run, {"r1": ""}, "^OMXSPI", max_lessons=3)
-    assert "2 trades, 1 came out ahead" in msg
-    assert "mean stock alpha +0.0pp" in msg and "spread 12.0pp" in msg
-    assert "sell edge" not in msg
+    assert "2 names, 1 beat" in msg
+    assert "mean alpha +0.0pp" in msg and "spread 12.0pp" in msg
+    assert "1 of 2 buys right" in msg
 
 
-def test_batch_review_scores_a_sell_from_its_own_side():
-    """A sell the stock then rallied past is a losing decision, not a win."""
+def test_a_sell_whose_stock_lagged_counts_as_right():
+    good_exit = _outcome("CCC.ST", ret=-10.0, bench=2.0)
+    good_exit.action = "sell"
+    msg = _batch_review_message({"r1": [good_exit]}, {"r1": ""}, "^OMXSPI", max_lessons=3)
+    assert "1 of 1 sells right" in msg
+
+
+def test_batch_review_labels_each_sell_with_its_edge():
+    """Per row, a sell shows the stock's alpha and its own edge, sign flipped."""
     by_run = {"r1": [
         _outcome("AAA.ST", ret=8.0, bench=2.0, action="sell"),   # stock +6pp, sell -6pp
         _outcome("BBB.ST", ret=-4.0, bench=2.0, action="sell"),  # stock -6pp, sell +6pp
-        _outcome("CCC.ST", ret=-4.0, bench=2.0, action="buy"),   # -6pp
+        _outcome("CCC.ST", ret=-4.0, bench=2.0, action="buy"),
     ]}
     msg = _batch_review_message(by_run, {"r1": ""}, "^OMXSPI", max_lessons=3)
-    assert "3 trades, 1 came out ahead" in msg
     assert "SELL AAA.ST" in msg and "sell edge -6.0pp" in msg
     assert "sell edge +6.0pp" in msg
-    assert "A SELL came out ahead when that alpha was negative" in msg
+    assert "1 of 2 sells right" in msg and "0 of 1 buys right" in msg
 
 
 def test_decision_edge_flips_for_sells_and_keeps_holds_long():
@@ -385,16 +392,42 @@ def test_calibration_single_band_makes_no_comparison_claim():
     assert "n=4" not in body  # the under-powered band is not reported at all
 
 
-def _seed_buys(store, run_id, rows):
-    """rows: (confidence, outperformed)"""
-    import sqlite3
+def _seed_buys(store, run_id, rows, one_week: bool = False):
+    """rows: (confidence, outperformed), one decision week each unless `one_week`."""
     with store._conn() as conn:
         for i, (conf, won) in enumerate(rows):
+            day = datetime(2026, 1, 5) + timedelta(weeks=0 if one_week else i)
             conn.execute(
                 "INSERT INTO decision_outcomes (run_id, ticker, action, confidence, "
-                "outperformed, source) VALUES (?, ?, 'buy', ?, ?, 'run')",
-                (run_id, f"T{i}.ST", conf, 1 if won else 0),
+                "outperformed, source, decision_date) VALUES (?, ?, 'buy', ?, ?, 'run', ?)",
+                (run_id, f"T{i}.ST", conf, 1 if won else 0, day.strftime("%Y-%m-%d")),
             )
+
+
+def test_many_buys_from_one_week_are_not_a_calibration_reading(store):
+    """Twenty-five buys sharing one market week are closer to one data point."""
+    _seed_buys(store, "r1", [(0.8, True)] * 25 + [(0.2, False)] * 25, one_week=True)
+    assert store.get_calibration_stats()["high"]["weeks"] == 1
+    assert generate_learnings(store) == []
+
+
+def test_calibration_intervals_are_counted_in_weeks_not_trades():
+    narrow = calibration_body(_stats(high=(20, 40), low=(10, 40)))
+    stats = _stats(high=(20, 40), low=(10, 40))
+    for band in stats.values():
+        if band:
+            band["weeks"] = 10
+    wide = calibration_body(stats)
+    assert "over 10 decision weeks" in wide
+    assert narrow != wide
+
+
+def test_a_buy_without_a_recorded_confidence_belongs_to_no_band(store):
+    with store._conn() as conn:
+        conn.execute("INSERT INTO decision_outcomes (run_id, ticker, action, confidence, "
+                     "outperformed, source, decision_date) VALUES ('r', 'X', 'buy', NULL, 1, 'run', "
+                     "'2026-01-05')")
+    assert store.get_calibration_stats() == {}
 
 
 def test_two_qualifying_bands_no_longer_delete_each_other(store):
@@ -463,6 +496,7 @@ def test_outcome_records_the_horizon_it_was_scored_over(store):
         {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
     ]), prices={"AAA.ST": 100.0})
     store.save_prices("AAA.ST", [
+        {"date": decision, "open": 0, "high": 0, "low": 0, "close": 100.0, "volume": 0},
         {"date": target, "open": 0, "high": 0, "low": 0, "close": 120.0, "volume": 0}])
     store.save_benchmark([{"date": decision, "close": 1000.0},
                           {"date": target, "close": 1050.0}])
@@ -508,7 +542,9 @@ def test_missing_horizon_history_stays_pending_until_backfilled(store):
         {"ticker": "AAA", "side": "buy", "confidence": 0.8, "thesis": "t"}]),
         prices={"AAA": 100})
     target = _iso(12)
-    store.save_prices("AAA", [{"date": _iso(0), "open": 0, "high": 0, "low": 0,
+    store.save_prices("AAA", [{"date": _iso(40), "open": 0, "high": 0, "low": 0,
+                              "close": 100, "volume": 0},
+                             {"date": _iso(0), "open": 0, "high": 0, "low": 0,
                               "close": 200, "volume": 0}])
     store.save_benchmark([{"date": _iso(40), "close": 100}, {"date": target, "close": 105}])
     assert evaluate_pending_outcomes(store) == []
@@ -528,3 +564,44 @@ def test_missing_benchmark_cannot_produce_a_learning_batch(store):
                               "close": 110, "volume": 0}])
     assert evaluate_pending_outcomes(store) == []
     assert store.get_all_outcomes()[0].evaluation_date is None
+
+
+# ── A failed audit or lesson call is retried, not lost ───────────────────────
+
+def test_a_failed_learning_batch_is_carried_to_the_next_run(store):
+    from fundmgr.engine.evaluator import learning_batch, settle_learning_batch
+    _seed_buys(store, "r1", [(0.8, True), (0.8, False)])   # no run row, like a review
+    first = store.get_outcomes_by_ids([1, 2])
+    assert len(first) == 2
+    assert learning_batch(store, first) == first
+
+    settle_learning_batch(store, first, failed=True)
+    carried = learning_batch(store, [])
+    assert sorted(o.id for o in carried) == sorted(o.id for o in first)
+
+    settle_learning_batch(store, carried, failed=False)
+    assert learning_batch(store, []) == []
+
+
+def test_a_failed_lesson_call_says_so(store, monkeypatch):
+    from fundmgr.engine import evaluator
+    monkeypatch.setattr(evaluator, "_call_for_batch_lessons", lambda *a: None)
+    _seed_buys(store, "r1", [(0.8, True)])
+    report: dict = {}
+    batch = store.get_outcomes_by_ids([1])
+    assert batch
+    assert evaluator.generate_qualitative_learnings(store, batch, AppConfig(), report=report) == []
+    assert report == {"failed": True}
+
+
+
+def test_without_a_decision_day_close_the_outcome_waits(store):
+    """Close-to-close on both legs: no entry close, no label yet."""
+    _save_run(store, "r", days_ago=40)
+    store.seed_outcomes_for_run("r", json.dumps([
+        {"ticker": "AAA", "side": "buy", "confidence": 0.8, "thesis": "t"}]), prices={"AAA": 100})
+    target = _iso(12)
+    store.save_prices("AAA", [{"date": target, "open": 0, "high": 0, "low": 0,
+                              "close": 110, "volume": 0}])
+    store.save_benchmark([{"date": _iso(40), "close": 100}, {"date": target, "close": 105}])
+    assert evaluate_pending_outcomes(store) == []

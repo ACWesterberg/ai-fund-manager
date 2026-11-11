@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[DecisionOutcome]:
+def evaluate_pending_outcomes(store: Store, lookback_days: int = 28,
+                              today: str | None = None) -> list[DecisionOutcome]:
     """
     For each pending outcome older than lookback_days, compute return vs
     benchmark over a *fixed* horizon and persist. Returns the evaluated outcomes.
@@ -31,7 +32,15 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
     is persisted regardless of when this evaluator runs. When the cache has no
     close on or before that target, the outcome stays pending. A later live
     quote must not masquerade as a fixed-horizon observation.
+
+    Nor may today's bar: the cache holds today's still-filling session, so the
+    09:30 run scored an outcome maturing that morning on the 09:30 print and
+    persisted it for good. A label whose close would be today's waits for the
+    next run. The benchmark must also be cached through the evaluation date —
+    its cache refreshes only every three days, and a series ending the session
+    before put a whole day of market move into "alpha".
     """
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pending = store.get_pending_outcomes(older_than_days=lookback_days)
     if not pending:
         return []
@@ -42,14 +51,19 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
             continue
 
         eval_price, eval_date = _evaluation_price(store, outcome, lookback_days)
-        if eval_price is None:
+        if eval_price is None or eval_date >= today:
             continue
+        if not store.get_benchmark(since_date=eval_date):
+            continue  # benchmark not yet cached through the evaluation date
+        entry = _entry_close(store, outcome)
+        if entry is None or entry[0] >= eval_date:
+            continue  # no decision-day close cached yet
 
-        position_return = (eval_price / outcome.price_at_decision - 1) * 100
+        position_return = (eval_price / entry[1] - 1) * 100
 
-        # Benchmark over the same window as the position: decision date -> eval date.
+        # Benchmark over the same window as the position: entry close -> eval close.
         bench_return = get_benchmark_return_pct(
-            store, since_date=outcome.decision_date, until_date=eval_date
+            store, since_date=entry[0], until_date=eval_date
         )
 
         if bench_return is None:
@@ -67,6 +81,19 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28) -> list[Dec
         evaluated.append(outcome)
 
     return evaluated
+
+
+def _entry_close(store: Store, outcome: DecisionOutcome) -> tuple[str, float] | None:
+    """The stock's close on the decision day — the same point the benchmark starts.
+
+    The label is close-to-close on both legs. It used to run from the 09:30
+    decision price for the stock but from the decision day's close for the
+    benchmark, so the day's intraday move counted for one and not the other.
+    Both ends now come from the same price cache, which every run rewrites with
+    split-adjusted history, so a split needs no special case either. The cost
+    is deliberate: the move between 09:30 and that day's close is not scored.
+    """
+    return store.close_on_or_after(outcome.ticker, outcome.decision_date, max_delta_days=7)
 
 
 def _evaluation_price(
@@ -168,12 +195,38 @@ MAX_BATCH_LESSONS = 3       # most a single evaluation batch may contribute
 MIN_SUPPORTING_TICKERS = 2  # a lesson must repeat across names to count as one
 
 
+# Outcomes are marked evaluated before their batch is audited and distilled,
+# and only newly evaluated ones are ever passed in — so a failed thesis-check or
+# lesson call lost that batch for good, and the coverage report then counted
+# its outcomes as "no evidence", reading a provider outage as a news gap.
+LEARNING_RETRY_KEY = "learning_retry_outcome_ids"
+
+
+def learning_batch(store: Store, evaluated: list[DecisionOutcome]) -> list[DecisionOutcome]:
+    """This run's newly scored outcomes plus any whose audit or lessons failed before."""
+    try:
+        retry = set(json.loads(store.get_meta(LEARNING_RETRY_KEY) or "[]"))
+    except (ValueError, TypeError):
+        retry = set()
+    fresh = {o.id for o in evaluated}
+    carried = [o for o in store.get_outcomes_by_ids(sorted(retry - fresh))
+               if o.outperformed is not None]
+    return list(evaluated) + carried
+
+
+def settle_learning_batch(store: Store, batch: list[DecisionOutcome], failed: bool) -> None:
+    """Keep a failed batch for the next run's retry; clear it once it went through."""
+    store.set_meta(LEARNING_RETRY_KEY,
+                   json.dumps(sorted(o.id for o in batch if o.id)) if failed else "")
+
+
 def generate_qualitative_learnings(
     store: Store,
     outcomes: list[DecisionOutcome],
     cfg: "AppConfig | None" = None,
     benchmark_label: str | None = None,
     max_lessons: int = MAX_BATCH_LESSONS,
+    report: dict | None = None,
 ) -> list[Learning]:
     """
     Distil at most `max_lessons` lessons from a whole evaluation batch, in one call.
@@ -215,6 +268,8 @@ def generate_qualitative_learnings(
 
     parsed = _call_for_batch_lessons(cfg, user_msg, cfg.evaluation_horizon_days)
     if parsed is None:
+        if report is not None:
+            report["failed"] = True
         return []
 
     new_learnings: list[Learning] = []
@@ -295,22 +350,26 @@ def _batch_review_message(
                 )
         lines.append("")
 
-    alphas = [a for a in (_alpha(o) for rl in by_run.values() for o in rl) if a is not None]
+    scored = [(o, _alpha(o)) for rl in by_run.values() for o in rl if _alpha(o) is not None]
+    alphas = [a for _, a in scored]
     if alphas:
+        beat = sum(1 for a in alphas if a > 0)
         mean = sum(alphas) / len(alphas)
         spread = max(alphas) - min(alphas)
-        edges = [e for e in (_edge(o) for rl in by_run.values() for o in rl) if e is not None]
-        ahead = sum(1 for e in edges if e > 0)
+        # The names' own alphas show a common move; whether a call was right
+        # depends on its side. Pooled, a batch of good exits (their stocks
+        # lagged) read as a batch that lost to the market.
+        right = []
+        for side, wins in (("buy", lambda a: a > 0), ("sell", lambda a: a < 0)):
+            calls = [a for o, a in scored if o.action == side]
+            if calls:
+                right.append(f"{sum(map(wins, calls))} of {len(calls)} {side}s right")
         lines.append(
-            f"Batch dispersion: {len(alphas)} trades, {ahead} came out ahead of {bench_name} "
-            f"and {len(edges) - ahead} behind; mean stock alpha {mean:+.1f}pp, "
-            f"spread {spread:.1f}pp."
+            f"Batch dispersion: {len(alphas)} names, {beat} beat {bench_name} and "
+            f"{len(alphas) - beat} lagged; mean alpha {mean:+.1f}pp, spread {spread:.1f}pp."
+            + (f" By call: {', '.join(right)} (a sell is right when its stock lagged)."
+               if right else "")
         )
-        if any(o.action == "sell" for rl in by_run.values() for o in rl):
-            lines.append(
-                "Alpha is the stock's move against the benchmark. A SELL came out ahead "
-                "when that alpha was negative — its sell edge is the alpha with the sign flipped."
-            )
         lines.append("")
 
     lines.append(
@@ -511,6 +570,12 @@ def _call_for_learning_consolidations(
 
 
 CALIBRATION_MIN_SAMPLE = 20  # evaluated buys in a bucket before its rate is reported
+CALIBRATION_MIN_WEEKS = 8    # ...and the distinct decision weeks they came from
+
+
+def _band_qualifies(data: dict, min_sample: int) -> bool:
+    return (data.get("n", 0) >= min_sample and data.get("hits") is not None
+            and data.get("weeks", data.get("n", 0)) >= CALIBRATION_MIN_WEEKS)
 
 _BUCKET_LABELS = {
     "high":   "high (>=0.7)",
@@ -582,13 +647,18 @@ def calibration_body(
     reported, bands = [], {}
     for bucket in ("high", "medium", "low"):
         data = stats.get(bucket) or {}
-        n, hits = data.get("n", 0), data.get("hits")
-        if n < min_sample or hits is None:
+        if not _band_qualifies(data, min_sample):
             continue
-        lo, hi = wilson_interval(hits, n)
+        n, hits = data["n"], data["hits"]
+        # The interval is over decision weeks, not trades: buys decided in the
+        # same week share its market, and treating them as independent made the
+        # bands tight enough to tell the model to size on its own conviction.
+        weeks = min(data.get("weeks", n), n)
+        lo, hi = wilson_interval(hits / n * weeks, weeks)
         bands[bucket] = (lo, hi)
         reported.append(
-            f"{_BUCKET_LABELS[bucket]} {hits / n:.0%} [95% CI {lo:.0%}-{hi:.0%}, n={n}]"
+            f"{_BUCKET_LABELS[bucket]} {hits / n:.0%} [95% CI {lo:.0%}-{hi:.0%}, "
+            f"n={n} over {weeks} decision weeks]"
         )
 
     if not reported:
@@ -618,7 +688,7 @@ def generate_learnings(
     retired rather than left running: it is injected into every prompt, so an
     unsupported claim left active keeps steering decisions.
     """
-    stats = store.get_calibration_stats()
+    stats = store.get_calibration_stats(horizon_days=horizon_days)
     body = calibration_body(stats, min_sample=min_sample, horizon_days=horizon_days)
 
     if body is None:
@@ -629,9 +699,9 @@ def generate_learnings(
         lrn for lrn in store.get_active_learnings() if lrn.category == "calibration"
     ]
     qualifying_buckets = {
-        bucket for bucket, values in stats.items() if values.get("n", 0) >= min_sample
+        bucket for bucket, values in stats.items() if _band_qualifies(values, min_sample)
     }
-    run_ids = store.get_calibration_run_ids(qualifying_buckets)
+    run_ids = store.get_calibration_run_ids(qualifying_buckets, horizon_days=horizon_days)
     if any(lrn.body == body and lrn.run_ids == run_ids for lrn in existing):
         return []  # unchanged reading — keep the original timestamp
 

@@ -47,6 +47,8 @@ def authenticated_dashboard_tests(monkeypatch):
 
     monkeypatch.setenv("FUND_WEB_USERNAME", "fund")
     monkeypatch.setenv("FUND_WEB_PASSWORD", "test-password")
+    # Never create the host's session key file inside the checkout.
+    monkeypatch.setenv("FUND_WEB_SESSION_SECRET", "test-session-secret-" + "0" * 32)
     original = TestClient.__init__
 
     def init(self, *args, **kwargs):

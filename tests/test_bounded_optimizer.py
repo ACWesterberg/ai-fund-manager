@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from statistics import mean
 from click.testing import CliRunner
 
 from fundmgr.config import AppConfig
@@ -153,6 +154,23 @@ def test_no_improvement_creates_no_candidate(search, monkeypatch):
     monkeypatch.setattr(bo, "call_llm", equal)
     assert not bo.run_search(cfg, plan, path)
     assert bo._load(path)["status"] == "complete"
+    assert not guidance_versions(cfg)["candidates"]
+
+
+def test_a_win_on_names_without_outcomes_publishes_nothing(search, monkeypatch):
+    """Incumbent buys A (lost), candidate buys Z (never traded): neutral is not a win."""
+    cfg, plan, path, calls, provider = search
+    def elsewhere(system, user, task_cfg, schema, max_retries, on_usage=None):
+        result, raw = provider(system, user, task_cfg, schema, max_retries, on_usage)
+        if schema is not bo.Proposal and "Prefer B" in system:
+            result = result.model_copy(update={"actions": [
+                result.actions[0].model_copy(update={"ticker": "Z"})]})
+        return result, result.model_dump_json()
+    monkeypatch.setattr(bo, "call_llm", elsewhere)
+    assert not bo.run_search(cfg, plan, path)
+    state = bo._load(path)
+    assert mean(state["scores"]["candidate"]) > mean(state["scores"]["incumbent"])
+    assert state["label_coverage"]["candidate"] == [0.0] * len(plan["cases"])
     assert not guidance_versions(cfg)["candidates"]
 
 

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fundmgr import regions, styles
-from fundmgr.config import AppConfig, UniverseTicker
+from fundmgr.config import AppConfig
 from fundmgr.data.benchmark import get_benchmark_return_pct
 from fundmgr.data.prices import TickerFeatures
 from fundmgr.state.models import Learning, PortfolioSnapshot
@@ -20,6 +20,8 @@ def _portfolio_block(
     snap: PortfolioSnapshot,
     benchmark_return: float | None,
     stop_levels: dict[str, dict] | None = None,
+    features: dict[str, TickerFeatures] | None = None,
+    in_sek: bool = False,
 ) -> str:
     lines = ["## Current Portfolio State"]
     lines.append(f"NAV: {snap.nav_sek:,.0f} SEK  |  Cash: {snap.cash_sek:,.0f} SEK ({snap.cash_pct:.1f}%)")
@@ -30,7 +32,18 @@ def _portfolio_block(
 
     if snap.positions:
         levels = stop_levels or {}
-        lines.append("Open positions:")
+        feats = features or {}
+        # The real book values holdings in SEK while the candidate list quotes
+        # each listing in its own currency. Unlabelled, BAVA.CO read "now
+        # 369.34" here and "252.40 [DKK]" there, and the model reported a
+        # price discrepancy (2 Nov). Say which is which, and give the native
+        # price beside a foreign holding's SEK one.
+        foreign = in_sek and any((feats.get(p.ticker) and feats[p.ticker].currency != "SEK")
+                                 for p in snap.positions)
+        lines.append("Open positions (avg cost and price in SEK; a foreign listing's own "
+                     "price in brackets — the same as its candidate-list price):"
+                     if foreign else
+                     "Open positions (avg cost and price in SEK):" if in_sek else "Open positions:")
         for p in sorted(snap.positions, key=lambda x: x.market_value_sek, reverse=True):
             w = snap.weight_pct(p.ticker)
             pnl = p.unrealised_pnl_pct
@@ -53,6 +66,9 @@ def _portfolio_block(
                 parts.append(f"target +{tp_pct:.0f}%{flag}")
             if parts:
                 row += "  [" + ", ".join(parts) + "]"
+            feat = feats.get(p.ticker)
+            if foreign and feat and feat.currency != "SEK" and feat.last_price:
+                row += f"  ({feat.currency} {feat.last_price:.2f})"
             lines.append(row)
     else:
         lines.append("No open positions — fully in cash.")
@@ -73,12 +89,15 @@ def _sector_weights_block(
         return ""
 
     sector_values: dict[str, float] = {}
+    unclassified = 0.0
     for p in snap.positions:
         feat = features.get(p.ticker)
-        sector = feat.sector if feat and feat.sector else "Unknown"
-        sector_values[sector] = sector_values.get(sector, 0.0) + p.market_value_sek
+        if feat and feat.sector:
+            sector_values[feat.sector] = sector_values.get(feat.sector, 0.0) + p.market_value_sek
+        else:
+            unclassified += p.market_value_sek
 
-    if not sector_values:
+    if not sector_values and not unclassified:
         return ""
 
     lines = [f"  Current sector exposure (cap {max_sector_pct:.0f}%):"]
@@ -87,6 +106,9 @@ def _sector_weights_block(
         headroom = max_sector_pct - pct
         flag = " ⚠ near cap" if headroom < 5 else ""
         lines.append(f"    {sector:<30} {pct:>5.1f}%  (headroom {headroom:.1f}%){flag}")
+    if unclassified:
+        lines.append(f"    {'(no sector on file)':<30} {unclassified / nav * 100:>5.1f}%  "
+                     "— not a sector; not counted against the cap")
     return "\n".join(lines)
 
 
@@ -374,7 +396,8 @@ def build_prompt(
 
     # Discrete blocks — captured once, used both for the flat prompt and the
     # fielded snapshot so the two can never drift.
-    portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops())
+    portfolio_state = _portfolio_block(snap, bench_return, store.get_effective_stops(),
+                                       features=features, in_sek=cfg.fx_to_sek)
     risk_limits     = _risk_limits_block(cfg, snap, features)
     learnings_block = _learnings_block(learnings)
     # Bucket tags cost tokens on every candidate, so each is only rendered when

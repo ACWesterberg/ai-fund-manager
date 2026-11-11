@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import click
 
 from fundmgr import regions, styles
-from fundmgr.config import load_config, get_enabled_tickers
-from fundmgr.data.benchmark import fetch_and_cache_benchmark, get_benchmark_return_pct
+from fundmgr.config import load_config, get_enabled_tickers, holding_rows
+from fundmgr.data.benchmark import fetch_and_cache_benchmark
 from fundmgr.data.fundamentals import apply_to_features, fetch_and_cache_fundamentals
 from fundmgr.data.macro_context import build_macro_block, fetch_macro_headlines, fetch_macro_indicators
 from fundmgr.data.news import attach_sentiment_to_features, check_news_triggers, fetch_news, score_and_cache_sentiment
@@ -29,6 +30,8 @@ from fundmgr.engine.evaluator import (
     evaluate_pending_outcomes,
     generate_learnings,
     generate_qualitative_learnings,
+    learning_batch,
+    settle_learning_batch,
 )
 from fundmgr.engine.prompt import build_prompt, snapshot_to_dict
 from fundmgr.engine.thesis_check import verify_theses
@@ -36,7 +39,7 @@ from fundmgr.guardrails.rules import apply_guardrails
 from fundmgr.levels import (
     alertable_hits, deferred_note, merged_levels, record_sent_alerts, settled_sells,
 )
-from fundmgr.reporting.actions import format_action_list
+from fundmgr.reporting.actions import format_action_list, trade_line
 from fundmgr.state.models import NavPoint, PortfolioSnapshot, RecommendationLog, Transaction
 from fundmgr.state.store import Store
 
@@ -51,6 +54,20 @@ def _get_store(cfg=None) -> tuple:
         cfg = load_config()
     store = Store(cfg.db_path)
     return cfg, store
+
+
+def _paused(cfg, what: str) -> bool:
+    """True (and says so) when this fund is paused and `what` must not happen.
+
+    Gated per command rather than inside call_llm: live sleeves and the What-If
+    Lab borrow a sim profile's mandate and universe, and pausing the sim book
+    must not quietly break a review of a real sleeve built from its profile.
+    """
+    if not cfg.paused:
+        return False
+    click.echo(f"⏸ {cfg.display_name} is paused — {what} skipped. "
+               "Nothing called, nothing traded.")
+    return True
 
 
 
@@ -122,6 +139,30 @@ def reset(capital: float | None, purge_cache: bool, yes: bool):
     click.echo("\nNext step: run 'fund run' to generate the first decision of the fresh sim.")
 
 
+# check-news may start a run on a held name's headline; not within this long of
+# a saved one, or a Monday headline re-buys the whole consensus the run just made.
+AUTO_RUN_MIN_GAP_HOURS = 24
+
+
+def _run_lock(cfg, name: str = "run"):
+    """An exclusive per-fund lock for `fund run`, or None when one is running.
+
+    Nothing stopped two runs of one fund at once: a check-news auto-run could
+    start while Monday's run (consensus, shadow pairs, tickets) was still going,
+    and both seeded outcomes and sent tickets. Held until the process exits.
+    `name` gives another command its own lock (check-stops: `stops`).
+    """
+    import fcntl
+
+    handle = (cfg.db_path.parent / f"{cfg.db_path.stem}.{name}.lock").open("a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
 def _skip_on_market_holiday(cfg) -> bool:
     """True when this profile's main market holds no session today.
 
@@ -188,18 +229,60 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         skip_fundamentals: bool, force: bool):
     """Ingest data, call the LLM, apply guardrails, and emit the action list."""
     cfg, store = _get_store()
+    # Before the holiday gate and deliberately not overridable by --force: that
+    # flag answers "is the market open", not "should this fund spend money".
+    if _paused(cfg, "weekly run"):
+        return
     if not store.is_initialised():
         click.echo("Portfolio not initialised. Run 'fund init' first.", err=True)
         sys.exit(1)
 
+    lock = _run_lock(cfg)
+    if lock is None:
+        click.echo(f"⏸ {cfg.display_name}: another run of this fund is still going — "
+                   "not starting a second one.")
+        return
+
     if not force and _skip_on_market_holiday(cfg):
         return
 
+    try:
+        _weekly_run(cfg, store, dry_run, force_refresh, skip_news, skip_macro, skip_fundamentals)
+    except Exception as exc:
+        _notify_run_failed(cfg, exc, dry_run)
+        raise
+
+
+def _notify_run_failed(cfg, exc: Exception, dry_run: bool) -> None:
+    """Telegram the owner when a weekly run dies without a decision.
+
+    A failed consensus or a crash in fetch/macro/features used to leave a Monday
+    without a decision and only a stderr line in weekly.log. The holiday and
+    can't-value skips exit through SystemExit and notify themselves.
+    """
+    if dry_run:
+        return
+    from fundmgr.notify.send import send_telegram
+    send_telegram(
+        f"<b>{html.escape(cfg.display_name)}</b>\n⛔ Weekly run failed — no decision was saved\n"
+        f"{html.escape(type(exc).__name__)}: {html.escape(str(exc)[:500])}\n"
+        "See data/logs/weekly.log; /run once it's fixed."
+    )
+
+
+def _weekly_run(cfg, store, dry_run: bool, force_refresh: bool, skip_news: bool,
+                skip_macro: bool, skip_fundamentals: bool) -> None:
+    """The pipeline behind `fund run`, after the pause, lock and holiday gates."""
     tickers = get_enabled_tickers(cfg.universe_path)
     held_tickers = {p.ticker for p in store.get_positions()}
+    # Only enabled rows are buyable, but every holding is priced and shown so it
+    # can be valued and sold — a disabled or unlisted holding used to freeze the book.
+    universe_tickers = {t.yahoo_ticker for t in tickers}
+    tickers += [t for t in holding_rows(cfg.universe_path, held_tickers)
+                if t.yahoo_ticker not in universe_tickers]
     fetch_tickers, fetch_note = select_tickers_for_price_fetch(tickers, held_tickers, cfg.screener)
     click.echo(f"\n{'═'*56}")
-    click.echo(f"  AI Fund Manager — Weekly Run")
+    click.echo("  AI Fund Manager — Weekly Run")
     click.echo(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     click.echo(f"{'═'*56}")
 
@@ -214,6 +297,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     click.echo(f"      {ok}/{len(tickers)} tickers resolved")
     if failed:
         click.echo(f"      ✗ Failed: {', '.join(failed)}")
+    # A matured outcome is scored from the cache, but only enabled names and
+    # holdings are fetched: a name bought, sold and then disabled (or skipped
+    # by the global rotation) never got its horizon close and stayed pending
+    # for good — and the losers that get dropped are exactly those.
+    unpriced = ({o.ticker for o in store.get_pending_outcomes(
+        older_than_days=cfg.evaluation_horizon_days)} - set(fetch_result))
+    if unpriced and not dry_run:
+        fetch_and_cache_prices(holding_rows(cfg.universe_path, unpriced), store,
+                               cfg.data.lookback_days, force_refresh)
+        click.echo(f"      + {len(unpriced)} name(s) with outcomes to score: "
+                   f"{', '.join(sorted(unpriced)[:8])}{' …' if len(unpriced) > 8 else ''}")
 
     # ── Step 2: Fetch / refresh fundamentals cache (weekly TTL) ───────────────
     feature_tickers = tickers_for_feature_build(tickers, fetch_tickers, store)
@@ -225,9 +319,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             refreshed = fetch_and_cache_fundamentals(ticker_symbols, store, ttl_days=7, max_workers=12)
             click.echo(f"      {refreshed}/{stale_count} refreshed")
         else:
-            click.echo(f"      All fresh (TTL 7d)")
+            click.echo("      All fresh (TTL 7d)")
     else:
-        click.echo(f"\n[2/6] Fundamentals refresh skipped.")
+        click.echo("\n[2/6] Fundamentals refresh skipped.")
 
     # ── Step 3: Fetch benchmark ────────────────────────────────────────────────
     click.echo(f"\n[3/6] Fetching benchmark ({cfg.benchmark})…")
@@ -238,17 +332,17 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     since_news = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
     macro_block = ""
     if not skip_macro:
-        click.echo(f"\n[4/6] Fetching global macro context…")
+        click.echo("\n[4/6] Fetching global macro context…")
         macro_indicators = fetch_macro_indicators()
         macro_headlines = fetch_macro_headlines(cfg.data.macro_feeds) if cfg.data.macro_feeds else []
         macro_block = build_macro_block(macro_indicators, macro_headlines)
         ind_ok = sum(1 for i in macro_indicators if i.price is not None)
         click.echo(f"      {ind_ok}/{len(macro_indicators)} indicators | {len(macro_headlines)} global headlines")
     else:
-        click.echo(f"\n[4/6] Global macro context skipped.")
+        click.echo("\n[4/6] Global macro context skipped.")
 
     # ── Step 5: Compute features + pre-screen ─────────────────────────────────
-    click.echo(f"\n[5/6] Computing features…")
+    click.echo("\n[5/6] Computing features…")
     features = build_all_features(feature_tickers, store, cfg, fetch_result)
     apply_to_features(features, store)
 
@@ -299,23 +393,29 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 ticker_news, store, cfg.data.sentiment.model, cfg.data.sentiment.device
             )
     else:
-        click.echo(f"\n[6/6] News skipped.")
+        click.echo("\n[6/6] News skipped.")
 
     attach_sentiment_to_features(features, store, since_date=since_news)
 
     # ── Data quality summary ──────────────────────────────────────────────────
     click.echo(f"\n{'─'*56}")
-    click.echo(f"  Data Quality Report")
+    click.echo("  Data Quality Report")
     click.echo(f"{'─'*56}")
     _print_feature_table(features, cfg)
 
     # ── Step 5: Retrospective evaluation + learnings ─────────────────────────
     horizon = cfg.evaluation_horizon_days
-    evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
-    if evaluated:
+    # Scoring is permanent and the thesis check and lesson calls are paid, so a
+    # dry run ("nothing saved") leaves them to the next real run. The prompt
+    # still reads the lessons already learned.
+    evaluated = [] if dry_run else evaluate_pending_outcomes(store, lookback_days=horizon)
+    if dry_run:
+        click.echo("\n[*] Dry run: matured outcomes left unscored; no new learnings.")
+    batch = [] if dry_run else learning_batch(store, evaluated)
+    if batch:
         # Judge the reasoning before distilling: a lesson needs to know whether a
         # position that beat did so because the thesis held or in spite of it.
-        funnel = verify_theses(store, evaluated, cfg, lookback_days=horizon)
+        funnel = verify_theses(store, batch, cfg, lookback_days=horizon)
         verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
         click.echo(
             f"\n[*] Thesis check: {funnel['outcomes']} outcome(s) → "
@@ -324,29 +424,60 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             f"{verdicts or 'no verdicts'}"
         )
         stat_learnings = generate_learnings(store, horizon_days=horizon)
-        qual_learnings = generate_qualitative_learnings(store, evaluated, cfg)
+        lesson_report: dict = {}
+        qual_learnings = generate_qualitative_learnings(store, batch, cfg, report=lesson_report)
+        settle_learning_batch(store, batch, bool(funnel.get("failed") or lesson_report.get("failed")))
+        if len(batch) > len(evaluated):
+            click.echo(f"\n[*] Retried {len(batch) - len(evaluated)} outcome(s) whose audit "
+                       "or lessons failed last time.")
         total_learnings = len(stat_learnings) + len(qual_learnings)
         click.echo(
             f"\n[*] Evaluated {len(evaluated)} past decisions; "
             f"{total_learnings} new learnings generated "
             f"({len(qual_learnings)} qualitative, {len(stat_learnings)} calibration)."
         )
+    if not dry_run:
+        waiting = store.get_pending_outcomes(older_than_days=horizon + 7)
+        if waiting:
+            click.echo(f"\n[*] {len(waiting)} outcome(s) a week past their horizon are still "
+                       "unscored (no close or benchmark at the horizon): "
+                       f"{', '.join(sorted({o.ticker for o in waiting})[:8])}")
 
     # ── Step 6: Build portfolio snapshot (attach live prices, native→SEK) ────
     from fundmgr.data.fx import rate_to_sek
     fx_cache: dict[str, float] = {}
     cur_by_ticker = {t.yahoo_ticker: t.currency for t in tickers}
     positions = store.get_positions()
+    unvalued: list[str] = []
     for p in positions:
         feat = features.get(p.ticker)
-        if feat:
-            price = feat.last_price
-            cur = cur_by_ticker.get(p.ticker, "SEK")
-            if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
-                rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
-                fx_cache[cur] = rate
-                price *= rate
-            p.current_price_sek = price
+        if feat is None or not math.isfinite(feat.last_price) or feat.last_price <= 0:
+            unvalued.append(f"{p.ticker} (no price)")
+            continue
+        price = feat.last_price
+        cur = cur_by_ticker.get(p.ticker, "SEK")
+        if cfg.fx_to_sek and cur != "SEK":  # convert native market price to SEK
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                unvalued.append(f"{p.ticker} (no {cur}/SEK rate)")
+                continue
+            fx_cache[cur] = rate
+            price *= rate
+        p.current_price_sek = price
+    if unvalued:
+        # Before the model is paid for: the guardrails reject every trade in a
+        # book they can't value, and a NAV with a hole in it reads as a loss.
+        # A missing rate used to be read as 1.0, pricing a EUR holding at an
+        # eleventh of its worth for the model, the sizing and the NAV history.
+        click.echo(f"\n⛔ {cfg.display_name}: can't value {', '.join(unvalued)} — "
+                   "run skipped before calling the model; no NAV written.", err=True)
+        from fundmgr.notify.send import send_telegram
+        send_telegram(
+            f"<b>{html.escape(cfg.display_name)}</b>\n⛔ Run skipped — can't value the book\n"
+            f"{html.escape(', '.join(unvalued))}\nThe decision model wasn't called. Re-run with "
+            "/run once prices and FX are back."
+        )
+        sys.exit(1)
     snap = PortfolioSnapshot(positions=positions, cash_sek=store.get_cash())
 
     # ── Step 7: Assemble prompt (use screened candidates) ────────────────────
@@ -387,6 +518,7 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         decision, raw_response, vote_counts, sampling = call_llm_consensus(system_msg, user_msg, effective_cfg)
     except LLMError as e:
         click.echo(f"  ✗ LLM call failed: {e}", err=True)
+        _notify_run_failed(cfg, e, dry_run)
         sys.exit(1)
     if sampling["failed"]:
         click.echo(f"      ⚠ {sampling['failed']}/{sampling['requested']} sample(s) failed to parse")
@@ -401,7 +533,6 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
         click.echo(f"      ✓ Got {len(decision.actions)} action(s)")
 
     # ── Step 9: Apply guardrails ──────────────────────────────────────────────
-    universe_tickers = {t.yahoo_ticker for t in tickers}
     guardrail_result = apply_guardrails(decision, snap, features, universe_tickers, effective_cfg)
 
     rejected_count = sum(1 for v in guardrail_result.verdicts if not v.approved)
@@ -487,7 +618,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             sells = [a for a in guardrail_result.approved_actions if a.side == "sell"]
             holds = [a for a in guardrail_result.approved_actions if a.side == "hold"]
             tg_consensus = vote_counts is not None and n_samples > 1
-            tg_vote = (lambda t: f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else "")
+            def tg_vote(t: str) -> str:
+                return f" [{vote_counts[t]}/{n_samples}]" if tg_consensus and t in vote_counts else ""
             header = f"<b>{html.escape(cfg.display_name)}</b>\n📊 Run Complete  <code>{run_id}</code>"
             if tg_consensus:
                 header += f"  <i>({n_samples}-run consensus)</i>"
@@ -495,10 +627,13 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             lines.append(html.escape(decision.market_summary))
             # NAV vs benchmark performance line
             from fundmgr.data.benchmark import get_benchmark_return_pct
+            from fundmgr.reporting.dashboard import return_index
             nav_history = store.get_nav_history()
             if nav_history:
                 first = nav_history[0]
-                fund_ret = (snap.nav_sek / first.portfolio_nav_sek - 1) * 100 if first.portfolio_nav_sek else None
+                # Deposit-proof: today's point was written above from this same
+                # snapshot, so the index's last step is the fund's own return.
+                fund_ret = (return_index(nav_history, store.get_cash_flows())[-1] - 1) * 100
                 bench_ret = get_benchmark_return_pct(store, since_date=first.date)
                 if fund_ret is not None:
                     bench_str = f"  vs {cfg.benchmark} {bench_ret:+.1f}%" if bench_ret is not None else ""
@@ -507,19 +642,21 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
                 lines.append("")
                 lines.append("<b>🟢 BUYS</b>")
                 for a in buys:
-                    lines.append(f"  {a.ticker}  {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
+                    lines.append(f"  {html.escape(trade_line(a, snap, features, cfg))}  "
+                                 f"conf {a.confidence:.2f}{tg_vote(a.ticker)}")
                     lines.append(f"  <i>{html.escape(a.thesis)}</i>")
             if sells:
                 lines.append("")
                 lines.append("<b>🔴 SELLS</b>")
                 for a in sells:
-                    lines.append(f"  {a.ticker}  → {a.target_weight_pct:.0f}%  conf {a.confidence:.2f}{tg_vote(a.ticker)}")
+                    lines.append(f"  {html.escape(trade_line(a, snap, features, cfg))}  "
+                                 f"conf {a.confidence:.2f}{tg_vote(a.ticker)}")
                     lines.append(f"  <i>{html.escape(a.thesis)}</i>")
             if holds:
                 lines.append("")
                 lines.append("<b>⏸ HOLDS</b>")
                 for a in holds:
-                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis[:120])}</i>")
+                    lines.append(f"  {a.ticker}{tg_vote(a.ticker)}  <i>{html.escape(a.thesis)}</i>")
             if not buys and not sells:
                 lines.append("No trades this run — holding cash.")
             if decision.notes:
@@ -579,6 +716,9 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             except Exception as e:
                 click.echo(f"  ⚠ Telegram notification failed: {e}", err=True)
 
+    if not dry_run and cfg.montrose.account_name:
+        _run_tickets(cfg, store, run_id, guardrail_result.approved_actions, snap, features)
+
     # ── Auto-fill (paper trading simulation) ─────────────────────────────────
     if not dry_run and cfg.auto_fill and guardrail_result.approved_actions:
         from fundmgr.engine.auto_fill import execute_paper_fills
@@ -599,12 +739,30 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
     if not dry_run:
         # Shadow research is isolated from fills and uses the saved pre-trade book.
         from fundmgr.engine.forward import record_forward, collect_forward
+        from fundmgr.engine.forward import variant_path
+        # The decision just traded on is the incumbent arm of every pair.
+        production = {"decision": decision.model_copy(deep=True), "response": raw_response,
+                      "votes": vote_counts, "sampling": sampling}
         try:
-            shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers)
+            shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id, tickers,
+                                         incumbent=production)
             if shadow_path:
                 click.echo(f"\n  Forward comparison recorded: {shadow_path}")
         except Exception as exc:
             click.echo(f"  Forward comparison unavailable: {exc}", err=True)
+        for variant in cfg.shadow.variants:
+            vpath = variant_path(cfg, variant)
+            if not vpath.exists():
+                click.echo(f"  Shadow variant {variant} not created yet — run "
+                           f"`fund shadow-variant {variant}` before the next run.", err=True)
+                continue
+            try:
+                shadow_path = record_forward(cfg, json.loads(rec.prompt_snapshot), run_id,
+                                             tickers, candidate_path=str(vpath), incumbent=production)
+                if shadow_path:
+                    click.echo(f"  Forward comparison ({variant}) recorded: {shadow_path}")
+            except Exception as exc:
+                click.echo(f"  Forward comparison ({variant}) unavailable: {exc}", err=True)
         try:
             for result in collect_forward(cfg):
                 click.echo(f"  Shadow {result['case']}: {result['status']}"
@@ -614,7 +772,6 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
 
 
 def _print_feature_table(features, cfg):
-    from fundmgr.data.prices import TickerFeatures
     if not features:
         click.echo("  No features available.")
         return
@@ -708,20 +865,7 @@ def fill(ticker: str, shares: float, price: float, fee: float, side: str, trade_
     cash = store.get_cash()
     click.echo(f"  Cash remaining: {cash:,.0f} SEK")
 
-    # Record a NAV snapshot (cost-basis) so the chart shows fill events
-    try:
-        bench_rows = store.get_benchmark()
-        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
-        positions_after = store.get_positions()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash
-        store.upsert_nav(NavPoint(
-            date=ts.strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_val,
-            cash_sek=cash,
-        ))
-    except Exception:
-        pass
+    _mark_after_ledger_change(cfg, store, ts.strftime("%Y-%m-%d"))
 
 
 @cli.command("set-cash")
@@ -735,6 +879,90 @@ def set_cash_cmd(amount: float):
     old = store.get_cash()
     store.set_cash(amount)
     click.echo(f"✓ Cash set: {old:,.2f} → {amount:,.2f} SEK")
+    if amount > old:
+        click.echo("  If that was new money transferred in, undo this with set-cash "
+                   f"{old:.2f} and use `fund deposit {amount - old:.2f}` (/deposit) "
+                   "instead — set-cash counts a top-up as profit.")
+
+
+def _record_flow(sign: int, amount: float, on: str | None, note: str, record_only: bool) -> None:
+    cfg, store = _get_store()
+    try:
+        cash = store.record_cash_flow(sign * amount, flow_date=on, note=note,
+                                      adjust_cash=not record_only)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    word = "Deposit" if sign > 0 else "Withdrawal"
+    if record_only:
+        click.echo(f"✓ {word} of {amount:,.0f} SEK recorded for {on} — cash left as it is "
+                   f"({cash:,.0f} SEK).")
+    else:
+        click.echo(f"✓ {word} of {amount:,.0f} SEK recorded. Cash now {cash:,.0f} SEK.")
+    flows = store.get_cash_flows()
+    from fundmgr.reporting.dashboard import invested
+    click.echo(f"  Money put in: {invested(cfg.capital_sek, flows):,.0f} SEK "
+               f"(start {cfg.capital_sek:,.0f} + net flows "
+               f"{sum(f['amount_sek'] for f in flows):+,.0f}). "
+               "The fund's return and alpha exclude this.")
+
+
+_FLOW_OPTIONS = [
+    click.argument("amount", type=click.FloatRange(min=0, min_open=True)),
+    click.option("--note", default="", help="What it was, e.g. 'monthly top-up'."),
+    click.option("--record-only", is_flag=True,
+                 help="Backfill only: cash was already corrected with set-cash, so just "
+                      "log the flow. Requires --date."),
+    click.option("--date", "on", default=None, metavar="YYYY-MM-DD",
+                 help="With --record-only: the first NAV date that already shows the money."),
+]
+
+
+def _flow_options(fn):
+    for opt in reversed(_FLOW_OPTIONS):
+        fn = opt(fn)
+    return fn
+
+
+def _check_flow_args(record_only: bool, on: str | None) -> None:
+    if record_only and not on:
+        raise click.UsageError("--record-only needs --date")
+    if on and not record_only:
+        raise click.UsageError("--date is only for --record-only backfills; "
+                               "a deposit that moves cash is dated today")
+
+
+@cli.command("deposit")
+@_flow_options
+def deposit(amount: float, note: str, record_only: bool, on: str | None):
+    """Add AMOUNT SEK of new money to the book — not counted as profit.
+
+    Use this, not set-cash, when you transfer money into the account: set-cash
+    overwrites the balance and the dashboard would read the top-up as a gain.
+    """
+    _check_flow_args(record_only, on)
+    _record_flow(+1, amount, on, note, record_only)
+
+
+@cli.command("withdraw")
+@_flow_options
+def withdraw(amount: float, note: str, record_only: bool, on: str | None):
+    """Take AMOUNT SEK out of the book — not counted as a loss."""
+    _check_flow_args(record_only, on)
+    _record_flow(-1, amount, on, note, record_only)
+
+
+@cli.command("cash-flows")
+def cash_flows():
+    """List every deposit and withdrawal, and what has been put in overall."""
+    from fundmgr.reporting.dashboard import invested
+    cfg, store = _get_store()
+    flows = store.get_cash_flows()
+    click.echo(f"\n─── {cfg.display_name} — money in and out ───────────────")
+    click.echo(f"  Starting capital: {cfg.capital_sek:>12,.0f} SEK")
+    for f in flows:
+        note = f"  {f['note']}" if f["note"] else ""
+        click.echo(f"  {f['date']}  {f['amount_sek']:>+12,.0f} SEK{note}")
+    click.echo(f"  Money put in:     {invested(cfg.capital_sek, flows):>12,.0f} SEK\n")
 
 
 @cli.command("undo-fill")
@@ -782,6 +1010,18 @@ def backfill_nav():
         earlier = [d for d in bench_dates_sorted if d <= date_str]
         return bench_lookup[earlier[-1]] if earlier else bench_lookup[bench_dates_sorted[0]]
 
+    # Only dates with no point are filled. A replay at cost basis must never
+    # replace a point marked at market (the safety contract), and it misses
+    # dividends, tax, interest and set-cash corrections besides.
+    marked = {n.date for n in store.get_nav_history()}
+
+    def fill(point: NavPoint) -> bool:
+        if point.date in marked:
+            return False
+        store.upsert_nav(point)
+        marked.add(point.date)
+        return True
+
     # Replay transactions: simulate portfolio state at each transaction date
     sim_positions: dict[str, tuple[float, float]] = {}  # ticker -> (shares, avg_cost)
     cash = cfg.capital_sek
@@ -789,15 +1029,18 @@ def backfill_nav():
     # Record starting NAV one day before first transaction (all cash)
     from datetime import timedelta
     start_date = (txns[0].timestamp - timedelta(days=1)).strftime("%Y-%m-%d")
-    store.upsert_nav(NavPoint(
+    inserted = int(fill(NavPoint(
         date=start_date,
         portfolio_nav_sek=cfg.capital_sek,
         benchmark_value=nearest_bench(start_date),
         cash_sek=cfg.capital_sek,
-    ))
-
-    inserted = 1
+    )))
+    # Deposits and withdrawals move the replayed cash on their own dates, or
+    # every point after a top-up would be short of the money that arrived.
+    pending_flows = list(store.get_cash_flows())
     for txn in txns:
+        while pending_flows and pending_flows[0]["date"] <= txn.timestamp.strftime("%Y-%m-%d"):
+            cash += pending_flows.pop(0)["amount_sek"]
         if txn.side == "buy":
             existing_shares, existing_cost = sim_positions.get(txn.ticker, (0.0, 0.0))
             new_shares = existing_shares + txn.shares
@@ -815,15 +1058,15 @@ def backfill_nav():
 
         date_str = txn.timestamp.strftime("%Y-%m-%d")
         nav_cost = sum(s * c for s, c in sim_positions.values()) + cash
-        store.upsert_nav(NavPoint(
+        inserted += fill(NavPoint(
             date=date_str,
             portfolio_nav_sek=nav_cost,
             benchmark_value=nearest_bench(date_str),
             cash_sek=cash,
         ))
-        inserted += 1
 
-    click.echo(f"✓ Backfilled {inserted} NAV points from {txns[0].timestamp.date()} to {txns[-1].timestamp.date()}")
+    click.echo(f"✓ Backfilled {inserted} missing NAV point(s) from {txns[0].timestamp.date()} "
+               f"to {txns[-1].timestamp.date()}; existing points were left as marked")
     click.echo("  (NAV uses cost-basis, not live prices — next 'fund run' will update today's point with live prices)")
 
 
@@ -894,6 +1137,114 @@ def report(html: bool):
         click.echo(f"\n  HTML report saved to: {out}")
 
 
+def _mark_nav(cfg, store, quiet: bool = False) -> float | None:
+    """Value the book at live prices and record today's NAV point.
+
+    No model calls and no trades — this is how a paused fund's dashboard stays
+    current. Writes nothing when a holding has no price: a NAV with a hole in it
+    reads as a loss, and filling the hole with cost basis would invent a value.
+    """
+    from fundmgr.data.fx import rate_to_sek
+    from fundmgr.data.quotes import live_prices
+
+    positions = store.get_positions()
+    prices = live_prices([p.ticker for p in positions]) if positions else {}
+    missing = [p.ticker for p in positions if not prices.get(p.ticker)]
+    if missing:
+        click.echo(f"  ⚠ NAV not marked — no price for {', '.join(missing)}.")
+        return None
+
+    cur_by_ticker = {t.yahoo_ticker: t.currency
+                     for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
+    fx_cache: dict[str, float] = {}
+    for p in positions:
+        price = prices[p.ticker]
+        cur = cur_by_ticker.get(p.ticker, "SEK")
+        if cfg.fx_to_sek and cur != "SEK":
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                click.echo(f"  ⚠ NAV not marked — no {cur}/SEK rate for {p.ticker}.")
+                return None
+            fx_cache[cur] = rate
+            price *= rate
+        p.current_price_sek = price
+    cash = store.get_cash()
+    nav = PortfolioSnapshot(positions=positions, cash_sek=cash).nav_sek
+
+    fetch_and_cache_benchmark(store, cfg.benchmark, cfg.data.lookback_days)
+    bench_rows = store.get_benchmark()
+    store.upsert_nav(NavPoint(
+        date=datetime.utcnow().strftime("%Y-%m-%d"),
+        portfolio_nav_sek=nav,
+        benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
+        cash_sek=cash,
+    ))
+    if not quiet:
+        click.echo(f"  NAV marked: {nav:,.0f} ({len(positions)} positions, cash {cash:,.0f}).")
+    return nav
+
+
+def _mark_after_ledger_change(cfg, store, trade_date: str) -> None:
+    """Re-value today's NAV point after a fill or reconcile, at live prices.
+
+    This used to write cost basis — shares × average cost + cash — and fills are
+    recorded the same Monday the weekly run marks the book, so it overwrote the
+    marked point almost every week. The real fund's history ended up counting a
+    gain only once it was sold: +6.8% on record against ~+10% held.
+
+    A back-dated fill writes nothing, since today's prices would misstate that
+    day. Advisory throughout: the fill is already booked, so a failed valuation
+    leaves the existing point as it is rather than failing the command.
+    """
+    if trade_date != datetime.utcnow().strftime("%Y-%m-%d"):
+        click.echo(f"  NAV history left as it is — {trade_date} is not today.")
+        return
+    try:
+        nav = _mark_nav(cfg, store)
+    except Exception as exc:
+        nav = None
+        click.echo(f"  ⚠ NAV not marked: {exc}")
+    if nav is None:
+        click.echo("  Today's NAV point left unchanged; the next run or fill will mark it.")
+
+
+@cli.command("mark")
+def mark():
+    """Record today's NAV at live prices. No model calls, no trades."""
+    cfg, store = _get_store()
+    if _mark_nav(cfg, store) is None:
+        sys.exit(1)
+
+
+# A stop review that answered HOLD changes nothing, so the same breach was
+# reviewed again every trading day — five heavy calls, a new review row and a
+# new scored outcome each time — until the price recovered. A HOLD (or ADD)
+# stands until the price falls this much further, a week passes, or the
+# holding changes; the stop alert itself still fires as before.
+STOP_REREVIEW_DROP_PCT = 5.0
+STOP_REREVIEW_DAYS = 7
+
+
+def _stop_hold_standing(store, ticker: str, live: float, shares: float | None,
+                        today: str) -> str | None:
+    """The date of a still-standing HOLD on this stop breach, or None to review."""
+    raw = store.get_meta(f"stop_review_hold:{ticker}")
+    if not raw:
+        return None
+    try:
+        held = json.loads(raw)
+        age = (datetime.strptime(today, "%Y-%m-%d")
+               - datetime.strptime(held["date"], "%Y-%m-%d")).days
+        price = float(held["price"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if age >= STOP_REREVIEW_DAYS or held.get("shares") != shares:
+        return None
+    if not price > 0 or live <= price * (1 - STOP_REREVIEW_DROP_PCT / 100):
+        return None
+    return held["date"]
+
+
 @cli.command("check-stops")
 @click.option("--quiet", is_flag=True, help="Suppress output unless a stop or warning fires")
 def check_stops(quiet: bool):
@@ -902,13 +1253,29 @@ def check_stops(quiet: bool):
     import urllib.request as _req
     import yfinance as yf
 
+    cfg, store = _get_store()
+    if cfg.paused:
+        # Frozen, not forgotten: no stop sells, no alerts, but the book is still
+        # valued so its dashboard keeps showing how the holdings it froze with
+        # are doing. This is the job cron already fires for every sim.
+        _mark_nav(cfg, store, quiet)
+        return
+
     # Markets are closed on weekends — nothing to check
     if datetime.utcnow().weekday() >= 5:
         if not quiet:
             click.echo("Weekend — markets closed, skipping stop-loss check.")
         return
 
-    cfg, store = _get_store()
+    # A stop review (five heavy calls) can outlast the 15-minute cron cycle,
+    # and its once-a-day marker is written only when it returns: the next cycle
+    # started a second review of the same breach. One check at a time per fund.
+    stops_lock = _run_lock(cfg, "stops")
+    if stops_lock is None:
+        if not quiet:
+            click.echo("Previous stop check still running — skipping this cycle.")
+        return
+
     positions = store.get_positions()
     if not positions:
         if not quiet:
@@ -919,14 +1286,18 @@ def check_stops(quiet: bool):
 
     # Native→SEK for comparing live prices against the SEK cost basis.
     from fundmgr.data.fx import rate_to_sek
-    cur_by_ticker = {t.yahoo_ticker: t.currency for t in get_enabled_tickers(cfg.universe_path)}
+    cur_by_ticker = {t.yahoo_ticker: t.currency
+                     for t in holding_rows(cfg.universe_path, {p.ticker for p in positions})}
     fx_cache: dict[str, float] = {}
 
-    def _to_sek(price: float, ticker: str) -> float:
+    def _to_sek(price: float, ticker: str) -> float | None:
+        """None without a rate: a EUR close read as SEK is a −90% stop hit."""
         cur = cur_by_ticker.get(ticker, "SEK")
         if not cfg.fx_to_sek or cur == "SEK":
             return price
-        rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+        rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+        if not rate:
+            return None
         fx_cache[cur] = rate
         return price * rate
 
@@ -938,6 +1309,7 @@ def check_stops(quiet: bool):
     stops_hit: list[tuple] = []
     profits_hit: list[tuple] = []
     warnings: list[tuple] = []
+    live_by_ticker: dict[str, float] = {}
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
     today_date = datetime.utcnow().date()
@@ -948,13 +1320,22 @@ def check_stops(quiet: bool):
         except Exception:
             hist = None
 
-        if hist is None or hist.empty:
+        closes = None if hist is None or hist.empty else hist["Close"].dropna()
+        # A NaN last close made every comparison False and printed "✓ ok" with
+        # the stop unchecked; the last finite close is the price, or none is.
+        if closes is None or closes.empty or not float(closes.iloc[-1]) > 0:
             if not quiet:
                 click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}")
             continue
 
-        live_native = float(hist["Close"].iloc[-1])
+        live_native = float(closes.iloc[-1])
         live_price = _to_sek(live_native, p.ticker)  # SEK, for cost-basis comparison & display
+        if live_price is None:
+            if not quiet:
+                click.echo(f"  {p.ticker:<16} {p.avg_cost_sek:>9.2f} {'n/a':>8}  "
+                           f"no {cur_by_ticker.get(p.ticker)}/SEK rate")
+            continue
+        live_by_ticker[p.ticker] = live_price
 
         # % change since entry — the metric stop/take-profit levels are measured against.
         chg = (live_price / p.avg_cost_sek - 1) * 100 if p.avg_cost_sek else 0.0
@@ -963,11 +1344,12 @@ def check_stops(quiet: bool):
         # at market open yfinance still shows yesterday's close as last_price,
         # which would make the "daily" change show yesterday's move instead
         daily_chg = None
-        if len(hist) >= 2:
-            last_bar_date = hist.index[-1].date()
+        if len(closes) >= 2:
+            last_bar_date = closes.index[-1].date()
             if last_bar_date == today_date:
-                prev_day_close = float(hist["Close"].iloc[-2])
-                daily_chg = (live_native / prev_day_close - 1) * 100  # native ratio
+                prev_day_close = float(closes.iloc[-2])
+                if prev_day_close > 0:
+                    daily_chg = (live_native / prev_day_close - 1) * 100  # native ratio
         levels = stop_map.get(p.ticker, {})
         stop_pct = levels.get("stop_pct")
         tp_pct = levels.get("take_profit_pct")
@@ -1066,9 +1448,16 @@ def check_stops(quiet: bool):
     review_snippets: list[str] = []
     if stops_hit and not cfg.auto_fill:
         from fundmgr.engine.stop_review import review_position, format_review_html
+        shares_now = {p.ticker: p.shares for p in store.get_positions()}
         for ticker, _chg, _stop, live in stops_hit:
             meta_key = f"stop_review:{ticker}:{today}"
             if store.get_meta(meta_key):
+                continue
+            held_at = _stop_hold_standing(store, ticker, live, shares_now.get(ticker), today)
+            if held_at:
+                if not quiet:
+                    click.echo(f"  {ticker}: last stop review held at {held_at} — not re-reviewed "
+                               f"until {STOP_REREVIEW_DROP_PCT:.0f}% lower or a week on")
                 continue
             try:
                 result = review_position(ticker, store, cfg, live_price=live)
@@ -1079,6 +1468,12 @@ def check_stops(quiet: bool):
                 continue
             consensus, votes = result
             store.set_meta(meta_key, today)
+            hold_key = f"stop_review_hold:{ticker}"
+            if consensus.recommendation in ("hold", "add"):
+                store.set_meta(hold_key, json.dumps({"date": today, "price": live,
+                                                     "shares": shares_now.get(ticker)}))
+            else:
+                store.set_meta(hold_key, "")  # a trim/exit verdict: review afresh next breach
             review_snippets.append(format_review_html(consensus, votes, max(1, cfg.llm.n_samples)))
             click.echo(
                 f"  Stop review {ticker}: {consensus.recommendation.upper()} "
@@ -1128,7 +1523,34 @@ def check_stops(quiet: bool):
     alert_profits = alertable_hits(profits_hit, "target", auto_sold, store, today) if bot_token and chat_id else []
 
     if (alert_stops or alert_profits or warnings) and bot_token and chat_id:
-        lines = [f"<b>{cfg.display_name}</b>\n📉 Price Alert"]
+        # Advisory: a banner that fails to build must not cost the alert itself.
+        try:
+            from fundmgr.engine.review_common import action_banner_html
+            from fundmgr.web.views import review_row
+
+            # Every order still owed on a name this alert mentions — today's review
+            # or an earlier one nobody ticked off — leads the message.
+            alerted = {t for t, *_ in alert_stops + alert_profits + warnings}
+            held = {p.ticker: p for p in store.get_positions()}
+            owed = [
+                review_row(r, {
+                    "ticker": r["ticker"], "name": r["ticker"],
+                    "shares": held[r["ticker"]].shares,
+                    # live_by_ticker is SEK only when the fund converts; otherwise
+                    # the share count stands alone rather than mislabel a currency.
+                    "current_price": live_by_ticker.get(r["ticker"]) if cfg.fx_to_sek else None,
+                })
+                for r in store.get_open_reviews(tickers=list(held))
+                if r["ticker"] in alerted
+            ]
+            banner = action_banner_html(owed, today)
+        except Exception as e:
+            click.echo(f"  ⚠ could not list owed orders: {e}", err=True)
+            banner = ""
+        lines = [f"<b>{cfg.display_name}</b>"]
+        if banner:
+            lines += [banner, ""]
+        lines.append("📉 Price Alert")
         for ticker, chg, stop_pct, price in alert_stops:
             if ticker in auto_sold:
                 note = " — <b>AUTO-SOLD</b>"
@@ -1163,11 +1585,17 @@ def check_stops(quiet: bool):
             lines.append(snip)
         if (alert_stops or alert_profits) and not auto_sold and not review_snippets:
             lines.append("\nTrigger <code>/run</code> for updated recommendation.")
+        if not banner and not alert_stops and not alert_profits:
+            lines.append("\nℹ️ No action needed — for information only.")
         msg = "\n".join(lines)
+        payload = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+        # The owed orders in the banner, each as a pre-filled Montrose ticket.
+        buttons = _owed_ticket_buttons(cfg, store, [r["ticker"] for r in owed]) if banner else []
+        if buttons:
+            payload["reply_markup"] = json.dumps({"inline_keyboard": [
+                [{"text": label, "url": url} for label, url in row] for row in buttons]})
         try:
-            data = urllib.parse.urlencode({
-                "chat_id": chat_id, "text": msg, "parse_mode": "HTML",
-            }).encode()
+            data = urllib.parse.urlencode(payload).encode()
             _req.urlopen(
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 data, timeout=10,
@@ -1179,6 +1607,85 @@ def check_stops(quiet: bool):
             click.echo("  Telegram alert sent.")
         except Exception as e:
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
+
+
+def _owed_ticket_buttons(cfg, store, tickers) -> list:
+    """Montrose ticket buttons for the review orders still owed on `tickers`.
+
+    Tickets first came only with the Monday run, so the stop review that said
+    "TRIM IVSO — sell 15 shares" left the order to be typed into the app by
+    hand. A trim or exit has a size and gets a ticket for exactly it; an add has
+    none and gets none. One ticket per review, reused on every later alert that
+    repeats the same owed order. Advisory: a failure costs the button only.
+    """
+    if not (cfg.montrose.tickets and cfg.montrose.account_name):
+        return []
+    try:
+        from fundmgr.broker import tickets as tk
+        from fundmgr.engine.review_common import needs_trade
+        from fundmgr.web.views import _shares_to_trade
+
+        held = {p.ticker: p.shares for p in store.get_positions()}
+        wanted = set(tickers)
+        buttons, fresh = [], []
+        for r in store.get_open_reviews(tickers=list(held)):
+            if r["ticker"] not in wanted or not needs_trade(r["verdict"]) or r["verdict"] == "add":
+                continue
+            wanted.discard(r["ticker"])          # newest open review per name only
+            size = _shares_to_trade(r["verdict"], held[r["ticker"]], r.get("trim_pct"))
+            shares = min(int(round(size or 0)), math.floor(held[r["ticker"]]))
+            if shares <= 0:
+                continue
+            line = tk.TicketLine(ticker=r["ticker"], side="sell", shares=shares,
+                                 kind=r["verdict"].upper())
+            cached = store.get_meta(f"review_ticket:{r['review_id']}:{shares}")
+            if cached:
+                buttons.append([(line.label(), cached)])
+            else:
+                fresh.append((r["review_id"], line))
+        if fresh:
+            lines = [ln for _, ln in fresh]
+            tk.create_tickets(_montrose_account(cfg), lines, _ticket_symbols(cfg, store))
+            for (review_id, ln) in fresh:
+                if ln.url:
+                    store.set_meta(f"review_ticket:{review_id}:{ln.shares}", ln.url)
+                    buttons.append([(ln.label(), ln.url)])
+                else:
+                    click.echo(f"  ⚠ no Montrose ticket for {ln.label()}: {ln.problem}", err=True)
+        return buttons
+    except Exception as exc:
+        click.echo(f"  ⚠ Montrose ticket not made: {exc}", err=True)
+        return []
+
+
+def _send_review_tickets(cfg, store, tickers) -> None:
+    """Tickets for a review's order as their own message — the bot relays the
+    review's stdout as text, which cannot carry a button."""
+    from fundmgr.notify.send import send_telegram
+
+    buttons = _owed_ticket_buttons(cfg, store, tickers)
+    if buttons:
+        send_telegram("🎫 <b>Montrose ticket</b> for the review above — set the limit and "
+                      "approve it in the app; nothing is placed until you do.", buttons=buttons)
+
+
+def _resolve_held(ticker: str, held: list[str]) -> str:
+    """A held ticker from what was typed, or exit with the reason.
+
+    Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
+    """
+    q = ticker.upper()
+    matches = [h for h in held if h == q] or \
+              [h for h in held if h.split(".")[0] == q] or \
+              [h for h in held if h.startswith(q + ".")]
+    matches = sorted(set(matches))
+    if not matches:
+        click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
+        sys.exit(1)
+    if len(matches) > 1:
+        click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
+        sys.exit(1)
+    return matches[0]
 
 
 @cli.command("review-stop")
@@ -1199,24 +1706,14 @@ def review_stop(ticker: str | None, notify: bool):
     from fundmgr.notify.send import send_telegram
 
     cfg, store = _get_store()
+    if _paused(cfg, "position review"):
+        return
     n = max(1, cfg.llm.n_samples)
     held = [p.ticker for p in store.get_positions()]
 
     # Decide which tickers to review.
     if ticker:
-        q = ticker.upper()
-        # Exact, then suffix-insensitive (EVO → EVO.ST), then prefix.
-        matches = [h for h in held if h == q] or \
-                  [h for h in held if h.split(".")[0] == q] or \
-                  [h for h in held if h.startswith(q + ".")]
-        matches = sorted(set(matches))
-        if not matches:
-            click.echo(f"{q} is not a current holding. Held: {', '.join(held) or '(none)'}", err=True)
-            sys.exit(1)
-        if len(matches) > 1:
-            click.echo(f"{q} is ambiguous — matches {', '.join(matches)}. Use the full ticker.", err=True)
-            sys.exit(1)
-        targets = [{"ticker": matches[0], "live": None}]
+        targets = [{"ticker": _resolve_held(ticker, held), "live": None}]
     else:
         click.echo("Scanning holdings for stop-loss breaches…")
         scan = find_stop_breaches(store, cfg)
@@ -1244,7 +1741,7 @@ def review_stop(ticker: str | None, notify: bool):
         click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
         try:
             result = review_position(tk, store, cfg, live_price=t.get("live"))
-        except LLMError as e:
+        except (LLMError, ValueError) as e:
             click.echo(f"  Review failed for {tk}: {e}", err=True)
             continue
         if result is None:
@@ -1258,6 +1755,8 @@ def review_stop(ticker: str | None, notify: bool):
         body = "<b>📉 Stop Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+    if html_blocks:
+        _send_review_tickets(cfg, store, [t["ticker"] for t in targets])
 
 
 @cli.command("review-target")
@@ -1281,6 +1780,8 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
     from fundmgr.notify.send import send_telegram
 
     cfg, store = _get_store()
+    if _paused(cfg, "position review"):
+        return
     n = max(1, cfg.llm.n_samples)
     held = [p.ticker for p in store.get_positions()]
 
@@ -1315,7 +1816,7 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
         click.echo(f"\nReviewing {tk} ({n}-sample consensus)…")
         try:
             result = review_target(tk, store, cfg, live_price=t.get("live"))
-        except LLMError as e:
+        except (LLMError, ValueError) as e:
             click.echo(f"  Review failed for {tk}: {e}", err=True)
             continue
         if result is None:
@@ -1329,6 +1830,8 @@ def review_target_cmd(ticker: str | None, notify: bool, apply: bool):
         body = "<b>🎯 Take-Profit Review (manual)</b>\n\n" + "\n\n".join(html_blocks)
         if send_telegram(body):
             click.echo("\n  (sent to Telegram)")
+    if html_blocks:
+        _send_review_tickets(cfg, store, [t["ticker"] for t in targets])
 
 
 @cli.command("decisions")
@@ -1399,6 +1902,175 @@ def decisions(show_all: bool, done_ticker: str | None, dismiss_ticker: str | Non
         click.echo("\n  Tick one off with: fund decisions --done TICKER\n")
 
 
+@cli.command("report-check")
+@click.argument("ticker", required=False)
+@click.option("--dry-run", is_flag=True, help="List the reports that would be read; call nothing.")
+@click.option("--notify/--no-notify", default=True, show_default=True,
+              help="Send the result to Telegram. Disable when a relay (e.g. the bot) already forwards stdout.")
+def report_check_cmd(ticker: str | None, dry_run: bool, notify: bool):
+    """Read held companies' new quarterly reports against their thesis (advisory).
+
+    With no argument: every holding that reported in the last few days and has
+    not been checked. With a TICKER: re-read that holding's latest report.
+    """
+    from fundmgr.engine import report_check as rc
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if _paused(cfg, "report check"):
+        return
+    held = [p.ticker for p in store.get_positions()]
+    only = _resolve_held(ticker, held) if ticker else None
+    click.echo(f"[report-check] {only or f'{len(held)} holdings'}"
+               f"{' (dry run)' if dry_run else ''}…")
+    out = rc.run_check(store, cfg, only=only, dry_run=dry_run, echo=click.echo)
+    for result in out["reviewed"]:
+        click.echo("\n" + rc.format_text(result))
+    if not dry_run and not any(out.values()):
+        click.echo("  No new reports on held positions.")
+    body = rc.format_html(out)
+    if notify and body and send_telegram(body):
+        click.echo("\n  (sent to Telegram)")
+    if out["reviewed"]:
+        _send_review_tickets(cfg, store, [r["review"].ticker for r in out["reviewed"]])
+
+
+@cli.command("report-study")
+@click.option("--years", default=2, show_default=True, type=click.IntRange(1, 5),
+              help="How far back to look for reports.")
+@click.option("--limit", default=None, type=click.IntRange(min=1),
+              help="A random sample of N names — a quick look before the full sweep.")
+def report_study(years: int, limit: int | None):
+    """Free: what did past report-day reactions go on to do? No model calls.
+
+    Answers the question the report-reaction experiment rests on — in this
+    universe, do report-day drops tend to reverse or keep falling — from price
+    history alone. Slow on the full universe: one Yahoo lookup per name.
+    """
+    import random
+
+    from fundmgr.engine.report_events import CalendarUnavailable, format_study, run_study
+    cfg, store = _get_store()
+    tickers = get_enabled_tickers(cfg.universe_path)
+    if limit and limit < len(tickers):
+        # Seeded, so a rerun looks at the same names. The first N rows were all
+        # Danish small caps and funds, which said nothing about the universe.
+        tickers = random.Random(0).sample(tickers, limit)
+    try:
+        result = run_study(store, cfg, tickers, years=years, echo=click.echo)
+    except CalendarUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(format_study(result))
+
+
+@cli.command("volume-study")
+@click.option("--ratio", default=2.5, show_default=True, type=click.FloatRange(1.0),
+              help="A day counts as heavy at this multiple of its 20-day average volume.")
+def volume_study_cmd(ratio: float):
+    """Free: what did heavy-volume days go on to do, up days vs down days?
+
+    Reads the price cache the weekly run keeps; no model calls, no price
+    fetches. The screener rewards heavy volume whichever way the price went —
+    this says whether it should.
+    """
+    from fundmgr.engine.volume_study import format_study, run_study
+    cfg, store = _get_store()
+    result = run_study(store, cfg, get_enabled_tickers(cfg.universe_path), ratio=ratio,
+                       echo=click.echo)
+    click.echo(format_study(result))
+
+
+@cli.command("insider-study")
+@click.option("--years", default=1, show_default=True, type=click.IntRange(1, 5),
+              help="How far back to read FI's insider register.")
+def insider_study_cmd(years: int):
+    """Free: did insider buys and sells in this universe precede outperformance?
+
+    Reads FI's insider register (Swedish issuers) two weeks at a time and the
+    named stocks' price history. No model calls. Slow-ish: one FI request per
+    fortnight and a price fetch for every name with an event.
+    """
+    import httpx
+
+    from fundmgr.data.insiders import InsiderDataError
+    from fundmgr.engine.insider_study import format_study, run_study
+    from fundmgr.config import load_universe
+    cfg, store = _get_store()
+    try:
+        result = run_study(store, cfg, load_universe(cfg.universe_path), years=years,
+                           echo=click.echo)
+    except (InsiderDataError, httpx.HTTPError) as exc:
+        raise click.ClickException(f"FI's insider register could not be read: {exc}") from exc
+    click.echo(format_study(result))
+
+
+@cli.command("report-watch")
+@click.option("--dry-run", is_flag=True,
+              help="Detect and show what would be judged. No model calls, nothing written.")
+def report_watch(dry_run: bool):
+    """Log yesterday's report reactions and judge the biggest drops (capped).
+
+    An experiment: verdicts are scored at +5/+20/+28 trading days and compared
+    in `fund report-results`. Nothing trades and nothing reaches the weekly
+    prompt. Overreaction calls go to Telegram as a daily digest.
+    """
+    from fundmgr.engine.report_events import digest_html, run_watch
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if _paused(cfg, "report watch"):
+        return
+    if not cfg.report_watch.enabled:
+        click.echo("report_watch is not enabled in this fund's config — nothing to do.")
+        return
+    tickers = get_enabled_tickers(cfg.universe_path)
+    judged = run_watch(store, cfg, tickers, dry_run=dry_run, echo=click.echo)
+    if dry_run:
+        return
+    msg = digest_html(cfg.display_name, judged)
+    if msg and send_telegram(msg):
+        click.echo("  Digest sent to Telegram.")
+
+
+@cli.command("earnings-watch")
+@click.option("--dry-run", is_flag=True, help="Say which heads-ups would go out; send nothing.")
+@click.option("--list", "list_", is_flag=True, help="Show the reports a heads-up was sent for.")
+def earnings_watch_cmd(dry_run: bool, list_: bool):
+    """Heads-up the evening before a holding reports, with the thesis it is held on.
+
+    \b
+    Weekdays 18:30 (cron); Friday covers a Monday report. The report itself is
+    read by `fund report-check` (08:45 and 18:30). No model calls.
+    """
+    from fundmgr.config import load_universe
+    from fundmgr.engine import earnings_watch as ew
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    if list_:
+        for r in store.get_earnings_checks():
+            click.echo(f"  {r['report_date']}  {r['ticker']:<12} heads-up "
+                       f"{(r['heads_up_at'] or 'not sent')[:16]}")
+        return
+    if _paused(cfg, "earnings watch"):
+        return
+    if not cfg.earnings_watch.enabled:
+        click.echo("earnings_watch is not enabled in this fund's config — nothing to do.")
+        return
+    names = {u.yahoo_ticker: u.name for u in load_universe(cfg.universe_path)}
+    sent = ew.run(store, cfg, send=send_telegram, names=names, dry_run=dry_run, echo=click.echo)
+    if not sent:
+        click.echo("  No holding reports on the next weekday.")
+
+
+@cli.command("report-results")
+def report_results():
+    """How the report-reaction verdicts have done so far. Free."""
+    from fundmgr.engine.report_events import format_results
+    cfg, store = _get_store()
+    click.echo(format_results(store.get_report_events(), cfg.report_watch.judge_threshold_pct))
+
+
 @cli.command("check-news")
 @click.option("--auto-run/--no-auto-run", default=True, show_default=True,
               help="Automatically trigger 'fund run' when a high-severity event fires")
@@ -1412,6 +2084,10 @@ def check_news(auto_run: bool, max_age_hours: int):
     import urllib.request
 
     cfg, store = _get_store()
+    # A paused fund has no run for a headline to trigger, and scoring the news
+    # with FinBERT for nobody is just CPU on the Pi.
+    if _paused(cfg, "news check"):
+        return
     if not cfg.data.news_feeds:
         click.echo("No news feeds configured — set data.news_feeds in config.yaml")
         return
@@ -1439,13 +2115,17 @@ def check_news(auto_run: bool, max_age_hours: int):
 
     # ── Print and notify ──────────────────────────────────────────────────────
     held_triggers = [t for t in triggers if t["is_held"]]
-    watch_triggers = [t for t in triggers if not t["is_held"]]
 
     click.echo(f"\n  {len(triggers)} trigger(s) found:")
     for t in triggers:
         flag = "🔴 HELD" if t["is_held"] else "🟡 WATCH"
         click.echo(f"  {flag} {t['ticker']}  [{t['sentiment_label'].upper()} {t['sentiment_score']:.2f}]")
         click.echo(f"       {t['headline'][:100]}")
+
+    last_run = store.last_run_at()
+    hours_since = ((datetime.utcnow() - last_run).total_seconds() / 3600
+                   if last_run else None)
+    recently_run = hours_since is not None and hours_since < AUTO_RUN_MIN_GAP_HOURS
 
     # Send Telegram notification — held positions only
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -1456,7 +2136,9 @@ def check_news(auto_run: bool, max_age_hours: int):
             label = t["sentiment_label"].upper()
             lines.append(f"🔴 <b>{t['ticker']}</b> [{label} {t['sentiment_score']:.2f}]")
             lines.append(f"  {t['headline'][:120]}")
-        if auto_run:
+        if auto_run and recently_run:
+            lines.append(f"\nNo early run: the last one was {hours_since:.0f}h ago.")
+        elif auto_run:
             lines.append("\n▶ Triggering early decision run…")
         msg = "\n".join(lines)
         try:
@@ -1474,7 +2156,10 @@ def check_news(auto_run: bool, max_age_hours: int):
             click.echo(f"  ⚠ Telegram send failed: {e}", err=True)
 
     # ── Trigger early run if a held position is affected ─────────────────────
-    if auto_run and held_triggers:
+    if auto_run and held_triggers and recently_run:
+        click.echo(f"\n  Held position affected, but a run was saved {hours_since:.0f}h ago — "
+                   f"no early run within {AUTO_RUN_MIN_GAP_HOURS}h of the last one.")
+    elif auto_run and held_triggers:
         click.echo("\n  Held position affected — triggering early 'fund run'…")
         tickers_affected = ", ".join(t["ticker"] for t in held_triggers)
         click.echo(f"  Affected: {tickers_affected}")
@@ -1621,21 +2306,7 @@ def reconcile(holdings_path: str | None, cash_actual: float | None,
         store.set_cash(actual_cash)
         click.echo(f"  ✓ Cash set to {actual_cash:,.2f} SEK")
 
-    # Record a cost-basis NAV snapshot so the chart reflects the reconciled book.
-    try:
-        bench_rows = store.get_benchmark()
-        bench_val = bench_rows[-1]["close"] if bench_rows else 0.0
-        positions_after = store.get_positions()
-        cash_after = store.get_cash()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + cash_after
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_val,
-            cash_sek=cash_after,
-        ))
-    except Exception:
-        pass
+    _mark_after_ledger_change(cfg, store, datetime.utcnow().strftime("%Y-%m-%d"))
     click.echo("\n  Reconciliation applied.")
 
 
@@ -1730,6 +2401,8 @@ def optimize(min_outcomes, dry_run, max_calls, max_total_tokens, max_output_toke
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     from fundmgr.engine.optimizer_batch import BatchPending
     cfg, store = _get_store()
+    if _paused(cfg, "prompt search"):
+        return
     for key, value in (("max_calls", max_calls), ("max_total_tokens", max_total_tokens),
                        ("max_output_tokens", max_output_tokens)):
         if value is not None:
@@ -2010,6 +2683,9 @@ def consolidate_learnings_cmd(dry_run: bool, all_books: bool):
     click.echo("\n─── Consolidate active qualitative learnings ───────────────")
     total = 0
     for label, cfg, store in books:
+        if getattr(cfg, "paused", False):
+            click.echo(f"\n  {label}: paused — skipped.")
+            continue
         proposals = consolidate_qualitative_learnings(store, cfg, apply=not dry_run)
         if not proposals:
             if all_books:
@@ -2282,7 +2958,7 @@ def paper_watch(slug: str | None):
         return
     quiet = True
     for s in slugs:
-        for line in check_kill_rules(s) + check_horizons(s):
+        for line in check_kill_rules(s, live=True) + check_horizons(s):
             click.echo(f"  {line}")
             quiet = False
     if quiet:
@@ -2473,6 +3149,144 @@ def paper_adds(slug):
         click.echo("No add plans yet — set one with 'fund paper-add-plan'.")
 
 
+@cli.command("account-list")
+def account_list():
+    """List the broker accounts (/accounts) and when each was last synced."""
+    from fundmgr import accounts
+    from fundmgr.paper import open_portfolio
+    metas = accounts.list_accounts()
+    if not metas:
+        click.echo("No broker accounts yet — add one on the web at /accounts, or "
+                   "'fund account-create NAME snapshot.json'.")
+        return
+    for meta in metas:
+        _, store = open_portfolio(meta["slug"])
+        synced = (store.get_meta(accounts.LAST_SYNC_KEY) or "never")[:16]
+        click.echo(f"  {meta['slug']:<24} {meta['name']:<28} "
+                   f"{len(store.get_positions()):>3} holdings  last sync {synced}")
+
+
+@cli.command("account-montrose")
+def account_montrose():
+    """List your Montrose accounts and which ones are mirrored here."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    try:
+        rows = accounts.montrose_accounts()
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(f"{e} (log in with 'fund montrose-login' or /montrose_login)") from e
+    for r in rows:
+        value = f"{r['value_sek']:>12,.0f} SEK" if r["value_sek"] else f"{'':>16}"
+        what = ("the Nordic fund (/)" if r["is_fund"]
+                else f"mirrored as {r['linked_slug']}" if r["linked_slug"] else "not mirrored")
+        click.echo(f"  {r['name']:<28} {str(r['type'] or ''):<6} "
+                   f"{r['positions'] if r['positions'] is not None else '?':>3} holdings {value}  {what}")
+
+
+@cli.command("account-create")
+@click.argument("name")
+@click.argument("snapshot_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--montrose", "montrose_account", default=None,
+              help="Read the holdings from this Montrose account and keep it linked "
+                   "(NAME is then the name shown here; pass '' to use Montrose's).")
+@click.option("--benchmark", default=None,
+              help="Yahoo symbol to compare against (default: ^OMX for a mostly-Swedish "
+                   "account, URTH otherwise).")
+@click.option("--no-plans", is_flag=True, help="Don't write monitoring plans yet.")
+def account_create(name: str, snapshot_file: str | None, montrose_account: str | None,
+                   benchmark: str | None, no_plans: bool):
+    """Create a broker account mirror, booked at the broker's cost basis — from
+    Montrose (--montrose ACCOUNT) or a holdings snapshot file — then write a
+    monitoring plan for every holding."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    try:
+        if montrose_account:
+            slug, log = accounts.create_from_montrose(montrose_account, name=name or None,
+                                                      benchmark=benchmark)
+        elif snapshot_file:
+            slug, log = accounts.create_account(name, Path(snapshot_file).read_text(),
+                                                benchmark=benchmark or accounts.paper.DEFAULT_BENCHMARK)
+        else:
+            raise click.ClickException("Give a snapshot file or --montrose ACCOUNT.")
+    except (ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(str(e)) from e
+    for line in log:
+        click.echo(f"  {line}")
+    if not no_plans:
+        _account_write_plans(slug, None, overwrite=False)
+
+
+@cli.command("account-sync")
+@click.argument("slug", required=False)
+@click.argument("snapshot_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--all", "sync_all", is_flag=True, help="Every Montrose-linked account (cron form).")
+@click.option("--dry-run", is_flag=True, help="Show what changed without writing anything.")
+@click.option("--no-plans", is_flag=True, help="Don't write plans for newly opened names.")
+@click.option("--quiet", is_flag=True, help="Don't send the Telegram summary.")
+@click.option("--allow-empty", is_flag=True,
+              help="Accept a snapshot with no holdings (closes every position).")
+def account_sync(slug: str | None, snapshot_file: str | None, sync_all: bool, dry_run: bool,
+                 no_plans: bool, quiet: bool, allow_empty: bool):
+    """Bring an account in line with its broker: whatever changed since the last
+    sync is booked as your trade, new names get a monitoring plan, and the
+    summary goes to Telegram. Reads the linked Montrose account unless a
+    snapshot file is given."""
+    from fundmgr import accounts
+    from fundmgr.broker import montrose
+    if sync_all:
+        for line in accounts.sync_all(notify=not quiet):
+            click.echo(f"  {line}")
+        return
+    if not slug:
+        raise click.ClickException("Give an account slug, or --all.")
+    try:
+        snapshot = Path(snapshot_file).read_text() if snapshot_file else None
+        result = accounts.sync_account(slug, snapshot,
+                                       notify=not quiet and not dry_run,
+                                       write_plans=not no_plans, dry_run=dry_run,
+                                       allow_empty=allow_empty)
+    except (KeyError, ValueError, montrose.MontroseError, montrose.httpx.HTTPError) as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(html.unescape(_strip_tags(result["message"])))
+
+
+def _strip_tags(text: str) -> str:
+    import re
+    return re.sub(r"</?[a-z]+>", "", text)
+
+
+def _account_write_plans(slug: str, tickers: list[str] | None, overwrite: bool) -> None:
+    from fundmgr.engine import account_plan
+    from fundmgr.engine.client import LLMError
+    try:
+        plans = account_plan.write_plans(slug, tickers, overwrite=overwrite)
+    except LLMError as e:
+        raise click.ClickException(f"Plan call failed: {e}") from e
+    for p in plans:
+        written = ", ".join(p["written"]) or "nothing new (already planned)"
+        click.echo(f"  {p['ticker']:<12} {p['stance']:<5} {p['stance_reason']}")
+        click.echo(f"  {'':<12} wrote: {written}")
+
+
+@cli.command("account-plan")
+@click.argument("slug", required=False)
+@click.option("--ticker", "tickers", multiple=True, help="Only these holdings (repeatable).")
+@click.option("--overwrite", is_flag=True,
+              help="Replace existing criteria, targets and lines, including hand edits.")
+def account_plan_cmd(slug: str | None, tickers: tuple[str, ...], overwrite: bool):
+    """Write monitoring plans and refresh the hold/add/trim/exit view for an
+    account (all accounts when SLUG is omitted — the weekly cron form).
+
+    Only empty fields are filled unless --overwrite. Results go to Telegram."""
+    if slug:
+        _account_write_plans(slug, [t.upper() for t in tickers] or None, overwrite)
+        return
+    from fundmgr.engine.account_plan import refresh_all
+    for line in refresh_all(overwrite=overwrite):
+        click.echo(f"  {line}")
+
+
 @cli.command("paper-list")
 def paper_list():
     """List the paper portfolios and their current state."""
@@ -2611,17 +3425,9 @@ def paper_fill(slug: str, ticker: str, shares: float, price: float, fee: float,
                f"{gross:,.0f} SEK (fee {fee:.2f} SEK)")
     click.echo(f"  Cash remaining: {store.get_cash():,.0f} SEK")
 
-    # Cost-basis NAV snapshot so the chart reflects the fill event
+    # Today's NAV at market prices, so the chart reflects the fill; never cost basis.
     try:
-        bench_rows = store.get_benchmark()
-        positions_after = store.get_positions()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in positions_after) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=ts.strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -2673,14 +3479,7 @@ def paper_retag(slug: str, old: str, new: str | None):
                    "price were set from the wrong instrument. Re-anchor after a "
                    "fresh look.")
     try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -2713,14 +3512,7 @@ def paper_setcost(slug: str, ticker: str, avg_sek: float):
                f"{res['new_avg']:,.2f} SEK/share ({res['shares']:g} sh). "
                f"Cash {res['cash_delta']:+,.0f} SEK.")
     try:
-        bench_rows = store.get_benchmark()
-        nav_cost = sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
-        store.upsert_nav(NavPoint(
-            date=datetime.utcnow().strftime("%Y-%m-%d"),
-            portfolio_nav_sek=nav_cost,
-            benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-            cash_sek=store.get_cash(),
-        ))
+        paper.mark_nav(store, paper.cached_prices_sek(store, meta["currency_map"]))
     except Exception:
         pass
 
@@ -2959,11 +3751,15 @@ def paper_scopes(config_name: str | None):
 @click.option("--min-cash", type=float, default=None,
               help="Minimum cash %, overriding the profile.")
 @click.option("--dry-run", is_flag=True, help="Decide but don't write into the sleeve.")
+@click.option("--ideas", "ideas_sek", type=float, default=None,
+              help="Ideas only: SEK of new money to place in names not already held. "
+                   "Nothing held is traded; ideas join the plan only once bought.")
 def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
                  country: str | None, provider: str | None, model_id: str | None,
                  samples: int, max_candidates: int | None, no_macro: bool,
                  no_refresh: bool, turnover: float | None, max_position: float | None,
-                 max_positions: int | None, min_cash: float | None, dry_run: bool):
+                 max_positions: int | None, min_cash: float | None, dry_run: bool,
+                 ideas_sek: float | None):
     """Re-decide a live sleeve against its CURRENT positions.
 
     Reviews every holding (hold / trim / exit) and proposes add-ons from the
@@ -3017,6 +3813,7 @@ def paper_review(slug: str | None, all_sleeves: bool, config_name: str | None,
                 refresh_prices=not no_refresh,
                 risk=risk or None,
                 dry_run=dry_run,
+                ideas_sek=ideas_sek,
             )
         except KeyError:
             click.echo(f"✗ No paper portfolio '{one}'. See 'fund paper-list'.", err=True)
@@ -3425,6 +4222,31 @@ def paper_edgar(slug, ticker, quarters, apply_):
                f"{tail}, {periods[0]} to {periods[-1]}.")
 
 
+@cli.command("shadow-variant")
+@click.argument("name")
+@click.option("--replace", is_flag=True,
+              help="Write it again (after a mandate or guidance change). Starts a new evidence group.")
+def shadow_variant(name: str, replace: bool):
+    """Create a variant candidate for the weekly shadow comparison, e.g. no_lessons.
+
+    no_lessons asks the incumbent prompt with its lessons removed, so the pair
+    measures whether the lessons help. Free: no model calls. List the variant
+    under shadow.variants in the fund's config for runs to use it.
+    """
+    from fundmgr.engine.forward import create_variant
+    cfg, _store = _get_store()
+    try:
+        path, written = create_variant(cfg, name.replace("-", "_"), replace=replace)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if written:
+        click.echo(f"✓ Variant written: {path}")
+    else:
+        click.echo(f"Variant already exists: {path} (use --replace to write it again)")
+    if name.replace("-", "_") not in cfg.shadow.variants:
+        click.echo("  Note: it is not listed under shadow.variants in this fund's config yet.")
+
+
 @cli.command("compare-guidance")
 @click.option("--run-id", required=True, help="Saved weekly run with frozen evaluation context")
 @click.option("--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
@@ -3439,7 +4261,9 @@ def compare_guidance_cmd(run_id: str, candidate: Path, output: Path):
 
     if output.exists() or not output.parent.is_dir():
         raise click.ClickException("Output must be a new file in an existing directory")
-    _, store = _get_store()
+    cfg, store = _get_store()
+    if _paused(cfg, "guidance comparison"):
+        return
     rec = store.get_recommendation_by_run_id(run_id)
     if rec is None:
         raise click.ClickException(f"Unknown run: {run_id}")
@@ -3515,11 +4339,441 @@ def evaluate_guidance_cmd(roots, min_periods, output):
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     for group in report["groups"]:
-        click.echo(f"{group['identity']['fund_id']} {group['group'][:12]}: {group['status']} "
+        variant = group["identity"].get("variant")
+        label = (f"variant {variant} (candidate arm = {variant}; a positive advantage means "
+                 "the incumbent's addition cost return)" if variant else "guidance candidate")
+        click.echo(f"{group['identity']['fund_id']} {group['group'][:12]} [{label}]: {group['status']} "
                    f"({group['scored_selected_periods']}/{group['matured_selected_periods']} matured non-overlapping periods scored)")
     click.echo(f"Evidence report saved: {output}. Descriptive only; no promotion.")
     if report["counts"].get("invalid"):
         raise click.ClickException("Report includes invalid artifacts; inspect case errors")
+
+
+@cli.command("montrose-login")
+@click.option("--callback", "callback_url", default=None, metavar="URL",
+              help="Finish the login: the localhost:8765/callback URL the browser landed on.")
+def montrose_login_cmd(callback_url: str | None):
+    """Log in to Montrose MCP with BankID (same flow as /montrose_login in Telegram).
+
+    \b
+    1. fund montrose-login              → prints a link; open it, do BankID
+    2. the browser fails to load localhost:8765/callback — copy that address
+    3. fund montrose-login --callback 'http://localhost:8765/callback?code=…'
+    """
+    from fundmgr.broker import montrose
+
+    try:
+        if callback_url:
+            status = montrose.complete_login(callback_url)
+            click.echo("✓ Logged in to Montrose.")
+            click.echo(json.dumps(status, indent=2))
+        else:
+            click.echo("Open this link, log in with BankID, then run this command again with")
+            click.echo("--callback '<the address the browser ended up on>' within 10 minutes:\n")
+            click.echo(montrose.start_login())
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@cli.command("montrose-probe")
+def montrose_probe_cmd():
+    """Phase 0: call Montrose's read-only tools once and save the raw replies.
+
+    Writes nothing to the fund database. The raw dump (real holdings) is saved
+    0600 under data/montrose/; what is printed is keys and types only.
+    """
+    from fundmgr.broker import montrose
+
+    try:
+        path, summary = montrose.probe()
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Raw replies saved (private): {path}\n")
+    click.echo(json.dumps(summary, indent=2, ensure_ascii=False))
+
+
+def _montrose_account(cfg) -> str:
+    if not cfg.montrose.account_name:
+        raise click.ClickException(
+            f"{cfg.display_name} has no Montrose account (montrose.account_name in its config).")
+    return cfg.montrose.account_name
+
+
+@cli.command("montrose-refresh")
+@click.option("--since", default=None, metavar="YYYY-MM-DD",
+              help="Transactions from this date (default: montrose.lookback_days ago).")
+def montrose_refresh_cmd(since: str | None):
+    """Phase 1: read the fund's Montrose account and save a private snapshot.
+
+    Holdings, cash and transactions of the account named in montrose.account_name.
+    Writes nothing to the fund database.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+
+    cfg = load_config()
+    start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
+    try:
+        path, snap = rec.refresh(_montrose_account(cfg), start)
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Snapshot saved (private): {path}")
+    click.echo(f"{snap['account']['accountName'].strip()}: {len(snap['positions'])} positions, "
+               f"{len(snap['transactions'])} transactions since {snap['since']}, "
+               f"total value {snap['summary'].get('totalValue', 0):,.0f} {snap.get('currency')}")
+
+
+def _montrose_report(cfg, store, since: date, offline: bool = False, notify: bool = False):
+    """Refresh (or load) the snapshot and reconcile it. Returns (report, proposals).
+
+    Proposals are empty unless montrose.import_from is set (phase 2).
+    """
+    import html
+
+    from fundmgr.broker import importer
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.config import load_universe
+    from fundmgr.notify.send import send_telegram
+
+    try:
+        snap = rec.load_snapshot() if offline else rec.refresh(_montrose_account(cfg), since)[1]
+    except montrose.LoginRequired as exc:
+        if notify:
+            send_telegram(f"🔐 Montrose login needed for the daily reconcile: {html.escape(str(exc))}"
+                          "\nSend /montrose_login.")
+        raise click.ClickException(str(exc)) from exc
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        if notify:
+            send_telegram(f"⚠️ Montrose reconcile failed: {html.escape(str(exc))}")
+        raise click.ClickException(str(exc)) from exc
+
+    imports = store.get_broker_imports()
+    report = rec.reconcile(
+        snap, **rec.ledger_inputs(store, date.fromisoformat(snap["since"])),
+        universe=load_universe(cfg.universe_path), instruments=rec.load_instruments(),
+        cash_tolerance=cfg.montrose.cash_tolerance_sek,
+        cost_tolerance_pct=cfg.montrose.cost_tolerance_pct,
+        booked_ids={i for i, row in imports.items() if row["status"] == "booked"},
+        booked_txns={i: row["ledger_txn_id"] for i, row in imports.items()
+                     if row["status"] == "booked" and row.get("ledger_txn_id") is not None},
+    )
+    props = []
+    if cfg.montrose.import_from:
+        props = importer.proposals(report, import_from=date.fromisoformat(cfg.montrose.import_from),
+                                   imports=imports, fee_calc=cfg.fees.calc,
+                                   account_ccy=(snap.get("currency") or "SEK").upper())
+    return report, props
+
+
+def _offer_proposals(props) -> int:
+    """One Telegram message per proposal, with Book/Skip buttons where bookable."""
+    import html
+
+    from fundmgr.broker import importer
+    from fundmgr.notify.send import send_telegram
+
+    sent = []
+    for p in props:
+        head = {"fill": "🧾 Montrose fill not in the ledger",
+                "flow": "💰 Montrose deposit/withdrawal not in the ledger",
+                "cash": "💵 Montrose cash row not in the ledger"}.get(p.kind, "✋ Montrose row to book by hand")
+        body = f"{head}\n{html.escape(importer.describe(p))}"
+        if p.problem:
+            body += f"\n⚠️ {html.escape(p.problem)}"
+            ok = send_telegram(body)
+        else:
+            ok = send_telegram(body, buttons=[[("✓ Book", f"mi:book:{p.broker_id}"),
+                                               ("✗ Skip", f"mi:skip:{p.broker_id}")]])
+        if ok:
+            sent.append(p)
+    importer.mark_offered(sent)
+    return len(sent)
+
+
+def _auto_book(cfg, store, props) -> tuple[list[str], list]:
+    """Book every proposal that can be booked safely; return (messages, the rest).
+
+    Montrose's transaction history is what actually happened in the account, so
+    for the real fund it is booked without a tap (montrose.auto_book). A sale
+    made in the app on 30 Oct sat behind a Book button for days while the stop
+    check kept asking for the same 15 shares. Same checks as a tap: proposals
+    come from a fresh read and reconcile, a hand-booked fill matches and is not
+    offered, and the ledger refuses an oversell or an unfunded buy. Anything not
+    bookable — unmatched instrument, clash with a hand-booked fill, a refused
+    write — is left for the buttons.
+    """
+    from fundmgr.broker import importer
+
+    booked, rest = [], []
+    for p in props:
+        if not p.bookable:
+            rest.append(p)
+            continue
+        try:
+            booked.append(importer.book(store, p))
+        except ValueError as exc:
+            p.problem = f"not booked automatically: {exc}"
+            rest.append(p)
+            continue
+        _mark_after_ledger_change(cfg, store, p.trade_date if p.kind == "fill"
+                                  else datetime.utcnow().strftime("%Y-%m-%d"))
+    return booked, rest
+
+
+def _send_booked(booked: list[str]) -> None:
+    import html
+
+    from fundmgr.notify.send import send_telegram
+
+    if booked:
+        send_telegram("🧾 <b>Booked from Montrose</b> (the account's own transactions)\n"
+                      + "\n".join(html.escape(m) for m in booked))
+
+
+@cli.command("montrose-reconcile")
+@click.option("--since", default=None, metavar="YYYY-MM-DD",
+              help="Transactions from this date (default: montrose.lookback_days ago).")
+@click.option("--offline", is_flag=True, help="Use the last saved snapshot; no Montrose call.")
+@click.option("--notify", is_flag=True,
+              help="Telegram: the report when something is off, each new row to book once "
+                   "(with buttons), and a lapsed login.")
+@click.option("--json", "as_json", is_flag=True, help="Print the report as JSON.")
+def montrose_reconcile_cmd(since: str | None, offline: bool, notify: bool, as_json: bool):
+    """Compare the Montrose account with the fund's ledger. Writes nothing.
+
+    \b
+    Checks shares per holding, cash, trades and deposits in the window, and
+    lists dividends/interest/tax the ledger doesn't book. Rows dated on or
+    after montrose.import_from are offered for booking (fund montrose-import);
+    nothing is booked without that. Daily with --notify it doubles as the
+    token keep-alive: a lapsed login is reported instead of waiting for the
+    day it is needed.
+    """
+    import dataclasses
+    import html
+
+    from fundmgr.broker import importer
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.notify.send import send_telegram
+
+    cfg, store = _get_store()
+    start = date.fromisoformat(since) if since else rec.default_since(cfg.montrose.lookback_days)
+    report, props = _montrose_report(cfg, store, start, offline=offline, notify=notify)
+    if notify and cfg.montrose.auto_book and any(p.bookable for p in props):
+        booked, _ = _auto_book(cfg, store, props)
+        _send_booked(booked)
+        report, props = _montrose_report(cfg, store, start, offline=True)
+    text = rec.format_report(report)
+    if props:
+        text += (f"\n{len(props)} Montrose row(s) waiting to be booked — "
+                 "/montrose_import (fund montrose-import).")
+    if as_json:
+        click.echo(json.dumps({**dataclasses.asdict(report), "cash_diff": report.cash_diff,
+                               "in_sync": report.in_sync,
+                               "proposals": [p.to_dict() for p in props]},
+                              indent=2, ensure_ascii=False))
+    else:
+        click.echo(text)
+    if notify:
+        if not report.in_sync:
+            send_telegram(html.escape(text))
+        _offer_proposals(importer.unoffered(props))
+
+
+@cli.command("montrose-import")
+@click.option("--book", "book_id", type=int, default=None, metavar="ID",
+              help="Book Montrose row ID into the ledger (re-checked against Montrose first).")
+@click.option("--skip", "skip_id", type=int, default=None, metavar="ID",
+              help="Never offer Montrose row ID again; the ledger is left as it is.")
+@click.option("--notify", is_flag=True, help="Send every waiting row to Telegram with buttons.")
+@click.option("--auto", is_flag=True,
+              help="Book every row that can be booked safely (montrose.auto_book); with --notify, "
+                   "report what was booked and offer the rest once. The 30-minute cron job.")
+def montrose_import_cmd(book_id: int | None, skip_id: int | None, notify: bool, auto: bool):
+    """Book Montrose fills, deposits and dividends into the ledger — one row at a time.
+
+    \b
+    No option: list the rows waiting (Montrose has them, the ledger doesn't,
+    dated on or after montrose.import_from). Every --book/--skip re-reads
+    Montrose and re-runs the reconcile first, so a row booked by hand in the
+    meantime, or cancelled at Montrose, is refused rather than doubled.
+    """
+    from fundmgr.broker import importer
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+
+    cfg, store = _get_store()
+    if not cfg.montrose.import_from:
+        raise click.ClickException("Booking from Montrose is off (set montrose.import_from).")
+    if book_id is not None and skip_id is not None:
+        raise click.UsageError("--book or --skip, not both")
+    # A few days before the cutoff, so a hand-booked fill dated just before it
+    # still matches its broker row instead of leaving that row to be offered.
+    start = max(date.fromisoformat(cfg.montrose.import_from) - timedelta(days=rec.DATE_SLACK_DAYS),
+                rec.default_since(cfg.montrose.lookback_days))
+    _, props = _montrose_report(cfg, store, start)
+
+    if auto:
+        if not cfg.montrose.auto_book:
+            raise click.ClickException("montrose.auto_book is off — rows wait for a tap.")
+        booked, rest = _auto_book(cfg, store, props)
+        for m in booked:
+            click.echo(m)
+        for p in rest:
+            click.echo(f"#{p.broker_id}  {importer.describe(p)}   ⚠ {p.problem}")
+        if notify:
+            _send_booked(booked)
+            _offer_proposals(importer.unoffered(rest))
+        if not booked and not rest:
+            click.echo("Nothing to book.")
+        return
+
+    target = book_id if book_id is not None else skip_id
+    if target is None:
+        if not props:
+            click.echo("Nothing waiting: every Montrose row since "
+                       f"{cfg.montrose.import_from} is in the ledger or was decided.")
+        for p in props:
+            flag = f"   ⚠ {p.problem}" if p.problem else ""
+            click.echo(f"#{p.broker_id}  {importer.describe(p)}{flag}")
+        if notify:
+            n = _offer_proposals(props)
+            click.echo(f"Sent {n} to Telegram.")
+        return
+
+    try:
+        p = importer.find(props, target)
+        msg = importer.book(store, p) if book_id is not None else importer.skip(store, p)
+    except (montrose.MontroseError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(msg)
+    if book_id is not None:
+        _mark_after_ledger_change(cfg, store, p.trade_date if p.kind == "fill"
+                                  else datetime.utcnow().strftime("%Y-%m-%d"))
+
+
+@cli.command("montrose-map")
+@click.argument("orderbook_id", type=int)
+@click.argument("symbol")
+def montrose_map_cmd(orderbook_id: int, symbol: str):
+    """Pin a Montrose orderbookId to the ledger's Yahoo symbol (e.g. 1757 TRUE-B.ST).
+
+    Only needed when the reconcile reports an instrument it could not match.
+    """
+    from fundmgr.broker import reconcile as rec
+
+    entry = rec.pin_instrument(orderbook_id, symbol)
+    click.echo(f"orderbook {orderbook_id} → {entry['yahoo']}"
+               + (f" ({entry.get('ticker')} {entry.get('name')})" if entry.get("ticker") else ""))
+
+
+def _ticket_symbols(cfg, store) -> dict[str, str]:
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.config import load_universe
+
+    return rec.known_symbols([p.ticker for p in store.get_positions()],
+                             load_universe(cfg.universe_path))
+
+
+def _issue_tickets(cfg, store, lines, run_id: str, notify: bool, done=None) -> list:
+    """Create tickets for `lines`, print them, and optionally send them with buttons."""
+    from fundmgr.broker import tickets
+    from fundmgr.notify.send import send_telegram
+
+    if any(not t.problem for t in lines):
+        tickets.create_tickets(_montrose_account(cfg), lines, _ticket_symbols(cfg, store))
+    text, buttons = tickets.message(lines, run_id, done)
+    for t in lines:
+        click.echo(f"  {'✓' if t.url else '✗'} {t.label()}"
+                   + (f"  orderbook {t.orderbook_id}" if t.orderbook_id else "")
+                   + (f"  — {t.problem}" if t.problem else ""))
+    if notify and (lines or done):
+        send_telegram(text, buttons=buttons)
+    return lines
+
+
+def _run_tickets(cfg, store, run_id: str, actions, snap, features) -> None:
+    """After a saved weekly run: save the ticket plan, and send tickets if switched on.
+
+    Advisory throughout — the decision is already saved and sent; a Montrose
+    outage or a lapsed login costs the buttons, never the run.
+    """
+    import html
+
+    from fundmgr.broker import tickets
+    from fundmgr.notify.send import send_telegram
+
+    try:
+        plan = tickets.plan_from_run(run_id, actions, snap, features, cfg)
+        tickets.save_plan(plan)
+        if not cfg.montrose.tickets or not plan["lines"]:
+            return
+        click.echo("\n[→] Montrose tickets…")
+        _issue_tickets(cfg, store, tickets.plan_lines(plan), run_id, notify=True)
+    except Exception as exc:
+        click.echo(f"  ⚠ Montrose tickets not sent: {exc}", err=True)
+        if cfg.montrose.tickets:
+            send_telegram(f"⚠️ Montrose tickets not sent: {html.escape(str(exc))}\n"
+                          "/montrose_tickets tries again.")
+
+
+@cli.command("montrose-tickets")
+@click.option("--notify", is_flag=True, help="Send them to Telegram as buttons.")
+def montrose_tickets_cmd(notify: bool):
+    """Pre-filled Montrose order tickets for the latest weekly run's approved trades.
+
+    \b
+    Each ticket opens the Montrose app on a filled-in order (instrument, side,
+    whole shares, the Simulering account); you set the limit and approve it
+    there — nothing is placed from here. Trades already in the ledger since the
+    run get no ticket. An instrument Montrose lists more than once is named,
+    not guessed.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import reconcile as rec
+    from fundmgr.broker import tickets
+
+    cfg, store = _get_store()
+    _montrose_account(cfg)
+    try:
+        plan = tickets.load_plan()
+        lines = tickets.plan_lines(plan)
+        since = plan["created_at"][:10]
+        done = tickets.mark_done(lines, rec.ledger_inputs(store, date.fromisoformat(since))["ledger_trades"],
+                                 since)
+        click.echo(f"Run {plan['run_id']} ({plan['created_at'][:16].replace('T', ' ')} UTC):")
+        if not lines:
+            click.echo("  No trades waiting for a ticket"
+                       + (f" — already in the ledger: {', '.join(done)}." if done else "."))
+        _issue_tickets(cfg, store, lines, plan["run_id"], notify, done)
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@cli.command("montrose-ticket")
+@click.argument("ticker")
+@click.argument("side", type=click.Choice(["buy", "sell"]))
+@click.argument("shares", type=click.IntRange(min=1))
+@click.option("--notify", is_flag=True, help="Send it to Telegram as a button.")
+def montrose_ticket_cmd(ticker: str, side: str, shares: int, notify: bool):
+    """One pre-filled Montrose order ticket, e.g. `fund montrose-ticket KCC.OL sell 36`.
+
+    Opens a filled-in order in the Montrose app; nothing is placed until you
+    approve it there.
+    """
+    from fundmgr.broker import montrose
+    from fundmgr.broker import tickets
+
+    cfg, store = _get_store()
+    _montrose_account(cfg)
+    line = tickets.TicketLine(ticker=ticker.upper(), side=side, shares=shares, kind="MANUAL")
+    try:
+        _issue_tickets(cfg, store, [line], "manual", notify)
+    except (montrose.MontroseError, montrose.httpx.HTTPError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if line.problem:
+        raise click.ClickException(line.problem)
 
 
 if __name__ == "__main__":

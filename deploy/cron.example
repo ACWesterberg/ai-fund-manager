@@ -1,5 +1,9 @@
 # AI Fund Manager — crontab
 #
+# Also the Mac Studio's schedule: deploy/macos/launchd.py turns every active line here
+# into a launchd job (deploy/MIGRATE-TO-MAC.md), so change times here, not there. Keep
+# lines to plain 5-field schedules; it refuses @reboot and day-of-month + weekday.
+#
 # IMPORTANT: set the Pi timezone first so times here track DST automatically:
 #   sudo timedatectl set-timezone Europe/Stockholm
 #   date   # verify
@@ -18,14 +22,25 @@
 30 9 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund run >> data/logs/weekly.log 2>&1
 
 # News trigger checks — weekdays during Nordic trading hours
-# Covers morning open, mid-session, early and late afternoon
-0 9,11,14,16 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+# Covers morning open, mid-session, early and late afternoon.
+# Monday 09:00 alerts but never auto-runs: the 24 h guard passes (the last run
+# is a week old), so a pre-open report headline started a run at the open on
+# yesterday's prices and either became the week's decision (the 09:30 run
+# found the lock) or was followed by a second full consensus.
+0 11,14,16 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+0 9,11,14,16 * * 2-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news >> data/logs/news.log 2>&1
+0 9 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-news --no-auto-run >> data/logs/news.log 2>&1
 
 # Stop-loss checks — every 15 min during OMX trading hours (09:00–17:30 CET)
 # Matches yfinance's 15-min data delay — checking more often gives no benefit
 */15 9-17 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund check-stops >> data/logs/stops.log 2>&1
 
 
+# ═══ SIMULATIONS PAUSED (2026-10-09) ═════════════════════════════════════════
+# The four sim configs carry `paused: true`. Their lines below can stay: run,
+# optimize and check-news exit at once without calling anything, and
+# check-stops only records the day's NAV (no trades). Remove them if you like.
+#
 # ═══ GLOBAL SIMULATION FUND (OpenAI GPT-5.6-sol) — NYSE/NASDAQ + European overlap ══
 #
 # Best execution window: 16:00 CET
@@ -75,6 +90,24 @@
 */15 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && FUND_CONFIG=config/config_buffett_claude.yaml .venv/bin/fund check-stops >> data/logs/stops_buffett_claude.log 2>&1
 
 
+# ═══ REPORT-REACTION EXPERIMENT (Nordic) ══════════════════════════════════════
+# After the OMX close: log yesterday's report reactions, judge up to 10 of the
+# biggest drops (one model call each), score older events, Telegram digest of
+# overreaction calls. `fund report-results` shows how the verdicts are doing.
+15 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-watch >> data/logs/report_watch.log 2>&1
+
+# Held positions' reports (real fund): installed by deploy/managed_cron.sh — don't
+# paste. Evening before: earnings-watch heads-up (no model). Once out: report-check
+# reads it against the thesis at 08:45 (before the open) and 18:30.
+# 30 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund earnings-watch >> data/logs/earnings_watch.log 2>&1
+# 45 8 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
+# 30 18 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund report-check >> data/logs/report_check.log 2>&1
+
+# Montrose ↔ ledger reconcile (phase 1, read-only, no LLM). Telegram only when
+# shares, cash, trades or deposits disagree — or the Montrose login lapsed, so
+# this doubles as the token keep-alive. After the close, before paper-track.
+45 21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund montrose-reconcile --notify >> data/logs/montrose.log 2>&1
+
 # ═══ PAPER PORTFOLIOS (created on the web at /paper) ═════════════════════════
 #
 # Daily upkeep for every data/paper/*.db: refresh price + benchmark caches,
@@ -91,6 +124,15 @@
 # season, so keep this running every weekday. 22:15 CET = after NYSE close.
 
 15 22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-track >> data/logs/paper.log 2>&1
+# Installed by deploy/managed_cron.sh on every deploy — don't paste these two.
+# Broker accounts (/accounts): read each Montrose-linked account every 30 min in
+# trading hours and book what changed. Read-only; an LLM call only when a new
+# name appears; Telegram only on a change.
+# */30 9-22 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund account-sync --all >> data/logs/accounts.log 2>&1
+# Broker accounts (/accounts): refresh every holding's hold/add/trim/exit view and fill
+# any missing plan, Saturday morning — one call per account, results to Telegram.
+# The daily watches above (paper-track) already cover accounts.
+# 41 8 * * 6 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund account-plan >> data/logs/accounts.log 2>&1
 
 
 # ═══ LIVE SLEEVE REVIEWS — re-decide each sleeve against what it holds ═══════
@@ -117,8 +159,8 @@
 0 18 * * 1 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-review --all >> data/logs/paper_review.log 2>&1
 
 # Optional: intraday kill-line + horizon checks, if a daily sweep is too slow to
-# hear that a position has broken its max-drop line. Cheap (no LLM, cached
-# prices) and alerts are transition-based, so this cannot spam you. Uncomment to
+# hear that a position has broken its max-drop line. Cheap (no LLM, live quotes)
+# and alerts are transition-based, so this cannot spam you. Uncomment to
 # check hourly during the NYSE session instead of only after the close.
 # 30 15-21 * * 1-5 cd /home/alexander/Documents/ai-fund-manager && .venv/bin/fund paper-watch >> data/logs/paper_watch.log 2>&1
 

@@ -20,6 +20,10 @@ _EXCHANGE_TO_CALENDAR: dict[str, str] = {
     "OSLO": "XOSL",
     "OMXH": "XHEL",
     "OMXI": "XICE",
+    # Spelled-out codes some universe rows carry. Unmapped, a name had no
+    # calendar at all, which made the shadow comparison refuse the whole run.
+    "STOCKHOLM": "XSTO", "HELSINKI": "XHEL", "COPENHAGEN": "XCSE",
+    "WSE": "XWAR", "BME": "XMAD",
     # Global
     "NYSE": "XNYS", "NASDAQ": "XNAS", "OTC": "XNYS",
     "LSE": "XLON",

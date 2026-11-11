@@ -3,7 +3,7 @@
   <details id="rv-details">
     <summary class="sl-action-sum">
       <span class="material-symbols-outlined text-sky-400" style="font-size:18px">radar</span>
-      <span class="card-title">Review this sleeve</span>
+      <span class="card-title">Review this {{ "account" if account else "sleeve" }}</span>
       <span class="sl-action-hint">re-decide against what it holds today — hold, trim, exit, add</span>
       <span class="material-symbols-outlined sl-chev">expand_more</span>
     </summary>
@@ -163,6 +163,21 @@
         mandate and the limits; it relaxes neither.
       </p>
     </details>
+
+    {% if review.ideas %}
+    <div class="mt-4 p-3 rounded-lg border border-teal-500/25 bg-teal-500/5" id="ideas">
+      <label class="kpi-label" for="rv-ideas">Ideas only — new money to invest (SEK)</label>
+      <div class="flex flex-wrap items-center gap-3">
+        <input id="rv-ideas" type="number" min="1" step="1000" placeholder="e.g. 20000"
+               class="{{ rcls }}" style="max-width:12rem" />
+        <span class="text-[11px] text-slate-500 flex-1 min-w-[16rem]">
+          Fill this in to ask only "which new stocks should this money go into?" — up to 5 names you don't
+          already own, each with a kill criterion and target price. Nothing you hold is touched, and nothing
+          joins the watch list until you actually buy it. Leave it empty for a full review of the account.
+        </span>
+      </div>
+    </div>
+    {% endif %}
 
     <div class="mt-4 flex flex-wrap items-center gap-3">
       <button id="rv-run" type="button"
@@ -455,6 +470,8 @@
           style_tolerance_pct: document.getElementById('rv-sg-tol').value.trim() === ''
             ? null : parseFloat(document.getElementById('rv-sg-tol').value),
           style_brief: document.getElementById('rv-sg-brief').value.trim(),
+          ideas_sek: (document.getElementById('rv-ideas') &&
+                      parseFloat(document.getElementById('rv-ideas').value)) || null,
         }),
       });
       const body = await r.json();

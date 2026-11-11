@@ -140,13 +140,13 @@ def build_lm(cfg: "AppConfig", model_id: str | None = None):
         raise RuntimeError("dspy not installed — install with: uv sync --extra optimize")
 
     model_id = model_id or cfg.llm.model_id
-    model = f"{cfg.llm.provider}/{model_id}"  # e.g. "openai/gpt-5.6-sol", "anthropic/claude-opus-4-8"
+    model = f"{cfg.llm.provider}/{model_id}"  # e.g. "openai/gpt-5.6-sol", "anthropic/claude-opus-5-5"
     kwargs = {"max_tokens": cfg.llm.max_tokens}
 
     # Reproduce the temperature carve-outs already in client.py.
-    temp_free = model_id.startswith(
-        ("gpt-5", "o1", "o3", "o4", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-fable")
-    )
+    from fundmgr.engine.client import claude_capabilities
+    temp_free = (model_id.startswith(("gpt-5", "o1", "o3", "o4"))
+                 or (model_id.startswith("claude-") and not claude_capabilities(model_id)["sampling"]))
     if not temp_free:
         kwargs["temperature"] = cfg.llm.temperature
     if model_id.startswith(("gpt-5", "o1", "o3", "o4")):

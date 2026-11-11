@@ -189,7 +189,13 @@ def retry_output_limits(state, output_tokens):
 
 def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force_search=False, batch_id=None, collect_only=False, retry_output_tokens=None):
     import fcntl
-    from fundmgr.engine.optimizer import decision_metric, save_guidance_candidate, guidance_versions
+    from fundmgr.engine.optimizer import (
+        MIN_LABEL_COVERAGE,
+        decision_metric,
+        guidance_versions,
+        label_coverage,
+        save_guidance_candidate,
+    )
 
     from fundmgr.engine.optimizer_batch import BatchPending
     batch_mode = plan.get("execution") == "batch"
@@ -354,25 +360,33 @@ def run_search(cfg, plan, path: Path, *, resume=False, retry_failed=False, force
             prefetch([(f"{name}:{index}", assemble_system_prompt(case["fields"]["mandate"], guidance), task_input(case))
                       for name, guidance in (("incumbent", plan["identity"]["guidance"]), ("candidate", proposal.instructions))
                       for index, case in enumerate(plan["cases"])])
-            scores = {}
+            scores, coverage = {}, {}
             for name, guidance in (("incumbent", plan["identity"]["guidance"]), ("candidate", proposal.instructions)):
-                scores[name] = []
+                scores[name], coverage[name] = [], []
                 for index, case in enumerate(plan["cases"]):
                     decision = request(f"{name}:{index}", assemble_system_prompt(case["fields"]["mandate"], guidance),
                                        task_input(case), DecisionRun, plan["identity"]["llm"]["model_id"])
-                    scores[name].append(decision_metric(SimpleNamespace(ticker_alphas=case["ticker_alphas"]),
-                                                       SimpleNamespace(decision=decision)))
-            state["scores"] = scores
+                    example = SimpleNamespace(ticker_alphas=case["ticker_alphas"])
+                    prediction = SimpleNamespace(decision=decision)
+                    scores[name].append(decision_metric(example, prediction))
+                    coverage[name].append(label_coverage(example, prediction))
+            state["scores"], state["label_coverage"] = scores, coverage
             if identity(cfg) != plan["identity"]:
                 raise SearchStopped("Active guidance/config changed; candidate not published")
             candidate_path = None
-            if mean(scores["candidate"]) > mean(scores["incumbent"]):
+            covered = mean(coverage["candidate"]) >= MIN_LABEL_COVERAGE
+            if not covered:
+                logger.info("Candidate traded mostly names without outcomes (%.0f%% labelled, "
+                            "need %.0f%%): its score is not evidence; no artifact published",
+                            100 * mean(coverage["candidate"]), 100 * MIN_LABEL_COVERAGE)
+            if covered and mean(scores["candidate"]) > mean(scores["incumbent"]):
                 class Program:
                     def save(self, target):
                         Path(target).write_text(json.dumps({"kind": VERSION, "instructions": proposal.instructions}))
                 candidate_path = save_guidance_candidate(cfg, Program(), {
                     "instructions": proposal.instructions, "optimization_run_id": digest(plan),
                     "search_method": VERSION, "search_scores": scores,
+                    "label_coverage": coverage,
                     "context_mode": plan.get("context_mode", "full"),
                     "execution": plan.get("execution", "direct"),
                     "retry_output_overrides": state.get("output_overrides", {}),

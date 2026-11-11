@@ -93,7 +93,9 @@ _FUND_FIELDS: list[tuple[str, str, bool]] = [
     ("pe_ratio",            "P/E",                   False),
     ("forward_pe",          "Forward P/E",           False),
     ("pb_ratio",            "Price/book",            False),
-    ("dividend_yield",      "Dividend yield",        True),
+    # Yahoo sends this one as a percentage already (2.88 = 2.88%), unlike the
+    # 0-1 margins above; flagged as a fraction it read 100x too high.
+    ("dividend_yield",      "Dividend yield",        False),
 ]
 
 # A move smaller than this is noise, not a trend, and is rendered as "flat".
@@ -222,7 +224,7 @@ def forget_custom_metric(store: Store, key: str) -> bool:
 # fired on a real 200% growth figure would only teach the operator to bypass it.
 _BOUNDED_FRACTIONS = frozenset({
     "gross_margin", "operating_margin", "ebitda_margin", "profit_margin",
-    "equity_to_assets", "net_debt_to_assets", "cost_to_income", "dividend_yield",
+    "equity_to_assets", "net_debt_to_assets", "cost_to_income",
 })
 _FRACTION_LIMIT = 1.5
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-import pytest
 
 from fundmgr.data.market_hours import (
     dominant_calendar, is_trading_day, next_session,

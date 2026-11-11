@@ -44,6 +44,11 @@ def audit_case(directory: Path) -> dict:
             "benchmark_currency": registration["benchmark_currency"],
             "benchmark_calendar": registration["benchmark_calendar"],
             "execution_convention": registration["execution_convention"],
+            # None for a guidance candidate; "no_lessons" etc. for a variant, whose
+            # advantage reads the other way round (positive = lessons cost return).
+            "variant": registration["candidate"].get("variant"),
+            # A re-asked incumbent and the traded one are different experiments.
+            "incumbent_source": registration.get("incumbent_source", "rerun"),
         }
         record.update(group=digest(identity), identity=identity,
                       registration_hash=registration["registration_hash"],

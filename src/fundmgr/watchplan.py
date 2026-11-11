@@ -740,16 +740,28 @@ def suggested_rules(analysis: dict | None, store: Store | None = None) -> list[d
 
 # ── Numeric kill-rule watch ───────────────────────────────────────────────────
 
-def _latest_native_prices(store: Store, tickers: list[str]) -> dict[str, float]:
+def _latest_native_prices(store: Store, tickers: list[str], live: bool = False) -> dict[str, float]:
     """Latest cached close per ticker, falling back to a live quote.
 
     track_portfolio refreshes the price cache before the watches run, so the
     cache is the normal path; the live fallback covers a ticker whose history
     hasn't been fetched yet (e.g. a plan entry that isn't held).
+
+    `live` quotes every ticker first. The intraday `paper-watch` read the cache,
+    which only the 22:15 track refreshes, so it re-checked last night's close
+    every hour and could never see a max-drop line break during the session.
     """
     out: dict[str, float] = {}
+    if live:
+        try:
+            from fundmgr.data.quotes import live_prices
+            out.update({t: p for t, p in live_prices(list(tickers)).items() if p})
+        except Exception:
+            pass
     missing: list[str] = []
     for t in tickers:
+        if t in out:
+            continue
         rows = store.get_prices(t)
         if rows and rows[-1].get("close"):
             out[t] = float(rows[-1]["close"])
@@ -764,7 +776,7 @@ def _latest_native_prices(store: Store, tickers: list[str]) -> dict[str, float]:
     return out
 
 
-def evaluate_kill_rules(store: Store) -> list[dict]:
+def evaluate_kill_rules(store: Store, live: bool = False) -> list[dict]:
     """Evaluate every numeric kill rule against current prices.
 
     Returns one row per rule-carrying ticker: {ticker, hit, reasons, drawdown_pct,
@@ -780,7 +792,7 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
     currency_map = _load(store, "paper_currency_map")
     positions = {p.ticker: p for p in store.get_positions()}
     tickers = sorted(rules)
-    native = _latest_native_prices(store, tickers)
+    native = _latest_native_prices(store, tickers, live=live)
     prices_sek = paper.sek_prices_for(store, tickers, currency_map, native)
 
     rows: list[dict] = []
@@ -811,8 +823,10 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
         if floor and price_native is not None and price_native <= floor:
             reasons.append(f"price {price_native:,.2f} {currency} at/below the {floor:,.2f} floor")
         ceiling = rule.get("price_above")
+        target_reason = None
         if ceiling and price_native is not None and price_native >= ceiling:
-            reasons.append(f"price {price_native:,.2f} {currency} at/above the {ceiling:,.2f} target")
+            target_reason = f"price {price_native:,.2f} {currency} at/above the {ceiling:,.2f} target"
+            reasons.append(target_reason)
 
         # Fundamentals lines — the thresholds lifted out of the text criterion.
         # A metric with nothing cached is reported as unread, never as passing.
@@ -872,6 +886,9 @@ def evaluate_kill_rules(store: Store) -> list[dict]:
             "fundamental_reasons": fundamental_reasons,
             "drawdown_hit": drawdown_breached,
             "fundamentals_hit": bool(fundamental_reasons),
+            # Reaching the target is the opposite event to a kill: the thesis
+            # paid out. Only a row whose *sole* reason is the target counts.
+            "target_hit": bool(target_reason) and reasons == [target_reason],
             "drawdown_pct": round(drawdown, 1) if drawdown is not None else None,
             "drawdown_basis": dd["basis"],
             "drawdown_from_cost_pct": (round(dd["from_cost_pct"], 1)
@@ -914,7 +931,7 @@ def _recovered(row: dict) -> bool:
     return True
 
 
-def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
+def check_kill_rules(slug: str, store: Store | None = None, live: bool = False) -> list[str]:
     """Alert when a position crosses one of its numeric kill lines.
 
     Transition-based like the drift watch: fires on the crossing, then re-arms
@@ -928,7 +945,7 @@ def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
     else:
         name = store.get_meta("paper_name") or slug
 
-    rows = evaluate_kill_rules(store)
+    rows = evaluate_kill_rules(store, live=live)
     if not rows:
         return []
 
@@ -943,8 +960,9 @@ def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
                 f"paper_killhit:{ticker}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
                 "; ".join(row["reasons"]))
             fired.append(row)
-            mark = "🚨" if row["fundamentals_hit"] else "🟡"
-            what = "kill rule hit" if row["fundamentals_hit"] else "max drop reached"
+            mark, what = (("🚨", "kill rule hit") if row["fundamentals_hit"]
+                          else ("🎯", "target reached") if row.get("target_hit")
+                          else ("🟡", "max drop reached"))
             log.append(f"{mark} {ticker}: {what} — {'; '.join(row['reasons'])}")
         elif state == "hit" and _recovered(row):
             store.set_meta(f"paper_killrule_state:{ticker}", "clear")
@@ -957,16 +975,26 @@ def check_kill_rules(slug: str, store: Store | None = None) -> list[str]:
         # they get different headlines. "Kill criterion hit" on a −25% with the
         # business intact reads as "sell", which is the opposite of the policy.
         red = [r for r in fired if r["fundamentals_hit"]]
-        amber = [r for r in fired if not r["fundamentals_hit"]]
-        lines = [f"<b>🚨 {name} — kill criterion hit</b>" if red
-                 else f"<b>🟡 {name} — max drop reached, review not sell</b>"]
-        for row in red + amber:
+        target = [r for r in fired if r.get("target_hit")]
+        amber = [r for r in fired if not r["fundamentals_hit"] and not r.get("target_hit")]
+        if red:
+            head = f"<b>🚨 {name} — kill criterion hit</b>"
+        elif amber:
+            head = f"<b>🟡 {name} — max drop reached, review not sell</b>"
+        else:
+            head = f"<b>🎯 {name} — target price reached, consider taking profit</b>"
+        lines = [head]
+        for row in red + amber + target:
             held = "" if row["held"] else " (plan only — not held)"
-            flag = "" if row["fundamentals_hit"] else "  🟡 price only"
+            flag = ("" if row["fundamentals_hit"]
+                    else "  🎯 target" if row.get("target_hit") else "  🟡 price only")
             lines.append(f"\n<b>{row['ticker']}</b>{held}{flag}")
             for reason in row["reasons"]:
                 lines.append(f"  • {reason}")
-            if not row["fundamentals_hit"]:
+            if row.get("target_hit"):
+                lines.append("  The price your thesis implied is here. Trim or sell, or "
+                             "restate a higher target with the reason it is now worth more.")
+            elif not row["fundamentals_hit"]:
                 lines.append("  Fundamentals show no breach — re-read the evidence "
                              "before acting; this may be an add, not an exit.")
             if texts.get(row["ticker"]):

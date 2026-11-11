@@ -72,17 +72,27 @@ databases: `rclone copy gdrive:fund-manager-backups-archive data/archive`.
 
 ```bash
 cd ~/Documents/ai-fund-manager
-mkdir -p data restore
 # list backups, newest last:
 rclone lsf gdrive:fund-manager-backups | sort
-# pull the one you want:
-rclone copy gdrive:fund-manager-backups/fund-backup-YYYYMMDD-HHMMSS.tgz restore/
-tar -xzf restore/fund-backup-*.tgz -C restore/
-# put the DBs back:
-cp restore/*.db data/
-# (configs are in git; only copy restore/config/* if you changed something locally)
+# pull the one you want, then unpack it into this checkout and check it against its manifest:
+rclone copy gdrive:fund-manager-backups/fund-backup-YYYYMMDD-HHMMSS.tgz ~/
+python3 deploy/migrate.py restore ~/fund-backup-YYYYMMDD-HHMMSS.tgz
 ```
+
+`restore` refuses to overwrite a file that differs unless you pass `--force` (the old copy
+is kept as `<name>.pre-migration`), and refuses to finish if any file fails its hash.
 Then restart services: `sudo systemctl restart fundmgr-bot fundmgr-web fundmgr-global-web`.
+
+Archives from before 2026-11 have the old flat layout (`*.db` and `config/` at the top);
+restore those by hand: `tar -xzf … -C restore/ && cp restore/*.db data/`.
+
+## What a backup holds
+
+Everything git does not: every SQLite database under `data/` (the five funds, **live
+sleeves in `data/paper/`**, anything else), What-If results, shadow comparisons, ticker
+aliases, reports, and `config/compiled/` (active guidance, candidates, search
+checkpoints and the request cache). Not the run archive (`data/archive/`, synced separately above; a full migration export does carry it). Not logs, not credentials (`.env` and the Montrose token
+`data/montrose/token.json`, unless `BACKUP_ENV=1`), not the FinanceData cache. It is the same export a migration takes (`deploy/MIGRATE-TO-MAC.md`).
 
 ## Notes
 - `.env` (API keys, Telegram token) is **not** backed up by default — it holds

@@ -3,7 +3,6 @@ Guardrail unit tests — these are the safety-critical rules; they must be bulle
 """
 from __future__ import annotations
 
-from datetime import datetime
 
 import pytest
 
@@ -128,6 +127,25 @@ def test_min_trade_size_blocks_small_buy():
     decision = _decision([_buy("VOLV-B.ST", 5, 1_000)])  # 1000 < 2500
     result = apply_guardrails(decision, snap, features, UNIVERSE, cfg)
     assert len(result.approved_actions) == 0
+    assert "minimum" in result.verdicts[0].rejection_reason.lower()
+
+
+def test_a_full_exit_below_the_minimum_still_closes_the_position():
+    """A 2,000 SEK sliver could otherwise never be sold by a run."""
+    cfg = _cfg(min_trade_sek=2500)
+    snap = _snap(cash=40_000, positions=[Position("VOLV-B.ST", shares=10, avg_cost_sek=200)])
+    features = {"VOLV-B.ST": _feat("VOLV-B.ST", 200)}
+    result = apply_guardrails(_decision([_sell("VOLV-B.ST", 0, 2_000)]), snap, features, UNIVERSE, cfg)
+    assert [a.ticker for a in result.approved_actions] == ["VOLV-B.ST"]
+
+
+def test_a_small_partial_sell_is_still_below_the_minimum():
+    cfg = _cfg(min_trade_sek=2500)
+    snap = _snap(cash=40_000, positions=[Position("VOLV-B.ST", shares=100, avg_cost_sek=200)])
+    features = {"VOLV-B.ST": _feat("VOLV-B.ST", 200)}
+    # NAV 60,000 with 20,000 held (33.3%): trimming to 31.4% is a ~1,160 SEK sale
+    result = apply_guardrails(_decision([_sell("VOLV-B.ST", 31.4, 1_200)]), snap, features, UNIVERSE, cfg)
+    assert result.approved_actions == []
     assert "minimum" in result.verdicts[0].rejection_reason.lower()
 
 
@@ -532,3 +550,11 @@ def test_a_buy_must_clear_both_dials():
     result = apply_guardrails(
         _decision([_buy("VOLV-B.ST", 50.0, 50_000)]), snap, features, UNIVERSE, cfg)
     assert "Regional cap breach" in result.verdicts[0].rejection_reason
+
+
+def test_the_stale_tag_follows_the_configured_limit():
+    feat = _feat("VOLV-B.ST")
+    feat.data_age_trading_days = 7
+    assert feat.is_stale
+    feat.stale_after_days = 10
+    assert not feat.is_stale

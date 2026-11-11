@@ -8,6 +8,7 @@ the two reviews from drifting into disagreeing views of the same position.
 """
 from __future__ import annotations
 
+import html
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -52,14 +53,18 @@ def technicals_block(ticker: str) -> tuple[str, float | None]:
 
     lines = [f"  Live: {live:.2f}"]
     r5, r20 = ret(5), ret(20)
-    if r5 is not None:  lines.append(f"  5d return:  {r5:+.1f}%")
-    if r20 is not None: lines.append(f"  20d return: {r20:+.1f}%")
+    if r5 is not None:
+        lines.append(f"  5d return:  {r5:+.1f}%")
+    if r20 is not None:
+        lines.append(f"  20d return: {r20:+.1f}%")
     if ma50 is not None:
         lines.append(f"  vs 50d MA:  {(live/ma50-1)*100:+.1f}% ({'above' if live>=ma50 else 'below'})")
     if ma200 is not None:
         lines.append(f"  vs 200d MA: {(live/ma200-1)*100:+.1f}% ({'above' if live>=ma200 else 'below'})")
-    if rsi is not None:  lines.append(f"  RSI(14): {rsi:.0f}")
-    if hi and lo:        lines.append(f"  1-month range: {lo:.2f} – {hi:.2f}")
+    if rsi is not None:
+        lines.append(f"  RSI(14): {rsi:.0f}")
+    if hi and lo:
+        lines.append(f"  1-month range: {lo:.2f} – {hi:.2f}")
     return "\n".join(lines), live
 
 
@@ -108,13 +113,20 @@ def live_price_sek(
     live_price: float | None,
     tech_live: float | None,
 ) -> float:
-    """Resolve the position's live price in SEK, to compare against SEK cost basis."""
+    """Resolve the position's live price in SEK, to compare against SEK cost basis.
+
+    Raises ValueError when the FX rate is missing: a native price read as SEK
+    would hand the review a −90% loss on a EUR holding that hasn't moved.
+    """
     if live_price is not None:
         return live_price                      # already SEK (caller converted)
     live = tech_live or pos.avg_cost_sek
     if cfg.fx_to_sek and tech_live is not None and currency != "SEK":
         from fundmgr.data.fx import rate_to_sek
-        live = tech_live * (rate_to_sek(currency, store) or 1.0)  # native→SEK
+        rate = rate_to_sek(currency, store)
+        if not rate:
+            raise ValueError(f"no {currency}/SEK rate — can't value {ticker} in SEK")
+        live = tech_live * rate  # native→SEK
     return live
 
 
@@ -137,12 +149,31 @@ def run_consensus(system: str, user: str, cfg: AppConfig, schema, label: str) ->
     return parsed_all
 
 
-def majority(reviews: list) -> tuple[str, list, dict[str, int]]:
-    """(winning recommendation, the reviews backing it, full vote counts)."""
+def majority(reviews: list, requested: int | None = None) -> tuple[str, list, dict[str, int]]:
+    """(winning recommendation, the reviews backing it, full vote counts).
+
+    A winner needs more than half of the samples *requested*. Short of that the
+    call is HOLD: `most_common` broke a 2-2-1 split by thread arrival order, so
+    the same five samples could file EXIT or HOLD, and one survivor of five
+    counted as a consensus. The HOLD is backed by the samples that said hold,
+    or by all of them when none did (see `no_majority`).
+    """
     counts = Counter(r.recommendation for r in reviews)
-    winner, _ = counts.most_common(1)[0]
-    agreeing = [r for r in reviews if r.recommendation == winner]
-    return winner, agreeing, dict(counts)
+    winner, n = counts.most_common(1)[0]
+    if n * 2 > max(len(reviews), requested or 0):
+        return winner, [r for r in reviews if r.recommendation == winner], dict(counts)
+    holds = [r for r in reviews if r.recommendation == "hold"]
+    return "hold", holds or list(reviews), dict(counts)
+
+
+def no_majority(winner: str, counts: dict[str, int], requested: int) -> bool:
+    """True when `majority` fell back to HOLD rather than finding one."""
+    return counts.get(winner, 0) * 2 <= max(requested, sum(counts.values()))
+
+
+def no_majority_note(counts: dict[str, int], requested: int, text: str) -> str:
+    """`what_changed` for a fallback HOLD, saying so before the sample's own text."""
+    return f"[No majority ({votes_str(counts, requested)}) — holding.] {text}"[:400]
 
 
 # Review verbs → the buy/sell/hold vocabulary decision_outcomes is scored in.
@@ -297,3 +328,35 @@ def follow_up(
 def votes_str(votes: dict[str, int], n: int) -> str:
     parts = [f"{rec}×{cnt}" for rec, cnt in sorted(votes.items(), key=lambda kv: -kv[1])]
     return f"{'/'.join(parts)} of {n}"
+
+
+def action_banner_html(rows: list[dict], today: str) -> str:
+    """The top of a price alert when it carries an order the human owes.
+
+    `rows` are `web.views.review_row` dicts for the alerted names' open reviews.
+    The verdict used to sit in the middle of the message under "Target review",
+    after a "Price Alert" header and a percentage — it read as a report. The
+    11:00 daily-drop alert on the same name then said nothing about the SELL
+    still waiting from 09:00, and looked like there was nothing to do at all.
+    """
+    if not rows:
+        return ""
+    n = len(rows)
+    lines = [f"🔴 <b>ACTION NEEDED — {n} order{'s' if n != 1 else ''} for you to place</b>"]
+    for r in rows:
+        lines.append(
+            f"👉 <b>{html.escape(r['verdict_label'])} {html.escape(r['ticker'])}</b>: "
+            f"{html.escape(r['instruction'])}"
+        )
+        if r.get("follow_up"):
+            lines.append(f"    {html.escape(r['follow_up'])}")
+        if r.get("when") and r["when"] != today:
+            lines.append(
+                f"    <i>Still open since {html.escape(r['when'])} "
+                f"({html.escape(r['source_label'].lower())}).</i>"
+            )
+    lines.append(
+        "<i>The fund never trades for you. Once placed, record it with /fill — or "
+        "<code>/decisions done TICKER</code> if it is already handled.</i>"
+    )
+    return "\n".join(lines)

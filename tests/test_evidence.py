@@ -462,8 +462,11 @@ def test_parse_verdict_rejects_noise():
     assert paper._parse_verdict("I'm not sure what you mean") is None
 
 
-def test_parse_verdict_defaults_unknown_verdict_to_no():
-    assert paper._parse_verdict('{"verdict": "maybe", "reason": "x"}')["verdict"] == "no"
+def test_parse_verdict_reads_an_unknown_verdict_as_unsettled_not_no():
+    """'maybe' or 'unclear' is a line nobody settled, not a clean bill of health."""
+    assert paper._parse_verdict('{"verdict": "maybe", "reason": "x"}')["verdict"] == "insufficient"
+    assert paper._parse_verdict('{"verdict": "unclear", "reason": "x"}')["verdict"] == "insufficient"
+    assert paper._parse_verdict('{"verdict": "No", "reason": "x"}')["verdict"] == "no"
 
 
 # ── check_kill_criteria with the tri-state verdict ────────────────────────────
@@ -610,12 +613,19 @@ def test_no_evidence_at_all_skips_the_judge(watched_book, monkeypatch, telegram)
 
 
 def test_judge_failure_is_not_a_verdict(watched_book, monkeypatch, telegram):
-    """An API failure must not be recorded as 'intact'."""
+    """An expired key or truncated reply used to read as 'checked, nothing to report'."""
     _pack_stub(monkeypatch)
     monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: None)
-    assert paper.check_kill_criteria(watched_book) == []
+    log = paper.check_kill_criteria(watched_book)
+    assert any("judge failed" in line for line in log)
     _meta, store = paper.open_portfolio(watched_book)
     assert store.get_meta("paper_killverdict:VIT-B.ST") is None
+    assert store.get_meta("paper_killwatch:VIT-B.ST") is None     # retried, not skipped
+
+    monkeypatch.setattr(paper, "_judge_kill_hit", lambda ticker, criterion, pack: {
+        "verdict": "no", "reason": "growth intact", "unchecked": []})
+    paper.check_kill_criteria(watched_book)
+    assert json.loads(store.get_meta("paper_killverdict:VIT-B.ST"))["verdict"] == "no"
 
 
 def test_dashboard_flags_an_unverifiable_criterion(watched_book, monkeypatch):
@@ -714,11 +724,12 @@ def test_price_to_sales_is_mapped_but_not_offered():
 
 
 def test_fraction_flags_match_the_providers_units():
-    """financedata stores yfinance values raw; these are the 0-1 ones."""
+    """financedata stores yfinance values raw; these are the 0-1 ones.
+    dividend_yield is not: Yahoo sends it as a percentage (2.88 = 2.88%)."""
     fractions = {k for k, m in evidence.FUND_FIELD_META.items() if m["is_fraction"]}
     assert fractions == {"profit_margin", "gross_margin", "operating_margin",
                          "ebitda_margin", "roe", "roa", "revenue_growth",
-                         "earnings_growth", "dividend_yield",
+                         "earnings_growth",
                          # derived ratios, already fractions by construction
                          "equity_to_assets", "net_debt_to_assets",
                          "cost_to_income", "fcf_to_net_income"}

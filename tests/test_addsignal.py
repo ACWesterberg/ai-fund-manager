@@ -636,3 +636,38 @@ def test_the_rule_row_separates_price_from_fundamentals(store):
     assert row["drawdown_hit"] is True
     assert row["fundamentals_hit"] is False
     assert row["price_reasons"] and not row["fundamental_reasons"]
+
+
+# ── Currency: the target is native, the review anchor is SEK ──────────────────
+
+def _foreign(store, monkeypatch, *, native, rate, target, review):
+    store.set_meta("paper_currency_map", '{"MSFT": "USD"}')
+    monkeypatch.setattr(paper, "sek_prices_for",
+                        lambda store, tickers, currency_map, nat: {t: p * rate for t, p in nat.items()})
+    _hold(store, "MSFT", shares=10, cost=native * rate)
+    _price(store, "MSFT", native)
+    _horizon(store, "MSFT", 12)
+    addsignal.set_plan(store, "MSFT", book="A", max_weight_pct=90, tranche_pct=1,
+                       target_price=target, review_price=review, proof_confirmed=True,
+                       today=TODAY)
+    return _state(store)
+
+
+def test_a_usd_target_is_valued_against_the_usd_price(store, monkeypatch):
+    """400 USD against a 500 USD target is +25%/yr, not 500 vs 3,800 SEK."""
+    row = _foreign(store, monkeypatch, native=400, rate=9.5, target=500, review=3800)
+    assert row["expected_annual_return"] == pytest.approx(25.0, abs=0.1)
+    assert row["dislocation_pct"] == pytest.approx(0.0)
+    assert row["state"] == addsignal.ADD
+
+
+def test_a_foreign_name_without_a_native_close_is_not_valued(store, monkeypatch):
+    store.set_meta("paper_currency_map", '{"MSFT": "USD"}')
+    monkeypatch.setattr(paper, "sek_prices_for", lambda *a: {"MSFT": 3800.0})
+    _hold(store, "MSFT", shares=10, cost=3800)
+    _horizon(store, "MSFT", 12)
+    addsignal.set_plan(store, "MSFT", book="A", max_weight_pct=90, tranche_pct=1,
+                       target_price=500, review_price=3800, proof_confirmed=True, today=TODAY)
+    row = _state(store)
+    assert row["expected_annual_return"] is None
+    assert row["state"] != addsignal.ADD

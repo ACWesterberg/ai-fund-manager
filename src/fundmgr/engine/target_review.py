@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import html
 
-from fundmgr.config import AppConfig, load_universe
+from fundmgr.config import AppConfig, holding_rows
 from fundmgr.engine.review_common import (
     context_blocks,
     live_price_sek,
     log_review,
     majority,
+    no_majority,
+    no_majority_note,
     run_consensus,
     technicals_block,
     todo_line,
@@ -44,7 +46,10 @@ def find_target_hits(store: Store, cfg: AppConfig | None = None) -> dict:
     fx_on = bool(cfg and cfg.fx_to_sek)
     cur_by_ticker = {}
     if fx_on:
-        cur_by_ticker = {t.yahoo_ticker: t.currency for t in load_universe(cfg.universe_path)}
+        # holding_rows, not the CSV: a name pinned to a symbol the CSV never
+        # listed took SEK by default, so an unchanged DKK holding read as −33%.
+        held = {p.ticker for p in store.get_positions()}
+        cur_by_ticker = {t.yahoo_ticker: t.currency for t in holding_rows(cfg.universe_path, held)}
     fx_cache: dict[str, float] = {}
 
     level_map = store.get_effective_stops()
@@ -61,7 +66,10 @@ def find_target_hits(store: Store, cfg: AppConfig | None = None) -> dict:
             continue
         cur = cur_by_ticker.get(p.ticker, "SEK")
         if fx_on and cur != "SEK":  # native→SEK to compare with SEK cost basis
-            rate = fx_cache.get(cur) or rate_to_sek(cur, store) or 1.0
+            rate = fx_cache.get(cur) or rate_to_sek(cur, store)
+            if not rate:
+                skipped.append({"ticker": p.ticker, "reason": f"no {cur}/SEK rate"})
+                continue
             fx_cache[cur] = rate
             live = live * rate
         chg = (live / p.avg_cost_sek - 1) * 100
@@ -82,9 +90,8 @@ def _build_review_prompt(
     if pos is None:
         return None
 
-    uni = load_universe(cfg.universe_path)
-    name = {t.yahoo_ticker: t.name for t in uni}.get(ticker, ticker)
-    currency = {t.yahoo_ticker: t.currency for t in uni}.get(ticker, "SEK")
+    row = holding_rows(cfg.universe_path, {ticker})[0]
+    name, currency = row.name, row.currency
     levels = store.get_effective_stops().get(ticker, {})
     tp_pct = levels.get("take_profit_pct")
 
@@ -134,25 +141,27 @@ Return the TargetReview JSON."""
     return system, user, tech_live
 
 
-def _vote(reviews: list[TargetReview]) -> tuple[TargetReview, dict[str, int]]:
+def _vote(reviews: list[TargetReview], requested: int | None = None) -> tuple[TargetReview, dict[str, int]]:
     """Majority-vote the recommendation; average confidence among agreeing reviews.
 
     The new target is the median of what the agreeing reviews proposed, so one
     outlier arguing for a wildly higher level cannot set it alone.
     """
-    winner, agreeing, counts = majority(reviews)
+    requested = max(requested or 0, len(reviews))
+    winner, agreeing, counts = majority(reviews, requested)
     best = max(agreeing, key=lambda r: r.confidence)
+    split = no_majority(winner, counts, requested)
 
     targets = sorted(r.new_take_profit_pct for r in agreeing if r.new_take_profit_pct is not None)
-    new_tp = targets[len(targets) // 2] if targets else None
+    new_tp = targets[len(targets) // 2] if targets and not split else None
 
     consensus = TargetReview(
         ticker=best.ticker,
         recommendation=winner,
         confidence=round(sum(r.confidence for r in agreeing) / len(agreeing), 3),
-        trim_pct=best.trim_pct,
+        trim_pct=None if split else best.trim_pct,
         new_take_profit_pct=new_tp,
-        what_changed=best.what_changed,
+        what_changed=no_majority_note(counts, requested, best.what_changed) if split else best.what_changed,
         rationale=best.rationale,
     )
     return consensus, counts
@@ -179,7 +188,8 @@ def review_position(
     if built is None:
         return None
     system, user, native_price = built
-    consensus, votes = _vote(run_consensus(system, user, cfg, TargetReview, "target-review"))
+    consensus, votes = _vote(run_consensus(system, user, cfg, TargetReview, "target-review"),
+                             requested=max(1, cfg.llm.n_samples))
     if log_decision:
         log_review(
             consensus, store, "target_review", native_price,

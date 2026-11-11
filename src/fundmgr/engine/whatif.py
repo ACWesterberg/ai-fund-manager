@@ -55,8 +55,9 @@ WHATIF_DIR = DATA_DIR / "whatif"
 MODEL_OPTIONS: list[dict] = [
     {"provider": "openai",    "model_id": "gpt-5.6-sol",     "label": "GPT-5.6-sol"},
     {"provider": "openai",    "model_id": "gpt-5.5",         "label": "GPT-5.5"},
-    {"provider": "anthropic", "model_id": "claude-opus-4-8", "label": "Claude Opus 4.8"},
-    {"provider": "anthropic", "model_id": "claude-sonnet-5", "label": "Claude Sonnet 5"},
+    {"provider": "anthropic", "model_id": "claude-opus-5-5",  "label": "Claude Opus 5.5"},
+    {"provider": "anthropic", "model_id": "claude-fable-5-2", "label": "Claude Fable 5.2"},
+    {"provider": "anthropic", "model_id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5"},
 ]
 
 MAX_RUNS = 5  # cap on consensus samples per what-if generation

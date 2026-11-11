@@ -16,6 +16,8 @@ map) is kept in that DB's app_meta table; the registry is just the directory.
 from __future__ import annotations
 
 import hashlib
+import logging
+import math
 import json
 import os
 import re
@@ -43,7 +45,10 @@ _SUFFIX_CURRENCY = {
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 def slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    # Fold accents first: "Utländska aktier" → utlandska-aktier, not utl-ndska-aktier.
+    import unicodedata
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
     return slug[:48] or "portfolio"
 
 
@@ -865,7 +870,7 @@ def create_portfolio(
         store.set_meta("paper_benchmark", benchmark)
         store.set_meta("paper_model_label", model_label.strip())
         store.set_meta("paper_created_at", now.strftime("%Y-%m-%d %H:%M"))
-        store.set_meta("paper_kind", kind if kind in ("paper", "live") else "paper")
+        store.set_meta("paper_kind", kind if kind in ("paper", "live", "account") else "paper")
         store.set_meta("paper_base_prompt", base_prompt.strip())
         store.set_meta("paper_currency_map", json.dumps(currency_map))
         store.set_meta("paper_pasted_text", holdings_text.strip())
@@ -991,7 +996,8 @@ def create_portfolio(
             summary = (f"Paper portfolio '{name}' seeded from "
                        f"{model_label.strip() or 'pasted'} picks at live market prices.")
         elif seed_holdings:
-            summary = (f"Live sleeve '{name}' — {len(actions)} holdings imported from "
+            summary = (f"{'Account' if kind == 'account' else 'Live sleeve'} '{name}' — "
+                       f"{len(actions)} holdings imported from "
                        f"{model_label.strip() or 'a portfolio photo'} at their recorded "
                        f"cost basis.")
         else:
@@ -1064,6 +1070,41 @@ def _cost_nav(store: Store) -> float:
     return sum(p.shares * p.avg_cost_sek for p in store.get_positions()) + store.get_cash()
 
 
+def cached_prices_sek(store: Store, currency_map: dict[str, str]) -> dict[str, float]:
+    """Each holding's latest cached close in SEK; a holding with no close or no
+    FX rate is left out."""
+    tickers = [p.ticker for p in store.get_positions()]
+    native = {}
+    for t in tickers:
+        rows = store.get_prices(t)
+        if rows:
+            native[t] = rows[-1]["close"]
+    return sek_prices_for(store, tickers, currency_map, native)
+
+
+def mark_nav(store: Store, prices_sek: dict[str, float]) -> float | None:
+    """Record today's NAV at market prices, or nothing when a holding has none.
+
+    A fill used to write cost-basis NAV over the day's marked point, and the
+    daily mark filled a missing price with cost — the fault the main fund fixed
+    in `_mark_after_ledger_change`, where a gain only counted once it was sold.
+    A NAV with a hole in it reads as a loss and cost basis invents a value, so
+    an incomplete book writes neither and the next complete mark fills the day.
+    """
+    positions = store.get_positions()
+    if any(not prices_sek.get(p.ticker) for p in positions):
+        return None
+    nav = sum(p.shares * prices_sek[p.ticker] for p in positions) + store.get_cash()
+    bench = store.get_benchmark()
+    store.upsert_nav(NavPoint(
+        date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        portfolio_nav_sek=round(nav, 2),
+        benchmark_value=bench[-1]["close"] if bench else 0.0,
+        cash_sek=store.get_cash(),
+    ))
+    return nav
+
+
 def _opt_float(value) -> float | None:
     """Positive float or None — for optional numeric fields off a web form."""
     if value in (None, ""):
@@ -1072,7 +1113,7 @@ def _opt_float(value) -> float | None:
         out = float(str(value).replace(",", ".").strip())
     except (TypeError, ValueError):
         return None
-    return out if out > 0 else None
+    return out if out > 0 and math.isfinite(out) else None
 
 
 def _safe_confidence(value) -> float | None:
@@ -1322,23 +1363,14 @@ def track_portfolio(slug: str) -> list[str]:
     if tickers:
         _cache_price_history(store, tickers, lookback_days=10)
 
-    # NAV at latest cached close (native → SEK); cost basis fallback per position
-    native = {}
-    for t in tickers:
-        rows = store.get_prices(t)
-        if rows:
-            native[t] = rows[-1]["close"]
-    prices_sek = sek_prices_for(store, tickers, meta["currency_map"], native)
-    nav = sum(p.shares * prices_sek.get(p.ticker, p.avg_cost_sek) for p in positions) + store.get_cash()
-
-    bench_rows = store.get_benchmark()
-    store.upsert_nav(NavPoint(
-        date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        portfolio_nav_sek=round(nav, 2),
-        benchmark_value=bench_rows[-1]["close"] if bench_rows else 0.0,
-        cash_sek=store.get_cash(),
-    ))
-    log.append(f"NAV {nav:,.0f} SEK ({len(positions)} positions)")
+    # NAV at latest cached close (native → SEK); nothing when a holding has no price
+    prices_sek = cached_prices_sek(store, meta["currency_map"])
+    nav = mark_nav(store, prices_sek)
+    if nav is None:
+        missing = [p.ticker for p in positions if not prices_sek.get(p.ticker)]
+        log.append(f"NAV not marked — no SEK price for {', '.join(missing)}")
+    else:
+        log.append(f"NAV {nav:,.0f} SEK ({len(positions)} positions)")
 
     # Fundamentals for the kill judge: refresh the cache and snapshot it, so a
     # criterion phrased around growth or margins has both a current number and a
@@ -1431,14 +1463,17 @@ def track_portfolio(slug: str) -> list[str]:
         evaluate_pending_outcomes,
         generate_learnings,
         generate_qualitative_learnings,
+        learning_batch,
+        settle_learning_batch,
     )
     from fundmgr.config import AppConfig
     from fundmgr.engine.thesis_check import verify_theses
     # A paper book has no fund config; the default horizon applies.
     horizon = AppConfig().evaluation_horizon_days
     evaluated = evaluate_pending_outcomes(store, lookback_days=horizon)
-    if evaluated:
-        funnel = verify_theses(store, evaluated, lookback_days=horizon)
+    batch = learning_batch(store, evaluated)
+    if batch:
+        funnel = verify_theses(store, batch, lookback_days=horizon)
         verdicts = ", ".join(f"{n} {v}" for v, n in sorted(funnel["verdicts"].items()))
         log.append(
             f"Thesis check: {funnel['outcomes']} outcome(s) → "
@@ -1448,9 +1483,11 @@ def track_portfolio(slug: str) -> list[str]:
         stat = generate_learnings(store, horizon_days=horizon)
         # A paper book has no fund config of its own: the lesson writer comes
         # from the default config, the book's own benchmark from its meta.
+        lesson_report: dict = {}
         qual = generate_qualitative_learnings(
-            store, evaluated, benchmark_label=meta.get("benchmark")
+            store, batch, benchmark_label=meta.get("benchmark"), report=lesson_report
         )
+        settle_learning_batch(store, batch, bool(funnel.get("failed") or lesson_report.get("failed")))
         log.append(f"Evaluated {len(evaluated)} outcomes → "
                    f"{len(stat)} calibration + {len(qual)} qualitative learnings")
     return log
@@ -1493,13 +1530,17 @@ def check_kill_criteria(slug: str, store: Store | None = None) -> list[str]:
         if store.get_meta(f"paper_killwatch:{ticker}") == today:
             continue  # already checked today
         pack = build_pack(store, ticker)
-        store.set_meta(f"paper_killwatch:{ticker}", today)
         if not (pack["news"] or pack["fundamentals"]):
+            store.set_meta(f"paper_killwatch:{ticker}", today)
             continue  # nothing to judge against at all
 
         result = _judge_kill_hit(ticker, criterion, pack)
         if result is None:
+            # Not stamped as checked: an expired key, exhausted quota or a
+            # truncated reply used to read as "checked today, nothing to report".
+            log.append(f"⚠ {ticker}: kill-criterion judge failed — not checked, will retry")
             continue
+        store.set_meta(f"paper_killwatch:{ticker}", today)
         store.set_meta(f"paper_killverdict:{ticker}", json.dumps({
             "date": today, **result, "coverage": pack["coverage"],
         }))
@@ -1637,7 +1678,8 @@ def _judge_kill_hit(ticker: str, criterion: str, pack: dict) -> dict | None:
         except Exception:
             resp = client.chat.completions.create(**kwargs)
         return _parse_verdict((resp.choices[0].message.content or "").strip())
-    except Exception:
+    except Exception as exc:
+        logging.getLogger(__name__).warning("kill judge for %s failed: %s", ticker, exc)
         return None
 
 
@@ -1664,10 +1706,12 @@ def _parse_verdict(answer: str) -> dict | None:
             unchecked = []
         if verdict.startswith("yes"):
             verdict = "yes"
-        elif verdict.startswith("insuff"):
-            verdict = "insufficient"
-        else:
+        elif verdict.startswith("no"):
             verdict = "no"
+        else:
+            # "unclear", "partially", "insufficient": anything but a plain no is
+            # a line that wasn't settled, never a clean bill of health.
+            verdict = "insufficient"
         return {
             "verdict": verdict,
             "reason": str(data.get("reason") or "").strip(),

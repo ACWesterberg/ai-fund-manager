@@ -1,4 +1,8 @@
 name: "🧱 Buffett Screen — Claude"
+# Paused 2026-10-09 to save API cost while the real Nordic book is the focus.
+# Holdings are frozen (no runs, reviews, optimizer or stop trades) and still
+# valued daily by check-stops. Delete this line to resume.
+paused: true
 capital_sek: 1000000
 cadence: weekly
 benchmark: "URTH"           # iShares MSCI World ETF — proxy for MSCI World total return
@@ -9,7 +13,7 @@ universe_path: "config/universe_buffett.csv"
 
 llm:
   provider: anthropic
-  model_id: "claude-opus-4-8"
+  model_id: "claude-opus-5-5"
   max_tokens: 32000        # thinking tokens share this budget; streamed (see _call_anthropic)
   reasoning_effort: "high"  # low | medium | high — maps to Opus adaptive thinking + effort (parity with the GPT funds)
   n_samples: 3

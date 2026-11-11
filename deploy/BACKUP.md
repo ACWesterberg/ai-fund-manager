@@ -61,6 +61,13 @@ rclone ls gdrive:fund-manager-backups     # should show a fund-backup-*.tgz
 
 Retention defaults to 14 days (local + remote). Override with `RETENTION_DAYS`.
 
+The run archive (`data/archive/<fund>/<run_id>.json.gz`, one immutable file per
+weekly run: every screened name's score and features plus the raw fundamentals
+cache) is **not** in the tarball and **not** pruned. It is copied incrementally to
+`RCLONE_ARCHIVE_REMOTE` (default `gdrive:fund-manager-backups-archive`). It holds
+point-in-time history that cannot be re-downloaded, so restore or move it with the
+databases: `rclone copy gdrive:fund-manager-backups-archive data/archive`.
+
 ## 5. Restore (after a card failure / new SD)
 
 ```bash

@@ -82,6 +82,8 @@ features + screen (top_n, held/pinned forced in) ──▶ news + FinBERT (candi
 
 News and FinBERT run on **screener candidates only**, never the full universe — that is the step that would otherwise dominate the run.
 
+Each saved run also writes `data/archive/<fund>/<run_id>.json.gz` (`state/archive.py`): every screened name's score, rank and features plus the raw fundamentals cache, and `sampling_log` keeps each consensus sample. These are the inputs that cannot be re-downloaded later — the screener baseline, the unbought candidates and the minority proposals. Advisory: a failed write never stops a run.
+
 ---
 
 ## The What-If Lab (`/whatif`)
@@ -186,6 +188,7 @@ src/fundmgr/data/prices.py         TickerFeatures + feature build
 src/fundmgr/data/release.py        Statement/report reading (gpt-4o-mini)
 src/fundmgr/paper.py               Sleeves: create_portfolio, parse_structured_portfolio, kill judging
 src/fundmgr/watchplan.py           Kill/add criteria plumbing
+src/fundmgr/state/archive.py       Per-run point-in-time archive: every screened name + raw fundamentals
 src/fundmgr/state/store.py         SQLite — positions, cash, transactions, recommendations,
                                    decision_outcomes, learnings, caches, stops, alerts, reviews
 src/fundmgr/web/app.py             FastAPI; mounts /sim* per fund, /paper, /live, /whatif

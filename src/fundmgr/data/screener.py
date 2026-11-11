@@ -142,6 +142,11 @@ def _score(feat: TickerFeatures) -> float:
     return round(score, 3)
 
 
+def score_all(features: dict[str, TickerFeatures]) -> dict[str, float]:
+    """The screener's raw score for every name, before quotas or forced inclusions."""
+    return {t: _score(f) for t, f in features.items()}
+
+
 def screen(
     features: dict[str, TickerFeatures],
     held_tickers: set[str],

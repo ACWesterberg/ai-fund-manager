@@ -1,0 +1,62 @@
+<script>
+(function () {
+  let rawData = null;
+
+  async function loadChart(period) {
+    if (!rawData) {
+      const res = await fetch('{{ api_base|default("") }}/api/nav');
+      rawData = await res.json();
+    }
+    if (!rawData.data || !rawData.data.length) return;
+
+    let cutoff = null;
+    if (period !== 'all') {
+      const d = new Date();
+      if (period === '1m') d.setMonth(d.getMonth() - 1);
+      if (period === '3m') d.setMonth(d.getMonth() - 3);
+      cutoff = d.toISOString().slice(0, 10);
+    }
+
+    const traces = rawData.data.map(trace => {
+      if (!cutoff) return trace;
+      const keep = (trace.x || []).map((x, i) => x >= cutoff ? i : -1).filter(i => i >= 0);
+      return { ...trace, x: keep.map(i => trace.x[i]), y: keep.map(i => trace.y[i]) };
+    });
+
+    const darkLayout = {
+      ...rawData.layout,
+      paper_bgcolor: 'transparent',
+      plot_bgcolor:  'transparent',
+      font:          { color: '#475569', size: 11, family: 'Inter, sans-serif' },
+      margin:        { l: 40, r: 10, t: 10, b: 30 },
+      legend:        { font: { color: '#475569', size: 11 }, bgcolor: 'transparent' },
+      xaxis: {
+        ...(rawData.layout.xaxis || {}),
+        gridcolor: '#1e293b', linecolor: '#1e293b', tickfont: { color: '#475569' },
+      },
+      yaxis: {
+        ...(rawData.layout.yaxis || {}),
+        gridcolor: '#1e293b', linecolor: '#1e293b', tickfont: { color: '#475569' },
+      },
+    };
+
+    {% if compact_chart %}
+    // The "Date" axis title and a side legend take a third of a phone-width chart.
+    darkLayout.xaxis = { ...darkLayout.xaxis, title: '', nticks: 5 };
+    darkLayout.legend = { ...darkLayout.legend, orientation: 'h', x: 0, y: 1.12 };
+    darkLayout.margin = { l: 34, r: 6, t: 24, b: 26 };
+    {% endif %}
+    Plotly.react('nav-chart', traces, darkLayout, { responsive: true, displayModeBar: false });
+  }
+
+  document.querySelectorAll('.ptab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.ptab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadChart(btn.dataset.period);
+    });
+  });
+
+  loadChart('all');
+})();
+</script>

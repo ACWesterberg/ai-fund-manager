@@ -28,7 +28,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from fundmgr import paper, regions, styles, watchplan
+from fundmgr import addsignal, paper, regions, styles, watchplan
 from fundmgr.engine import sleeve_review
 from fundmgr.reporting.dashboard import benchmark_label, compute_stats, nav_chart_json
 
@@ -310,6 +310,124 @@ def _add_status(store) -> dict | None:
     }
 
 
+def _holding_names(store) -> dict[str, str]:
+    """Company names for a sleeve's tickers, read from what the import pasted.
+
+    Names are not stored per position; the pasted holdings (JSON from a photo
+    or a structured import) are the only place they survive. Fails open to an
+    empty map — a missing name only costs the subtitle.
+    """
+    try:
+        data = json.loads(store.get_meta("paper_pasted_text") or "")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if isinstance(data, dict):
+        data = data.get("positions") or data.get("holdings") or []
+    out: dict[str, str] = {}
+    for row in data if isinstance(data, list) else []:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker") or "").strip().upper()
+        name = str(row.get("name") or "").strip()
+        if ticker and name and name.upper() != ticker:
+            out[ticker] = name
+    return out
+
+
+_ACTIONABLE_ADDS = ("add", "strong-add")
+
+
+def _sleeve_view(positions_data: list[dict], watch: dict | None,
+                 adds: dict | None, names: dict[str, str]) -> dict:
+    """One row per holding for the live-sleeve page, plus what needs acting on.
+
+    The Watch, Add-signal and Open-positions panels each listed every holding,
+    so one stock appeared three times with its weight five times. This joins
+    them by ticker and reads the attention flags straight off the watch and
+    add rows — the same flags the Telegram alerts fire on — rather than
+    deriving new ones.
+    """
+    pos_by = {p["ticker"]: p for p in positions_data}
+    watch_by = {r["ticker"]: r for r in (watch or {}).get("rows") or []}
+    add_by = {r["ticker"]: r for r in (adds or {}).get("rows") or []}
+    tickers = list(dict.fromkeys(list(watch_by) + list(pos_by) + list(add_by)))
+    max_weight = max([p["weight_pct"] for p in positions_data] or [0])
+
+    holdings, attention = [], []
+    for t in tickers:
+        p, w, a = pos_by.get(t), watch_by.get(t), add_by.get(t)
+        weight = p["weight_pct"] if p else 0.0
+        target = (w or {}).get("target_pct")
+        # With a target, the bar spans up to the rebalance threshold (1.5×), so
+        # its end is where the drift alert fires and the tick is the target.
+        if target:
+            span = target * 1.5
+            bar_pct, tick_pct = min(weight / span * 100, 100), 100 / 1.5
+        else:
+            bar_pct = (weight / max_weight * 100) if max_weight else 0
+            tick_pct = None
+        gap = None
+        if w and w.get("max_drawdown_pct") and w.get("drawdown_pct") is not None:
+            gap = round(w["drawdown_pct"] + abs(w["max_drawdown_pct"]), 1)
+
+        flags = []
+        if w:
+            if w["dd_breached"]:
+                flags.append(("red", "Kill line breached",
+                              f"−{w['max_drawdown_pct']:g}% from "
+                              f"{'review' if w['drawdown_basis'] == 'review' else 'cost'}"
+                              f", now {w['drawdown_pct']:+.1f}%"))
+            if w["kill_verdict"] == "yes":
+                flags.append(("red", "Kill criterion may be triggering", w["kill_reason"]))
+            if w["horizon_due"]:
+                when = ("due today" if w["days_left"] == 0
+                        else f"{-w['days_left']}d overdue")
+                flags.append(("red", f"Horizon {when}",
+                              w["horizon_note"] or f"re-run the thesis ({w['horizon_date']})"))
+            elif w["horizon_near"]:
+                flags.append(("amber", f"Horizon in {w['days_left']}d",
+                              w["horizon_note"] or f"review by {w['horizon_date']}"))
+            if w["over"]:
+                flags.append(("amber", f"Drift {w['ratio']:.2f}× target",
+                              f"{w['weight_pct']:.1f}% vs {w['target_pct']:.1f}% target"
+                              " — rebalance"))
+        if a and a["state"] in _ACTIONABLE_ADDS:
+            flags.append(("emerald", "Strong add" if a["state"] == "strong-add" else "Add",
+                          a["why"]))
+        for tone, label, detail in flags:
+            attention.append({"ticker": t, "tone": tone, "label": label, "detail": detail})
+
+        holdings.append({
+            "ticker": t,
+            "name": names.get(t, ""),
+            "held": p is not None,
+            "pos": p,
+            "w": w,
+            "a": a,
+            "value": (p["current_value"] if p["current_value"] is not None
+                      else p["cost_value"]) if p else None,
+            "weight_pct": weight,
+            "target_pct": target,
+            "bar_pct": round(bar_pct, 1),
+            "tick_pct": round(tick_pct, 1) if tick_pct else None,
+            "pnl_pct": p["pnl_pct"] if p else None,
+            "kill_gap_pp": gap,
+            "flags": flags,
+            "urgent": any(tone == "red" for tone, *_ in flags),
+        })
+
+    holdings.sort(key=lambda h: (not h["urgent"], not h["flags"], not h["held"],
+                                 -(h["value"] or 0), h["ticker"]))
+    capex = (watch or {}).get("capex")
+    if capex and capex["status"] == "triggered":
+        attention.insert(0, {"ticker": "", "tone": "red",
+                             "label": "Portfolio capex kill triggered",
+                             "detail": capex["action"] or capex["trigger"]})
+    tone_order = {"red": 0, "amber": 1, "emerald": 2}
+    attention.sort(key=lambda r: tone_order[r["tone"]])
+    return {"holdings": holdings, "attention": attention}
+
+
 def _kill_verdicts(store, tickers: list[str]) -> dict[str, dict]:
     """Last judge verdict per ticker, for the Watch panel's criterion column.
 
@@ -379,6 +497,7 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "sim_label": meta["name"],
             "sim_accent": accent,
             "sim_banner": banner,
+            "model_label": model or "",
             "api_base": book_prefix,
             # per-book sidebar sub-nav (see base.html)
             "book_section": kind,
@@ -1178,7 +1297,18 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
                 "profile_risk": _profile_risk(defaults["config"]),
             }
 
-        return _render("index.html", {
+        watch = _watch_status(store, positions_data) if real else None
+        adds = _add_status(store) if real else None
+        sleeve = None
+        if real:
+            sleeve = _sleeve_view(positions_data, watch, adds, _holding_names(store))
+            # A photo or JSON import is saved as the book's first decision, so
+            # the panel replayed it as "8 BUY conf 0.00" — a decision nobody made.
+            if last_run and last_run["run_id"].startswith("paper-"):
+                last_run = None
+
+        # Live sleeves have their own page; paper books keep the fund dashboard.
+        return _render("sleeve.html" if real else "index.html", {
             "request": request,
             "positions": positions_data,
             "cash": cash,
@@ -1192,8 +1322,10 @@ def make_portfolio_router(prefix: str, kind: str, section_label: str,
             "pnl_pct": pnl_pct,
             "active_page": "portfolio",
             # Live sleeves only — paper books keep the plain simulation framing.
-            "watch": _watch_status(store, positions_data) if real else None,
-            "adds": _add_status(store) if real else None,
+            "watch": watch,
+            "adds": adds,
+            "sleeve": sleeve,
+            "add_gates": addsignal.BOOK_GATES,
             "review": review,
             "flash": flash,
             "recent_fills": transaction_rows(store.get_transactions(limit=5)),

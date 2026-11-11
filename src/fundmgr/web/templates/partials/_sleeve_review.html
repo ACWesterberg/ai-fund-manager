@@ -1,0 +1,466 @@
+{# Run a review — live sleeves only. Included by sleeve.html. #}
+<section class="card sl-action">
+  <details id="rv-details">
+    <summary class="sl-action-sum">
+      <span class="material-symbols-outlined text-sky-400" style="font-size:18px">radar</span>
+      <span class="card-title">Review this sleeve</span>
+      <span class="sl-action-hint">re-decide against what it holds today — hold, trim, exit, add</span>
+      <span class="material-symbols-outlined sl-chev">expand_more</span>
+    </summary>
+
+    {% set rcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
+    <div class="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+      <div class="col-span-2 md:col-span-1">
+        <label class="kpi-label" for="rv-config">Universe &amp; risk limits</label>
+        <select id="rv-config" class="{{ rcls }}">
+          {% for p in review.profiles %}
+          <option value="{{ p.config }}" {% if p.config == review.config %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-span-2 md:col-span-1">
+        <label class="kpi-label" for="rv-country">Search scope</label>
+        <select id="rv-country" class="{{ rcls }}">
+          <option value="">Global — every country</option>
+          {% for s in review.scopes %}
+          <option value="{{ s.code }}" {% if s.code == review.country %}selected{% endif %}>{{ s.label }} ({{ s.count }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="kpi-label" for="rv-model">Model</label>
+        <select id="rv-model" class="{{ rcls }}">
+          <option value="">Profile default</option>
+          {% for m in review.models %}
+          <option value="{{ m.provider }}|{{ m.model_id }}">{{ m.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="kpi-label" for="rv-runs">Consensus runs</label>
+        <input id="rv-runs" type="number" min="1" max="{{ review.max_runs }}" value="1" class="{{ rcls }}" />
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <label class="flex items-center gap-2 text-[11px] text-slate-400">
+          <input id="rv-macro" type="checkbox" checked class="accent-sky-500" /> Include macro context
+        </label>
+        <label class="flex items-center gap-2 text-[11px] text-slate-400">
+          <input id="rv-refresh" type="checkbox" checked class="accent-sky-500" /> Refresh candidate prices
+        </label>
+      </div>
+    </div>
+
+    <details class="mt-3">
+      <summary class="text-[11px] text-slate-500 cursor-pointer hover:text-slate-400">
+        Risk limits for this sleeve — leave blank to use the profile's
+      </summary>
+      <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div>
+          <label class="kpi-label" for="rv-turnover">Max turnover %</label>
+          <input id="rv-turnover" type="number" min="1" max="100" step="1"
+                 value="{{ review.risk.max_turnover_pct or '' }}"
+                 placeholder="{{ review.profile_risk.max_turnover_pct }}" class="{{ rcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="rv-maxpos">Max position %</label>
+          <input id="rv-maxpos" type="number" min="1" max="100" step="1"
+                 value="{{ review.risk.max_position_pct or '' }}"
+                 placeholder="{{ review.profile_risk.max_position_pct }}" class="{{ rcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="rv-npos">Max positions</label>
+          <input id="rv-npos" type="number" min="1" max="60" step="1"
+                 value="{{ review.risk.max_positions or '' }}"
+                 placeholder="{{ review.profile_risk.max_positions }}" class="{{ rcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="rv-mincash">Min cash %</label>
+          <input id="rv-mincash" type="number" min="0" max="100" step="1"
+                 value="{{ review.risk.min_cash_pct or '' }}"
+                 placeholder="{{ review.profile_risk.min_cash_pct }}" class="{{ rcls }}" />
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+        A swap costs turnover twice — exiting an 18% position and replacing it is 36% — so the
+        profile's rebalance cap often truncates exactly the paired trades a review produces.
+        Raise the turnover cap here if reviews come back emptier than the reasoning suggests.
+      </p>
+    </details>
+
+    <details class="mt-3">
+      <summary class="text-[11px] text-slate-500 cursor-pointer hover:text-slate-400">
+        Regional mix for this sleeve — <span id="rv-region-summary">{% if review.region_targets %}{{ review.region_targets|length }} region(s) targeted{% else %}none set{% endif %}</span>
+      </summary>
+      <div class="mt-3 grid grid-cols-2 md:grid-cols-6 gap-3">
+        {% for r in review.regions %}
+        <div>
+          <label class="kpi-label" for="rv-rg-{{ r.code }}">{{ r.label }}</label>
+          <input id="rv-rg-{{ r.code }}" data-region="{{ r.code }}" type="number" min="0" max="100" step="any"
+                 value="{{ review.region_targets.get(r.code, '') }}" placeholder="any"
+                 class="rv-region {{ rcls }}" />
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3 flex flex-wrap items-end gap-3">
+        <div style="max-width:9rem">
+          <label class="kpi-label" for="rv-rg-tol">Tolerance (± pp)</label>
+          <input id="rv-rg-tol" type="number" min="0" max="100" step="any"
+                 value="{{ review.region_tolerance_pct }}" class="{{ rcls }}" />
+        </div>
+        <button id="rv-rg-clear" type="button"
+                class="px-3 py-2 rounded-lg border border-slate-700/60 text-[11px] text-slate-400 hover:text-slate-200">
+          Clear the mix
+        </button>
+        <p id="rv-region-hint" class="text-[11px] text-slate-600 flex-1 min-w-[16rem] leading-relaxed"></p>
+      </div>
+      <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+        Percentages are of NAV, and the mix is remembered for the next review — a sleeve promoted from a
+        what-if arrives carrying the one it was generated under. Blank is unconstrained; an explicit
+        <b>0</b> excludes a region and drops its names from the candidate list. The ceiling
+        (target + tolerance) is enforced by the guardrails; the floor is not, because no guardrail can
+        force a buy, so a region left short is reported below rather than filled.
+      </p>
+    </details>
+
+    <details class="mt-3">
+      <summary class="text-[11px] text-slate-500 cursor-pointer hover:text-slate-400">
+        Risk &amp; quality mix for this sleeve — <span id="rv-style-summary">{% if review.style_targets %}{{ review.style_targets|length }} style(s) targeted{% else %}none set{% endif %}</span>
+      </summary>
+      <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+        {% for st in review.styles %}
+        <div>
+          <label class="kpi-label" for="rv-sg-{{ st.code }}">{{ st.label }}</label>
+          <input id="rv-sg-{{ st.code }}" data-style="{{ st.code }}" type="number" min="0" max="100" step="any"
+                 value="{{ review.style_targets.get(st.code, '') }}" placeholder="any"
+                 class="rv-style {{ rcls }}" />
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3 flex flex-wrap items-end gap-3">
+        <div style="max-width:9rem">
+          <label class="kpi-label" for="rv-sg-tol">Tolerance (± pp)</label>
+          <input id="rv-sg-tol" type="number" min="0" max="100" step="any"
+                 value="{{ review.style_tolerance_pct }}" class="{{ rcls }}" />
+        </div>
+        <button id="rv-sg-clear" type="button"
+                class="px-3 py-2 rounded-lg border border-slate-700/60 text-[11px] text-slate-400 hover:text-slate-200">
+          Clear the mix
+        </button>
+        <p id="rv-style-hint" class="text-[11px] text-slate-600 flex-1 min-w-[16rem] leading-relaxed"></p>
+      </div>
+      <div class="mt-3">
+        <label class="kpi-label" for="rv-sg-brief">Extra brief (optional)</label>
+        <textarea id="rv-sg-brief" rows="2" maxlength="1000"
+                  placeholder="e.g. lean towards founder-led businesses; nothing that listed in the last year"
+                  class="{{ rcls }}">{{ review.style_brief }}</textarea>
+      </div>
+      <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+        Names are picked from the source profile's own universe — asking a Global review for quality
+        gets the best quality names in that universe, never names imported from the Buffett screen.
+        A style is read off reported fundamentals and realised volatility, so a name whose figures
+        haven't landed is <b>Unclassified</b>: counted towards no target and blocked by none, which
+        means these caps under-count rather than bind tightly. The brief steers selection inside the
+        mandate and the limits; it relaxes neither.
+      </p>
+    </details>
+
+    <div class="mt-4 flex flex-wrap items-center gap-3">
+      <button id="rv-run" type="button"
+              class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white disabled:opacity-40">
+        Run review
+      </button>
+      <span id="rv-status" class="text-xs text-slate-500"></span>
+    </div>
+    <p class="text-[11px] text-slate-600 mt-2 leading-relaxed">
+      No new capital is assumed: every buy is funded from cash on hand plus the sells in the same run, inside the
+      profile's turnover cap. Nothing is executed — record the fills you actually make.
+      A wider scope searches more names; a single country covers that market far more thoroughly.
+    </p>
+
+    <div id="rv-result" class="hidden mt-4"></div>
+  </details>
+</section>
+
+<script>
+(function () {
+  const details = document.getElementById('rv-details');
+  const btn     = document.getElementById('rv-run');
+  const status  = document.getElementById('rv-status');
+  const out     = document.getElementById('rv-result');
+  const cfgSel  = document.getElementById('rv-config');
+  const cSel    = document.getElementById('rv-country');
+  const ACTION  = {{ review.action|tojson }};
+  const JOBS    = {{ review.jobs_url|tojson }};
+  const SCOPES  = {{ review.scopes_url|tojson }};
+  const RESUME  = {{ review.job|tojson }};
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // Scope list belongs to the selected profile's universe — repopulate on change.
+  cfgSel.addEventListener('change', async () => {
+    const keep = cSel.value;
+    try {
+      const r = await fetch(`${SCOPES}?config=${encodeURIComponent(cfgSel.value)}`);
+      if (!r.ok) return;
+      const { scopes } = await r.json();
+      cSel.innerHTML = '<option value="">Global — every country</option>' +
+        scopes.map(s => `<option value="${esc(s.code)}">${esc(s.label)} (${s.count})</option>`).join('');
+      if ([...cSel.options].some(o => o.value === keep)) cSel.value = keep;
+    } catch (e) { /* keep the previous list */ }
+  });
+
+  // Blank means unconstrained and 0 means excluded, so a blank is dropped and a
+  // zero is kept — unlike the risk caps above, where blank means "leave the
+  // stored value alone". The mix is always sent as submitted, which is what
+  // makes "Clear the mix" able to clear it.
+  function regionTargets() {
+    const out = {};
+    document.querySelectorAll('.rv-region').forEach(inp => {
+      const raw = (inp.value || '').trim();
+      if (raw === '') return;
+      const val = Number(raw);
+      if (Number.isFinite(val) && val >= 0 && val <= 100) out[inp.dataset.region] = val;
+    });
+    return out;
+  }
+
+  function refreshRegionHint() {
+    const targets = regionTargets();
+    const codes = Object.keys(targets);
+    const total = codes.reduce((s, c) => s + targets[c], 0);
+    const summary = document.getElementById('rv-region-summary');
+    const hint = document.getElementById('rv-region-hint');
+    summary.textContent = codes.length
+      ? codes.map(c => `${c.replace(/_/g, ' ')} ${targets[c]}%`).join(' · ')
+      : 'none set';
+    if (!codes.length) { hint.textContent = ''; return; }
+    hint.textContent = total > 100
+      ? `⚠ the targets add up to ${total}% of NAV — they cannot exceed 100%.`
+      : `${total}% of NAV allocated by this mix · ${100 - total}% unconstrained.`;
+    hint.className = total > 100
+      ? 'text-[11px] text-amber-400 flex-1 min-w-[16rem] leading-relaxed'
+      : 'text-[11px] text-slate-600 flex-1 min-w-[16rem] leading-relaxed';
+  }
+
+  document.querySelectorAll('.rv-region').forEach(
+    inp => inp.addEventListener('input', refreshRegionHint));
+  document.getElementById('rv-rg-clear').addEventListener('click', () => {
+    document.querySelectorAll('.rv-region').forEach(inp => { inp.value = ''; });
+    refreshRegionHint();
+  });
+  refreshRegionHint();
+
+  function styleTargets() {
+    const out = {};
+    document.querySelectorAll('.rv-style').forEach(inp => {
+      const raw = (inp.value || '').trim();
+      if (raw === '') return;
+      const val = Number(raw);
+      if (Number.isFinite(val) && val >= 0 && val <= 100) out[inp.dataset.style] = val;
+    });
+    return out;
+  }
+
+  function refreshStyleHint() {
+    const targets = styleTargets();
+    const codes = Object.keys(targets);
+    const total = codes.reduce((s, c) => s + targets[c], 0);
+    const summary = document.getElementById('rv-style-summary');
+    const hint = document.getElementById('rv-style-hint');
+    summary.textContent = codes.length
+      ? codes.map(c => `${c.replace(/_/g, ' ')} ${targets[c]}%`).join(' · ')
+      : 'none set';
+    if (!codes.length) { hint.textContent = ''; return; }
+    hint.textContent = total > 100
+      ? `⚠ the targets add up to ${total}% of NAV — they cannot exceed 100%.`
+      : `${total}% of NAV allocated by this mix · ${100 - total}% unconstrained.`;
+    hint.className = total > 100
+      ? 'text-[11px] text-amber-400 flex-1 min-w-[16rem] leading-relaxed'
+      : 'text-[11px] text-slate-600 flex-1 min-w-[16rem] leading-relaxed';
+  }
+
+  document.querySelectorAll('.rv-style').forEach(
+    inp => inp.addEventListener('input', refreshStyleHint));
+  document.getElementById('rv-sg-clear').addEventListener('click', () => {
+    document.querySelectorAll('.rv-style').forEach(inp => { inp.value = ''; });
+    refreshStyleHint();
+  });
+  refreshStyleHint();
+
+  // A new name arrives with the monitoring that will watch it. Showing it here
+  // is the only chance to disagree before it is written into the plan.
+  function planLine(p) {
+    const bits = [];
+    if (p.target_price)   bits.push(`target ${(+p.target_price).toLocaleString()}`);
+    if (p.max_weight_pct) bits.push(`max ${p.max_weight_pct}%`);
+    if (p.tranche_pct)    bits.push(`tranche +${p.tranche_pct}pp`);
+    if (p.next_earnings)  bits.push(`earnings ${esc(p.next_earnings)}`);
+    let out = '';
+    if (p.kill_criterion) out += `<br><span class="text-slate-400">kill:</span> ${esc(p.kill_criterion)}`;
+    if (p.add_criterion)  out += `<br><span class="text-slate-400">add:</span> ${esc(p.add_criterion)}`;
+    if (bits.length)      out += `<br><span class="text-slate-400">plan:</span> ${bits.join(' · ')}`;
+    return out;
+  }
+
+  // Where the book this review would leave lands against its mix. Only worth
+  // showing when one was set — otherwise it is a table of one column of noise.
+  function mixLines(mix, title) {
+    const rows = (mix && mix.rows) || [];
+    if (!mix || !Object.keys(mix.targets || {}).length || !rows.length) return '';
+    const cells = rows.filter(r => r.target_pct != null).map(r => {
+      const cls = r.status === 'on_target' ? 'text-emerald-400'
+                : r.status === 'short' ? 'text-amber-400'
+                : r.status === 'over' ? 'text-red-400' : 'text-slate-500';
+      return `<span class="${cls}">${esc(r.label)} ${r.achieved_pct.toFixed(1)}%` +
+             ` / ${r.target_pct.toFixed(0)}%</span>`;
+    }).join('<span class="text-slate-700"> · </span>');
+    const notes = (mix.shortfalls || []).map(
+      line => `<p class="text-[11px] text-amber-400/90">⚠ ${esc(line)}</p>`).join('');
+    // A style cap measures only what it could classify — say by how much.
+    const gap = mix.unclassified_candidates
+      ? `<p class="text-[11px] text-slate-500">${mix.unclassified_candidates} candidate(s) had no
+         style verdict, so these caps under-count by that much.</p>` : '';
+    return `<div class="mb-3"><p class="text-[11px] text-slate-500 mb-0.5">${esc(title)}</p>
+            <p class="text-xs">${cells}</p>${notes}${gap}</div>`;
+  }
+
+  function render(res) {
+    const rows = res.actions.map(a => {
+      const cls = a.side === 'buy' ? 'badge-buy' : (a.side === 'sell' ? 'badge-sell' : 'badge-hold');
+      const dim = a.approved ? '' : 'opacity:.45';
+      const tag = a.add_on && a.approved
+        ? ' <span class="badge" style="background:rgba(14,165,233,.15);color:#38bdf8">NEW</span>' : '';
+      return `<tr style="${dim}">
+          <td><span class="badge ${cls}">${esc(a.side.toUpperCase())}</span>
+              <span class="text-white font-medium ml-1">${esc(a.ticker)}</span>${tag}</td>
+          <td class="num ${a.shares ? 'text-white font-semibold' : 'text-slate-600'}">${
+              a.shares ? (+a.shares).toLocaleString(undefined, {maximumFractionDigits: 4}) : '—'}</td>
+          <td class="num text-slate-300">${a.sek_estimate.toLocaleString()}</td>
+          <td class="num text-slate-300">${a.target_weight_pct}%</td>
+          <td class="num text-slate-300">${a.confidence.toFixed(2)}</td>
+          <td class="text-slate-500" style="font-size:10px">${esc(a.status)}${a.reason ? ' — ' + esc(a.reason) : ''}</td>
+        </tr>
+        <tr style="${dim}"><td colspan="6" class="text-slate-500"
+            style="font-size:10px;padding-top:0;padding-bottom:6px">${esc(a.thesis)}${
+              a.plan ? planLine(a.plan) : ''}</td></tr>`;
+    }).join('');
+
+    out.innerHTML = `
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <span class="badge badge-buy">${res.buy_count} buy</span>
+        <span class="badge badge-sell">${res.sell_count} sell</span>
+        <span class="badge badge-hold">${res.hold_count} hold</span>
+        <span class="text-xs text-slate-500">${res.add_on_count} new name(s) · ${esc(res.scope.label)}</span>
+      </div>
+      <p class="text-[11px] text-slate-600 mb-3">
+        ${esc(res.model.provider)}/${esc(res.model.model_id)} × ${res.model.n_runs} ·
+        limits ${res.risk.max_turnover_pct}% turnover / ${res.risk.max_position_pct}% position${
+          Object.keys(res.risk.applied).length ? ' (this sleeve\u2019s own)' : ''} ·
+        ${res.data.candidates_to_llm} candidates of ${res.data.features_built} priced
+        (median age ${res.data.median_age_days ?? '—'}d, ${res.data.stale_count} stale) ·
+        cash ${res.cash_sek.toLocaleString()} → ${res.funded_cash_sek.toLocaleString()} SEK after these sells ·
+        ${res.elapsed_s}s
+      </p>
+      ${res.market_summary ? `<p class="text-xs text-slate-400 leading-relaxed mb-3">${esc(res.market_summary)}</p>` : ''}
+      <div class="overflow-x-auto -mx-1 mb-3">
+        <table class="data-table" style="font-size:11px">
+          <thead><tr><th>Ticker</th><th class="num">Shares</th><th class="num">≈ SEK</th>
+                     <th class="num">Weight</th><th class="num">Conf</th>
+                     <th>Guardrails</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      ${res.turnover.dropped ? `<p class="text-xs text-amber-400 mb-3">
+        ⚠ ${res.turnover.dropped} trade(s) dropped by the turnover cap — the model proposed
+        ${res.turnover.proposed_sek.toLocaleString()} SEK against a cap of
+        ${res.turnover.cap_sek.toLocaleString()} SEK (${res.turnover.cap_pct}% of NAV).
+        Raise “Max turnover %” above and run again.</p>` : ''}
+      ${mixLines(res.regions, 'Regional mix (result / target)')}
+      ${mixLines(res.styles, 'Risk & quality mix (result / target)')}
+      ${res.notes ? `<p class="text-xs text-slate-600 italic mb-3">${esc(res.notes)}</p>` : ''}
+      <button type="button" onclick="location.reload()"
+              class="px-3 py-1.5 rounded-lg border border-slate-700/60 text-xs text-slate-300 hover:border-sky-500/60">
+        Saved to this sleeve — reload to see it in Last Decision
+      </button>`;
+    out.classList.remove('hidden');
+  }
+
+  async function poll(jobId, started) {
+    const r = await fetch(`${JOBS}/${jobId}`);
+    if (!r.ok) throw new Error('Lost track of the review job');
+    const job = await r.json();
+    if (job.status === 'running') {
+      status.textContent = `Working… ${Math.round((Date.now() - started) / 1000)}s (fetching prices, then the model)`;
+      setTimeout(() => poll(jobId, started).catch(fail), 3000);
+      return;
+    }
+    btn.disabled = false;
+    if (job.status === 'error') { fail(new Error(job.error || 'Review failed')); return; }
+    status.textContent = `Done in ${job.elapsed_s}s`;
+    render(job.result);
+  }
+
+  function fail(err) {
+    btn.disabled = false;
+    status.innerHTML = `<span class="text-red-400">✗ ${esc(err.message)}</span>`;
+  }
+
+  // A review outlives the page that started it. On load, pick the thread back
+  // up rather than showing a blank form over a run in progress — or over one
+  // that already failed, which is otherwise invisible entirely.
+  if (RESUME) {
+    details.open = true;
+    btn.disabled = RESUME.status === 'running';
+    status.textContent = RESUME.status === 'running'
+      ? `A review is already running (${Math.round(RESUME.elapsed_s)}s so far) — reattaching…`
+      : 'Showing the last review from this session.';
+    poll(RESUME.id, Date.now() - RESUME.elapsed_s * 1000).catch(fail);
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    out.classList.add('hidden');
+    status.textContent = 'Starting…';
+    const [provider, modelId] = (document.getElementById('rv-model').value || '|').split('|');
+    // Blank means "use whatever the sleeve already stores", so omit rather than
+    // send a zero the engine would have to reject.
+    const risk = {};
+    for (const [key, id] of [['max_turnover_pct', 'rv-turnover'],
+                             ['max_position_pct', 'rv-maxpos'],
+                             ['max_positions', 'rv-npos'],
+                             ['min_cash_pct', 'rv-mincash']]) {
+      const raw = (document.getElementById(id).value || '').trim();
+      if (raw !== '') risk[key] = parseFloat(raw);
+    }
+    try {
+      const r = await fetch(ACTION, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          config: cfgSel.value,
+          country: cSel.value,
+          provider: provider || null,
+          model_id: modelId || null,
+          n_runs: parseInt(document.getElementById('rv-runs').value, 10) || 1,
+          include_macro: document.getElementById('rv-macro').checked,
+          refresh_prices: document.getElementById('rv-refresh').checked,
+          risk,
+          region_targets: regionTargets(),
+          // Blank = the server's default; an explicit 0 means "exactly the
+          // target" and is not the same instruction.
+          region_tolerance_pct: document.getElementById('rv-rg-tol').value.trim() === ''
+            ? null : parseFloat(document.getElementById('rv-rg-tol').value),
+          style_targets: styleTargets(),
+          style_tolerance_pct: document.getElementById('rv-sg-tol').value.trim() === ''
+            ? null : parseFloat(document.getElementById('rv-sg-tol').value),
+          style_brief: document.getElementById('rv-sg-brief').value.trim(),
+        }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || 'Could not start the review');
+      poll(body.job_id, Date.now()).catch(fail);
+    } catch (e) { fail(e); }
+  });
+})();
+</script>

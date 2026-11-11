@@ -420,7 +420,7 @@ def test_photo_sleeve_dashboard_shows_the_watch_plan(client):
 
     r = client.get("/live/dash-sleeve")
     assert r.status_code == 200
-    assert "Watch status" in r.text
+    assert 'id="h-VOLV-B.ST"' in r.text
     assert "order book halves" in r.text
     assert "−25% from cost" in r.text
     assert "Set a kill criterion" in r.text

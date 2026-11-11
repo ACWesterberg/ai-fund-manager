@@ -1475,13 +1475,25 @@ def test_history_shows_holds_not_just_trades(client, sleeve, monkeypatch):
     assert "HOLD" in r.text
 
 
-def test_the_dashboard_links_to_this_book_not_the_main_fund(client, sleeve):
+def test_the_dashboard_links_to_this_book_not_the_main_fund(client, sleeve, monkeypatch):
     """The "All decisions" link used to send you to the Nordic fund's history,
     which is the most direct way to conclude a sleeve review vanished."""
+    _run_a_review(sleeve, monkeypatch)
     r = client.get(f"/live/{sleeve}")
     panel = r.text[r.text.index("Last Decision"):]
     assert f'href="/live/{sleeve}/history"' in panel
     assert 'href="/history"' not in panel
+
+
+def test_the_import_is_not_replayed_as_a_decision(client, sleeve, monkeypatch):
+    """An import is saved as the book's first decision; showing it read as
+    "2 BUY conf 0.00" — a call nobody made."""
+    assert 'id="last-decision"' not in client.get(f"/live/{sleeve}").text
+
+    _run_a_review(sleeve, monkeypatch)
+    html = client.get(f"/live/{sleeve}").text
+    panel = html[html.index('id="last-decision"'):]
+    assert "1 buy" in panel and "1 hold" in panel
 
 
 def test_the_latest_decision_panel_shows_holds(client, sleeve, monkeypatch):

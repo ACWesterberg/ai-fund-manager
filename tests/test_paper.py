@@ -873,13 +873,13 @@ def test_live_import_via_form(client):
     assert store.get_cash() == pytest.approx(100000)
     assert set(json.loads(store.get_meta("paper_target_weights"))) == {"AAPL", "MSFT"}
 
-    # Dashboard: real-money framing + Watch panel showing the (un-bought) plan
+    # Dashboard: real-money framing + Holdings showing the (un-bought) plan
     r = client.get("/live/kf-live")
     assert r.status_code == 200
-    assert "LIVE SLEEVE" in r.text
+    assert "Live sleeve · real money" in r.text
     assert "Not real money" not in r.text
-    assert "Watch status" in r.text
-    assert "AAPL" in r.text and "MSFT" in r.text       # plan rows visible before buying
+    assert "Holdings" in r.text
+    assert 'id="h-AAPL"' in r.text and 'id="h-MSFT"' in r.text   # plan rows before buying
     assert "Services growth vs 10%" in r.text          # watch line surfaced
     assert "Any two hyperscalers" in r.text            # capex criterion surfaced
 
@@ -1148,6 +1148,101 @@ def test_paper_book_has_no_watch_panel(client):
     assert "PAPER PORTFOLIO" in r.text
     assert "Not real money" in r.text
     assert "Watch status" not in r.text
+
+
+# ── The live-sleeve page ──────────────────────────────────────────────────────
+#
+# A live sleeve used to borrow the fund dashboard with three panels stacked on
+# top, each listing every holding: on a phone the numbers started 2,000 px down
+# and one stock's weight appeared five times. It now has its own page.
+
+def _live_sleeve(name, rows, cash=10_000.0):
+    """rows: (ticker, name, shares, avg_cost_sek, kill_criterion, max_drawdown_pct)."""
+    hold = [{"ticker": t, "name": n, "shares": s, "avg_cost_sek": c, "weight_pct": 50,
+             "kill_criterion": k, "max_drawdown_pct": dd, "horizon_months": 12}
+            for t, n, s, c, k, dd in rows]
+    cost = sum(s * c for _, _, s, c, _, _ in rows)
+    slug, _ = paper.create_portfolio(name, cost + cash, json.dumps(hold),
+                                     holdings_override=hold, kind="live",
+                                     seed_holdings=True, model_label="portfolio photo")
+    return slug
+
+
+VOLVO_OK = ("VOLV-B.ST", "Volvo B", 100, 280.0, "order book halves", 30)      # 300 now
+APPLE_DOWN = ("AAPL", "Apple", 10, 3000.0, "services growth below 10%", 25)   # 2,000 now
+
+
+def test_sleeve_page_is_titled_by_the_sleeve(client):
+    slug = _live_sleeve("Svenska Aktier", [VOLVO_OK])
+    html = client.get(f"/live/{slug}").text
+    assert "<title>Svenska Aktier — Live sleeve</title>" in html
+    assert '<h1 class="sl-title">Svenska Aktier</h1>' in html
+    assert "Portfolio Overview" not in html
+    assert "LIVE SLEEVE —" not in html                    # the banner is gone
+    assert "Volvo B" in html                              # the name the import carried
+
+
+def test_attention_strip_only_when_something_needs_acting_on(client, monkeypatch):
+    calm = _live_sleeve("Calm Sleeve", [VOLVO_OK])
+    html = client.get(f"/live/{calm}").text
+    assert 'id="attention"' not in html
+    assert "Needs attention" not in html
+
+    # The line anchors at the price on the day it is set; then Apple falls 35%.
+    hot = _live_sleeve("Hot Sleeve", [VOLVO_OK, APPLE_DOWN])
+    import fundmgr.data.quotes as quotes
+    monkeypatch.setattr(quotes, "live_prices",
+                        lambda tickers: {t: {**FAKE_NATIVE, "AAPL": 130.0}.get(t) for t in tickers})
+    html = client.get(f"/live/{hot}").text
+    strip = html[html.index('id="attention"'):html.index('id="holdings"')]
+    assert "Kill line breached" in strip
+    assert 'href="#h-AAPL"' in strip
+    assert "VOLV-B.ST" not in strip                       # only what needs acting on
+
+
+def test_each_holding_is_rendered_once(client):
+    from fundmgr import addsignal
+    slug = _live_sleeve("Once Sleeve", [VOLVO_OK, APPLE_DOWN])
+    _, store = paper.open_portfolio(slug)
+    addsignal.set_plan(store, "AAPL", book="A", max_weight_pct=60, tranche_pct=2)
+
+    html = client.get(f"/live/{slug}").text
+    for ticker in ("AAPL", "VOLV-B.ST"):
+        assert html.count(f'<details class="sl-h" id="h-{ticker}"') == 1
+    assert "Add signals" in html                          # the add plan joins the row
+    for gone in ("Watch status", "Open Positions", "P&amp;L vs kill", 'id="viz-bubbles"'):
+        assert gone not in html
+
+
+def test_sleeve_page_keeps_every_form(client):
+    slug = _live_sleeve("Forms Sleeve", [VOLVO_OK])
+    html = client.get(f"/live/{slug}").text
+    for marker in (f'action="/live/{slug}/watchplan"', f'action="/live/{slug}/addplan"',
+                   f'action="/live/{slug}/fill"', 'id="wp-form"', 'id="ap-form"',
+                   'id="rv-details"', 'class="wp-edit', 'class="ap-edit',
+                   "Re-anchor to today", "Proof confirmed", "Anchor review at today",
+                   "How monitoring works", "Portfolio vs", 'id="viz-treemap"'):
+        assert marker in html, marker
+
+
+def test_paper_books_keep_the_fund_dashboard(client):
+    paper.create_portfolio("Sim Book", 50_000, "AAPL 100%", kind="paper")
+    html = client.get("/paper/sim-book").text
+    assert "Portfolio Overview" in html
+    assert "Open Positions" in html and "viz-bubbles" in html
+    assert 'id="holdings"' not in html
+
+
+def test_the_main_dashboard_template_has_no_sleeve_panels():
+    from fundmgr.web.paper import jinja_env
+    html = jinja_env.get_template("index.html").render(
+        positions=[], cash=1_000.0, cash_pct=100.0, nav=1_000.0, fees_paid=0.0,
+        stats=None, has_history=False, last_run=None, pnl_sek=0, pnl_pct=0.0,
+        active_page="portfolio")
+    assert "Portfolio Overview" in html and "Open Positions" in html
+    assert "Last Decision" in html
+    for live_only in ("Needs attention", "sl-h", "Record a fill", "Review this sleeve"):
+        assert live_only not in html
 
 
 # ── Retag carries the plan, and forgets the wrong instrument's data ───────────

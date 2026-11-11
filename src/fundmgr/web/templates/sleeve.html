@@ -1,0 +1,889 @@
+{% extends "base.html" %}
+{# A live sleeve: a real book you trade yourself. It used to borrow the fund
+   dashboard and stack three panels on top that each listed every holding, so
+   one stock showed its weight five times and the numbers started 2,000 px down
+   on a phone. Here each holding is one row, and only what needs acting on is
+   pulled up front. #}
+{% block title %}{{ sim_label }} — Live sleeve{% endblock %}
+{% block page_title %}{{ sim_label }}{% endblock %}
+
+{% block content %}
+<style>
+  .sl-title { font-family: Manrope, sans-serif; font-size: 22px; font-weight: 800; color: #f1f5f9;
+              letter-spacing: -.4px; line-height: 1.15; overflow-wrap: anywhere; }
+  .sl-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 10px; margin-top: 14px; }
+  .sl-summary .sl-nav { grid-column: 1 / -1; }
+  .sl-stat-label { font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #64748b; }
+  .sl-stat-value { font-family: Manrope, sans-serif; font-size: 15px; font-weight: 700; color: #e2e8f0; line-height: 1.25; }
+  .sl-nav .sl-stat-value { font-size: 26px; font-weight: 800; letter-spacing: -.5px; }
+  .sl-stat-sub { font-size: 11px; color: #64748b; }
+  @media (min-width: 768px) {
+    .sl-summary { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 32px; }
+  }
+
+  .sl-attn { border: 1px solid rgba(248,113,113,.25); background: rgba(248,113,113,.035);
+             border-radius: 14px; padding: 12px 14px 6px; }
+  .sl-attn-row { display: grid; grid-template-columns: 8px auto minmax(0, 1fr); gap: 2px 8px; align-items: baseline;
+                 padding: 8px 2px; border-top: 1px solid rgba(255,255,255,.05); text-decoration: none; }
+  .sl-attn-row:first-child { border-top: none; }
+  .sl-attn-row:hover { background: rgba(255,255,255,.02); }
+  .sl-attn-detail { grid-column: 2 / -1; font-size: 11.5px; color: #94a3b8; overflow-wrap: anywhere; }
+  @media (min-width: 768px) {
+    .sl-attn-row { grid-template-columns: 8px 110px 230px minmax(0, 1fr); }
+    .sl-attn-detail { grid-column: auto; }
+  }
+  .sl-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; align-self: center; }
+  .tone-red { --tone: 248,113,113; } .tone-amber { --tone: 251,191,36; }
+  .tone-emerald { --tone: 52,211,153; } .tone-sky { --tone: 56,189,248; } .tone-slate { --tone: 148,163,184; }
+  .sl-dot.tone-red, .sl-dot.tone-amber, .sl-dot.tone-emerald { background: rgb(var(--tone)); }
+  .sl-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; line-height: 1;
+             padding: 4px 7px; border-radius: 6px; white-space: nowrap;
+             background: rgba(var(--tone, 148,163,184), .1); color: rgb(var(--tone, 148,163,184)); }
+  .sl-chip .material-symbols-outlined { font-size: 13px; }
+
+  @media (max-width: 639px) { .sl-holdings { padding: 14px 14px 8px; } }
+  .sl-hhead, .sl-h > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas: "name value" "weight pnl" "chips chips"; gap: 6px 14px; }
+  .sl-hhead { display: none; }
+  .sl-h { border-top: 1px solid rgba(255,255,255,.05); scroll-margin-top: 64px; }
+  .sl-h > summary { list-style: none; cursor: pointer; padding: 12px 2px; }
+  .sl-h > summary::-webkit-details-marker { display: none; }
+  .sl-h > summary:hover { background: rgba(255,255,255,.015); }
+  .sl-h[open] > summary .sl-chev { transform: rotate(180deg); }
+  .c-name { grid-area: name; min-width: 0; }
+  .c-value { grid-area: value; text-align: right; }
+  .c-weight { grid-area: weight; min-width: 0; }
+  .c-pnl { grid-area: pnl; text-align: right; }
+  .c-chips { grid-area: chips; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .c-chips .sl-chev { margin-left: auto; }
+  .c-empty, .sl-quiet { display: none; }
+  .sl-chev { color: #475569; font-size: 18px; transition: transform .15s; }
+  .sl-ticker { font-weight: 700; color: #e2e8f0; font-size: 13.5px; }
+  .sl-name { display: block; font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sl-bar { position: relative; height: 4px; background: rgba(255,255,255,.07); border-radius: 2px; margin-top: 5px; max-width: 220px; }
+  .sl-bar > i { display: block; height: 100%; background: #3b82f6; border-radius: 2px; }
+  .sl-bar > i.over { background: #f87171; }
+  .sl-bar > b { position: absolute; top: -2px; width: 2px; height: 8px; background: #94a3b8; border-radius: 1px; }
+  @media (min-width: 900px) {
+    .sl-hhead, .sl-h > summary {
+      grid-template-columns: minmax(0, 2fr) 110px minmax(130px, 1.3fr) 80px 150px 120px 110px 20px;
+      grid-template-areas: none; align-items: center; gap: 0 14px; }
+    .sl-hhead { display: grid; padding: 0 2px 8px; }
+    .c-name, .c-value, .c-weight, .c-pnl { grid-area: auto; }
+    .c-chips { display: contents; }
+    .c-chips .sl-chev { margin-left: 0; }
+    .c-empty, .sl-quiet { display: inline; }
+    .sl-chip { justify-self: start; }
+  }
+  .sl-hhead span { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #475569; }
+
+  .sl-hbody { display: grid; gap: 14px; padding: 2px 2px 16px; font-size: 12px; color: #94a3b8; }
+  @media (min-width: 900px) { .sl-hbody { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+                              .sl-hbody .sl-full { grid-column: 1 / -1; } }
+  .sl-sec { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #475569; margin-bottom: 5px; }
+  .sl-kv { display: flex; flex-wrap: wrap; gap: 3px 14px; }
+  :where(.sl-kv) b { color: #cbd5e1; font-weight: 600; }
+  .sl-text { color: #cbd5e1; overflow-wrap: anywhere; }
+
+  .sl-action { padding: 0; }
+  .sl-action-sum { list-style: none; cursor: pointer; display: grid; align-items: center;
+      grid-template-columns: 20px minmax(0, 1fr) auto auto; gap: 2px 10px; padding: 14px 16px; min-height: 52px; }
+  .sl-action-sum > :first-child { grid-row: 1 / span 2; }
+  .sl-action-sum .card-title { grid-column: 2; }
+  .sl-action-sum .sl-action-hint { grid-column: 2; grid-row: 2; }
+  .sl-action-sum > a { grid-column: 3; grid-row: 1 / span 2; white-space: nowrap; }
+  .sl-action-sum > .sl-chev { grid-column: 4; grid-row: 1 / span 2; }
+  @media (min-width: 768px) {
+    .sl-action-sum { grid-template-columns: 20px auto minmax(0, 1fr) auto auto; }
+    .sl-action-sum > :first-child, .sl-action-sum .card-title, .sl-action-sum .sl-action-hint,
+    .sl-action-sum > a, .sl-action-sum > .sl-chev { grid-row: 1; }
+    .sl-action-sum .sl-action-hint { grid-column: 3; }
+    .sl-action-sum > a { grid-column: 4; }
+    .sl-action-sum > .sl-chev { grid-column: 5; }
+  }
+  .sl-action summary::-webkit-details-marker { display: none; }
+  .sl-action details[open] > summary .sl-chev { transform: rotate(180deg); }
+  .sl-action-hint { font-size: 12px; color: #64748b; min-width: 0; }
+  .sl-action > details > :not(summary) { margin-left: 16px; margin-right: 16px; }
+  .sl-action > details { padding-bottom: 2px; }
+  .sl-action > details[open] { padding-bottom: 16px; }
+
+  .sl-perf { display: grid; gap: 16px; }
+  @media (min-width: 900px) { .sl-perf { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
+  .sl-chart { height: clamp(190px, 52vw, 280px); }
+  .sl-treemap { position: relative; height: clamp(200px, 52vw, 280px); border-radius: 10px; overflow: hidden;
+                background: rgba(255,255,255,.015); }
+</style>
+
+{% if flash %}
+<div class="mb-4 px-4 py-2.5 rounded-xl border flex items-center gap-2 text-xs font-semibold
+            {% if flash.ok %}border-emerald-500/20 bg-emerald-500/5 text-emerald-400{% else %}border-red-500/20 bg-red-500/5 text-red-400{% endif %}">
+  <span class="material-symbols-outlined" style="font-size:15px">{{ 'check_circle' if flash.ok else 'error' }}</span>
+  {{ flash.msg }}
+</div>
+{% endif %}
+
+<section class="card mb-4" id="summary" style="border-color:rgba(14,165,233,.18)">
+  <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+    <h1 class="sl-title">{{ sim_label }}</h1>
+    <span class="sl-chip tone-sky" title="Real positions you trade yourself — monitored for kill criteria, earnings and drift; alerts push to Telegram">
+      <span class="material-symbols-outlined">radar</span>Live sleeve · real money</span>
+    {% if model_label %}<span class="text-xs text-slate-500">picks by {{ model_label }}</span>{% endif %}
+  </div>
+
+  <div class="sl-summary">
+    <div class="sl-nav">
+      <div class="sl-stat-label">NAV</div>
+      <div class="sl-stat-value">{{ "{:,.0f}".format(nav) }} <span class="text-sm text-slate-500 font-semibold">SEK</span></div>
+    </div>
+    <div>
+      <div class="sl-stat-label">Total P&amp;L</div>
+      <div class="sl-stat-value {{ 'ret-pos' if pnl_sek > 0 else 'ret-neg' if pnl_sek < 0 else 'ret-neu' }}">{{ "{:+,.0f}".format(pnl_sek) }}</div>
+      <div class="sl-stat-sub {{ 'ret-pos' if pnl_pct > 0 else 'ret-neg' if pnl_pct < 0 else 'ret-neu' }}">{{ "{:+.2f}".format(pnl_pct) }}% vs initial</div>
+    </div>
+    <div>
+      <div class="sl-stat-label">Cash</div>
+      <div class="sl-stat-value">{{ "{:.1f}".format(cash_pct) }}%</div>
+      <div class="sl-stat-sub">{{ "{:,.0f}".format(cash) }} SEK</div>
+    </div>
+    <div>
+      <div class="sl-stat-label" title="Time-weighted return of the sleeve">TWR</div>
+      {% if stats %}
+      <div class="sl-stat-value {{ 'ret-pos' if stats.twr_pct > 0 else 'ret-neg' if stats.twr_pct < 0 else 'ret-neu' }}">{{ "{:+.2f}".format(stats.twr_pct) }}%</div>
+      <div class="sl-stat-sub">{{ benchmark_label|default("Benchmark") }} {{ "{:+.2f}".format(stats.benchmark_return_pct) }}%</div>
+      {% else %}
+      <div class="sl-stat-value ret-neu">—</div><div class="sl-stat-sub">No history yet</div>
+      {% endif %}
+    </div>
+    <div>
+      <div class="sl-stat-label">Alpha</div>
+      {% if stats %}
+      <div class="sl-stat-value {{ 'ret-pos' if stats.alpha_pct > 0 else 'ret-neg' if stats.alpha_pct < 0 else 'ret-neu' }}">{{ "{:+.2f}".format(stats.alpha_pct) }}%</div>
+      {% else %}
+      <div class="sl-stat-value ret-neu">—</div>
+      {% endif %}
+      <div class="sl-stat-sub">vs benchmark</div>
+    </div>
+    <div>
+      <div class="sl-stat-label">Max drawdown</div>
+      {% if stats and stats.max_drawdown_pct is not none %}
+      <div class="sl-stat-value {{ 'ret-neg' if stats.max_drawdown_pct < -2 else 'ret-neu' }}">{{ "{:.2f}".format(stats.max_drawdown_pct) }}%</div>
+      {% else %}
+      <div class="sl-stat-value ret-neu">—</div>
+      {% endif %}
+      <div class="sl-stat-sub">peak to trough</div>
+    </div>
+  </div>
+  {% if stats %}
+  <p class="text-[11px] text-slate-600 mt-3">vol {{ stats.volatility_ann_pct }}% ann. · fees {{ "{:.2f}".format(fees_paid) }} SEK</p>
+  {% endif %}
+</section>
+
+{% if sleeve.attention %}
+<section class="sl-attn mb-4" id="attention">
+  <div class="flex items-center gap-2 mb-1">
+    <span class="material-symbols-outlined text-red-400" style="font-size:17px">notification_important</span>
+    <h2 class="card-title">Needs attention</h2>
+    <span class="badge" style="background:rgba(248,113,113,.12);color:#f87171">{{ sleeve.attention|length }}</span>
+  </div>
+  <div>
+    {% for a in sleeve.attention %}
+    <a class="sl-attn-row" href="#h-{{ a.ticker or 'capex' }}">
+      <span class="sl-dot tone-{{ a.tone }}"></span>
+      <span class="font-semibold text-slate-200 text-[13px]">{{ a.ticker or 'Portfolio' }}</span>
+      <span class="text-[12.5px] font-semibold tone-{{ a.tone }}" style="color:rgb(var(--tone))">{{ a.label }}</span>
+      {% if a.detail %}<span class="sl-attn-detail">{{ a.detail }}</span>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card sl-holdings mb-4" id="holdings">
+  <div class="card-header flex-wrap gap-y-1" style="margin-bottom:8px">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-sky-400" style="font-size:17px">pie_chart</span>
+      <h2 class="card-title">Holdings</h2>
+    </div>
+    <span class="text-xs text-slate-600">
+      {% if watch %}{{ watch.held_count }} held{% if watch.planned_count > watch.held_count %} · {{ watch.planned_count - watch.held_count }} planned{% endif %}{% else %}{{ positions|length }} held{% endif %}
+      {%- if adds and adds.rows %} · Add signals: {{ adds.actionable }} actionable{% if adds.stale %}, {{ adds.stale }} need re-reading{% endif %}{% endif %}
+    </span>
+  </div>
+
+  {% if watch and watch.capex %}
+  {% set c = watch.capex %}
+  <details class="sl-h" id="h-capex">
+    <summary style="display:flex;align-items:center;gap:10px">
+      <div class="min-w-0" style="flex:1">
+        <span class="sl-ticker">Portfolio capex kill criterion</span>
+        <span class="sl-name">{{ c.trigger }}</span>
+      </div>
+      {% if c.status == 'triggered' %}<span class="sl-chip tone-red">TRIGGERED</span>
+      {% elif c.status == 'warning' %}<span class="sl-chip tone-amber">WARNING · {{ c.count }}/2</span>
+      {% else %}<span class="sl-chip tone-emerald">CLEAR</span>{% endif %}
+      <span class="material-symbols-outlined sl-chev">expand_more</span>
+    </summary>
+    <div class="pb-4 px-0.5 text-xs">
+      <p class="text-slate-400 mb-2">{{ c.trigger }}</p>
+      <div class="flex flex-wrap gap-1.5">
+        {% for h in c.hyperscalers %}
+          {% if h.signal %}<span class="sl-chip tone-red">{{ h.ticker }} · {{ h.signal|upper }}</span>
+          {% else %}<span class="sl-chip tone-slate">{{ h.ticker }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% if c.action %}<p class="mt-2 {{ 'text-red-400' if c.status == 'triggered' else 'text-slate-500' }}">→ {{ c.action }}</p>{% endif %}
+    </div>
+  </details>
+  {% endif %}
+
+  {% if sleeve.holdings %}
+  <div class="sl-hhead" aria-hidden="true">
+    <span>Holding</span><span style="text-align:right">Value (SEK)</span><span>Weight / target</span>
+    <span style="text-align:right">P&amp;L</span><span>Kill line</span><span>Horizon</span><span>Add</span><span></span>
+  </div>
+  {% for h in sleeve.holdings %}
+  {% set w = h.w %}{% set a = h.a %}{% set p = h.pos %}
+  <details class="sl-h" id="h-{{ h.ticker }}">
+    <summary>
+      <div class="c-name">
+        <span class="sl-ticker">{{ h.ticker }}</span>
+        {% for tone, label, _ in h.flags %}{% if loop.first %} <span class="sl-dot tone-{{ tone }}" title="{{ label }}" style="margin-left:4px;vertical-align:1px"></span>{% endif %}{% endfor %}
+        {% if not h.held %}<span class="sl-chip tone-slate" style="margin-left:4px;padding:2px 5px;font-size:9.5px">PLAN</span>{% endif %}
+        {% if h.name %}<span class="sl-name">{{ h.name }}</span>{% endif %}
+      </div>
+      <div class="c-value">
+        {% if h.value is not none %}<span class="font-semibold text-slate-200 text-[13px]">{{ "{:,.0f}".format(h.value) }}</span>
+        {% else %}<span class="text-slate-600">—</span>{% endif %}
+      </div>
+      <div class="c-weight">
+        <span class="text-[12px] {{ 'text-red-400 font-semibold' if w and w.over else 'text-slate-300' }}">
+          {%- if h.held %}{{ "{:.1f}".format(h.weight_pct) }}%{% else %}—{% endif %}</span>
+        {%- if h.target_pct %}<span class="text-[12px] text-slate-600"> / {{ "{:.1f}".format(h.target_pct) }}%</span>{% endif %}
+        <div class="sl-bar"><i class="{{ 'over' if w and w.over }}" style="width:{{ h.bar_pct }}%"></i>
+          {%- if h.tick_pct %}<b style="left:{{ h.tick_pct }}%" title="target"></b>{% endif %}</div>
+      </div>
+      <div class="c-pnl">
+        {% if h.pnl_pct is not none %}
+          <span class="text-[13px] font-semibold {{ 'ret-pos' if h.pnl_pct > 0 else 'ret-neg' if h.pnl_pct < 0 else 'ret-neu' }}">{{ "{:+.1f}".format(h.pnl_pct) }}%</span>
+        {% else %}<span class="text-slate-600">—</span>{% endif %}
+      </div>
+      <div class="c-chips">
+        {% if h.kill_gap_pp is not none %}
+          {% if w.dd_breached %}
+          <span class="sl-chip tone-red" title="The −{{ '{:g}'.format(w.max_drawdown_pct) }}% max-drop line is breached ({{ '{:+.1f}'.format(w.drawdown_pct) }}% from {{ 'the ' ~ w.anchor_date ~ ' review' if w.drawdown_basis == 'review' else 'cost' }})">
+            <span class="material-symbols-outlined">shield</span>kill line breached</span>
+          {% else %}
+          <span class="sl-chip {{ 'tone-amber' if h.kill_gap_pp < 5 else 'tone-slate' }}" title="Distance to the −{{ '{:g}'.format(w.max_drawdown_pct) }}% max-drop line, measured from {{ 'the ' ~ w.anchor_date ~ ' review price' if w.drawdown_basis == 'review' else 'cost' }}">
+            <span class="material-symbols-outlined">shield</span>{{ "{:.1f}".format(h.kill_gap_pp) }}pp to kill</span>
+          {% endif %}
+        {% elif w and w.kill_verdict == 'yes' %}
+          <span class="sl-chip tone-red"><span class="material-symbols-outlined">shield</span>may be triggering</span>
+        {% else %}<span class="c-empty text-slate-600">—</span>{% endif %}
+
+        {% if w and w.horizon_date %}
+          {% if w.horizon_due %}
+          <span class="sl-chip tone-red" title="Horizon {{ w.horizon_date }}"><span class="material-symbols-outlined">schedule</span>{% if w.days_left == 0 %}due today{% else %}{{ -w.days_left }}d overdue{% endif %}</span>
+          {% elif w.horizon_near %}
+          <span class="sl-chip tone-amber" title="Horizon {{ w.horizon_date }}"><span class="material-symbols-outlined">schedule</span>{{ w.days_left }}d left</span>
+          {% else %}
+          <span class="sl-chip tone-slate" title="Horizon {{ w.horizon_date }}"><span class="material-symbols-outlined">schedule</span>{% if w.days_left is none %}{{ w.horizon_date }}{% elif w.days_left > 90 %}{{ (w.days_left / 30.44)|round|int }} mo{% else %}{{ w.days_left }}d{% endif %}</span>
+          {% endif %}
+        {% else %}<span class="c-empty text-slate-600">—</span>{% endif %}
+
+        {% if a %}
+          {% if a.state == 'strong-add' %}<span class="sl-chip tone-emerald">STRONG ADD</span>
+          {% elif a.state == 'add' %}<span class="sl-chip tone-emerald">ADD</span>
+          {% elif a.state == 'add-watch' %}<span class="sl-chip tone-amber">ADD-WATCH</span>
+          {% elif a.state == 'kill' %}<span class="sl-chip tone-red">KILL</span>
+          {% else %}<span class="sl-chip tone-slate sl-quiet">HOLD</span>{% endif %}
+        {% else %}<span class="c-empty text-slate-600">—</span>{% endif %}
+        <span class="material-symbols-outlined sl-chev">expand_more</span>
+      </div>
+    </summary>
+
+    <div class="sl-hbody">
+      <div>
+        <div class="sl-sec">Position</div>
+        {% if p %}
+        <div class="sl-kv">
+          <span>{{ "%g"|format(p.shares) }} sh @ <b>{{ "{:,.2f}".format(p.avg_cost) }}</b></span>
+          <span>now <b>{% if p.current_price %}{{ "{:,.2f}".format(p.current_price) }}{% else %}—{% endif %}</b></span>
+          <span>cost {{ "{:,.0f}".format(p.cost_value) }}</span>
+          {% if p.pnl_sek is not none %}<span>P&amp;L <b class="{{ 'ret-pos' if p.pnl_sek >= 0 else 'ret-neg' }}">{{ "{:+,.0f}".format(p.pnl_sek) }} SEK</b></span>{% endif %}
+        </div>
+        {% else %}
+        <p>Not bought yet — on the plan{% if h.target_pct %} at {{ "{:.1f}".format(h.target_pct) }}%{% endif %}.</p>
+        {% endif %}
+        {% if w and w.ratio %}<p class="mt-1">Drift <b class="{{ 'text-red-400' if w.over else 'text-slate-300' }}">{{ "{:.2f}".format(w.ratio) }}×</b> target</p>{% endif %}
+        {% if w and w.next_earnings %}<p class="mt-1">Next earnings <b class="text-slate-300">{{ w.next_earnings }}</b></p>{% endif %}
+        {% if w and w.horizon_date %}
+        <p class="mt-1">Horizon <b class="text-slate-300">{{ w.horizon_date }}</b>{% if w.horizon_label %} · {{ w.horizon_label }}{% endif %}</p>
+        {% if w.horizon_note %}<p class="text-slate-500">{{ w.horizon_note }}</p>{% endif %}
+        {% endif %}
+      </div>
+
+      <div>
+        <div class="sl-sec">Kill plan</div>
+        {% if w and w.watch %}<p class="sl-text">Watch: {{ w.watch }}</p>{% endif %}
+        {% if w and w.kill and w.kill != w.watch %}<p class="sl-text">{{ w.kill }}</p>{% endif %}
+        {% if not (w and (w.watch or w.kill)) %}<p class="text-slate-600">No kill criterion yet.</p>{% endif %}
+
+        {% if w and (w.max_drawdown_pct or w.price_below or w.price_above or w.fundamental_rules) %}
+        <div class="flex flex-wrap gap-1 mt-1.5">
+          {% if w.max_drawdown_pct %}
+          <span class="badge" title="{% if w.drawdown_basis == 'review' %}Measured from the {{ w.anchor_date }} review price{% else %}Measured from cost — set a review anchor to judge this line from your last analysis instead{% endif %}"
+                style="background:{{ 'rgba(248,113,113,.14)' if w.dd_breached else 'rgba(255,255,255,.04)' }};color:{{ '#f87171' if w.dd_breached else '#94a3b8' }}">
+            −{{ "{:g}".format(w.max_drawdown_pct) }}% from {{ 'review' if w.drawdown_basis == 'review' else 'cost' }}{% if w.drawdown_pct is not none %} · {{ "{:+.1f}".format(w.drawdown_pct) }}%{% endif %}</span>
+          {% endif %}
+          {% if w.price_below %}
+          <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">floor {{ "{:g}".format(w.price_below) }} {{ w.rule_currency }}</span>
+          {% endif %}
+          {% if w.price_above %}
+          <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">target {{ "{:g}".format(w.price_above) }} {{ w.rule_currency }}</span>
+          {% endif %}
+          {% for f in w.fundamental_rules %}
+          <span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8"{% if f.quarters and f.quarters > 1 %} title="Fires only after {{ f.quarters }} consecutive reported quarters past this line"{% endif %}>
+            {{ f.metric.replace('_', ' ') }} {{ f.op }} {{ "{:g}".format(f.value) }}{% if f.quarters and f.quarters > 1 %} ×{{ f.quarters }}q{% endif %}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if w and w.kill_unverifiable %}
+          <div class="mt-1.5">
+            <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24" title="{{ w.kill_reason }}">not auto-checkable</span>
+            {% if w.kill_unchecked %}<div class="text-slate-500 mt-0.5" style="font-size:11px">needs the report: {{ w.kill_unchecked|join('; ') }}</div>{% endif %}
+          </div>
+        {% elif w and w.kill_verdict == 'no' %}
+          <div class="text-slate-500 mt-1" style="font-size:11px">checked {{ w.kill_checked_on }} — intact</div>
+        {% elif w and w.kill_verdict == 'yes' %}
+          <div class="mt-1.5">
+            <span class="badge" style="background:rgba(248,113,113,.14);color:#f87171">may be triggering</span>
+            <div class="text-slate-400 mt-0.5" style="font-size:11px">{{ w.kill_reason }}</div>
+          </div>
+        {% endif %}
+
+        {% if w and w.conditions %}
+        <details class="mt-1.5">
+          <summary class="text-slate-500 hover:text-slate-300" style="cursor:pointer;font-size:11px;list-style:none">
+            ▸ read as {{ w.logic or (w.conditions|length ~ ' condition(s)') }}
+          </summary>
+          <ul class="mt-1 space-y-1">
+            {% for c in w.conditions %}
+            <li style="font-size:11px" class="text-slate-500">
+              {% if c.checkable == 'fundamentals' %}
+                <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">figure</span>
+              {% elif c.checkable == 'news' %}
+                <span class="badge" style="background:rgba(56,189,248,.1);color:#38bdf8">news</span>
+              {% else %}
+                <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24">manual</span>
+              {% endif %}
+              {{ c.text }}
+              {% if c.metric %}
+                {# The duration is part of the reading: "below 8 for 2 quarters"
+                   is a different rule from "below 8". #}
+                <span class="text-slate-600">→ {{ c.metric.replace('_', ' ') }} {{ c.op }} {{ "{:g}".format(c.value) }}{% if c.quarters and c.quarters > 1 %} for {{ c.quarters }} straight quarters{% endif %}</span>
+              {% endif %}
+              {% if c.note %}<div class="text-slate-600 pl-1">⚠ {{ c.note }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% if w.pending_rules and watchplan_action %}
+          <form method="post" action="{{ watchplan_action }}/apply-rules" class="mt-1.5">
+            <input type="hidden" name="ticker" value="{{ w.ticker }}" />
+            <button type="submit" class="px-2 py-1 rounded border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10" style="font-size:11px">
+              Also check {{ w.pending_rules|length }} of these as a hard rule
+            </button>
+          </form>
+          {% endif %}
+        </details>
+        {% endif %}
+      </div>
+
+      <div>
+        <div class="sl-sec">Add plan</div>
+        {% if w and w.add_criterion %}
+        <p class="sl-text"><span class="badge" style="background:rgba(52,211,153,.1);color:#34d399">ADD</span> {{ w.add_criterion }}</p>
+        {% if w.add_conditions %}
+        <ul class="mt-0.5" style="font-size:11px">
+          {% for c in w.add_conditions %}
+          <li class="text-slate-500">
+            {% if c.metric %}
+              ▪ {{ c.metric.replace('_', ' ') }} {{ c.op }} {{ "{:g}".format(c.value) }}{% if c.quarters and c.quarters > 1 %} for {{ c.quarters }} quarters{% endif %}
+            {% else %}
+              ▪ {{ c.text }} <span class="text-amber-400/70">(needs your judgement)</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% endif %}
+        {% if a %}
+        <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
+          {% if a.state == 'strong-add' %}<span class="badge" style="background:rgba(52,211,153,.18);color:#34d399">STRONG ADD</span>
+          {% elif a.state == 'add' %}<span class="badge" style="background:rgba(52,211,153,.12);color:#34d399">ADD</span>
+          {% elif a.state == 'add-watch' %}<span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24">ADD-WATCH</span>
+          {% elif a.state == 'kill' %}<span class="badge" style="background:rgba(248,113,113,.14);color:#f87171">KILL</span>
+          {% else %}<span class="badge" style="background:rgba(255,255,255,.04);color:#94a3b8">HOLD</span>{% endif %}
+          <span class="text-slate-500">book {{ a.book }}</span>
+          {# Three states, not a tick: "confirmed for a quarter that has since
+             been superseded" is the one this exists to make visible. #}
+          {% if a.proof_status == 'fresh' %}
+            <span class="badge" style="background:rgba(52,211,153,.1);color:#34d399" title="{{ a.proof_reason }}">proof confirmed</span>
+          {% elif a.proof_status == 'stale' %}
+            <span class="badge" style="background:rgba(251,191,36,.12);color:#fbbf24" title="{{ a.proof_reason }}">proof stale</span>
+          {% endif %}
+        </div>
+        <p class="sl-text mt-1">{{ a.why }}</p>
+        <div class="sl-kv mt-1">
+          <span>dislocation
+            {% if a.dislocation_pct is not none %}<b class="{{ 'text-emerald-400' if a.dislocated }}">{{ "{:+.1f}".format(a.dislocation_pct) }}%</b> / {{ "{:g}".format(a.dislocation_gate) }}%
+            {% else %}—{% endif %}</span>
+          <span>exp. return
+            {% if a.valuation_status == 'stale' %}<b class="text-amber-400" title="{{ a.valuation_reason }}">stale</b>
+            {% elif a.valuation_status == 'unset' %}no target
+            {% elif a.expected_annual_return is not none %}<b class="{{ 'text-emerald-400' if a.valuation_ok }}">{{ "{:.0f}".format(a.expected_annual_return) }}%</b> / {{ "{:g}".format(a.return_gate) }}%
+            {% else %}—{% endif %}</span>
+          <span>weight
+            {% if a.weight_pct is not none %}<b class="{{ 'text-red-400' if a.over_max_weight }}">{{ "{:.1f}".format(a.weight_pct) }}%</b>{% if a.max_weight_pct %} / {{ "{:g}".format(a.max_weight_pct) }}% max{% endif %}
+            {% else %}—{% endif %}</span>
+        </div>
+        {% elif not (w and w.add_criterion) %}
+        <p class="text-slate-600">No add plan.</p>
+        {% endif %}
+      </div>
+
+      {% if watchplan_action or addplan_action %}
+      <div class="sl-full">
+        <div class="flex flex-wrap gap-2">
+          {% if watchplan_action %}
+          <button type="button" class="wp-edit px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-300 hover:border-sky-500/60 hover:text-sky-300"
+                  data-ticker="{{ h.ticker }}"
+                  data-kill="{{ w.kill if w else '' }}" data-add="{{ w.add_criterion if w else '' }}"
+                  data-drop="{{ (w.max_drawdown_pct if w else '') or '' }}"
+                  data-below="{{ (w.price_below if w else '') or '' }}"
+                  data-above="{{ (w.price_above if w else '') or '' }}"
+                  data-date="{{ w.horizon_date if w else '' }}"
+                  data-note="{{ w.horizon_note if w else '' }}">Edit kill plan &amp; horizon</button>
+          {% endif %}
+          {% if addplan_action %}
+          <button type="button" class="ap-edit px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-300 hover:border-emerald-500/60 hover:text-emerald-300"
+                  data-ticker="{{ h.ticker }}" data-book="{{ a.book if a else '' }}"
+                  data-max="{{ (a.max_weight_pct if a else '') or '' }}" data-tranche="{{ (a.tranche_pct if a else '') or '' }}"
+                  data-target="{{ (a.target_price if a else '') or '' }}" data-review="{{ (a.review_price if a else '') or '' }}">{{ 'Edit add plan' if a else 'Set an add plan' }}</button>
+          {% endif %}
+        </div>
+        <div class="sl-edit-slot"></div>
+      </div>
+      {% endif %}
+    </div>
+  </details>
+  {% endfor %}
+  {% else %}
+  <p class="empty">No holdings yet — record a fill below to seed one.</p>
+  {% endif %}
+
+  {# One editor per plan type; the edit buttons above move it into the row. #}
+  {% set wcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
+  <div class="mt-2 pt-2 border-t border-slate-800/60 space-y-1">
+    {% if watchplan_action %}
+    <details id="wp-details">
+      <summary class="text-xs text-slate-500 hover:text-slate-300 py-1.5" style="cursor:pointer;list-style:none">
+        ＋ Set a kill criterion &amp; time horizon <span class="text-slate-600">— for any ticker, held or planned</span>
+      </summary>
+      <div id="wp-home">
+      <form method="post" action="{{ watchplan_action }}" id="wp-form" class="mt-3 mb-2 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+        <div>
+          <label class="kpi-label" for="wp-ticker">Ticker</label>
+          <input id="wp-ticker" name="ticker" list="wp-tickers" required placeholder="NVDA" class="{{ wcls }}" />
+          <datalist id="wp-tickers">
+            {% for h in sleeve.holdings %}<option value="{{ h.ticker }}"></option>{% endfor %}
+          </datalist>
+        </div>
+        <div class="col-span-2 md:col-span-3">
+          <label class="kpi-label" for="wp-kill">Kill criterion (what would falsify the thesis)</label>
+          <input id="wp-kill" name="kill_criterion" class="{{ wcls }}"
+                 placeholder="e.g. loses the Apple socket, or capex guide cut two quarters running" />
+        </div>
+        <div class="col-span-2 md:col-span-3">
+          <label class="kpi-label" for="wp-add">ADD criterion (what must still be true to add)</label>
+          <input id="wp-add" name="add_criterion" class="{{ wcls }}"
+                 placeholder="e.g. organic growth ≥6% and adj. EBIT margin ≥9%, cash generation intact" />
+        </div>
+        <div>
+          <label class="kpi-label" for="wp-drop">Max drop from review</label>
+          <input id="wp-drop" name="max_drawdown_pct" type="number" step="1" min="0" max="99" placeholder="25" class="{{ wcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="wp-date">Horizon date</label>
+          <input id="wp-date" name="horizon_date" type="date" class="{{ wcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="wp-months">…or months out</label>
+          <input id="wp-months" name="horizon_months" type="number" step="1" min="1" max="120" placeholder="12" class="{{ wcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="wp-below">Price floor</label>
+          <input id="wp-below" name="price_below" type="number" step="any" min="0" placeholder="optional" class="{{ wcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="wp-above">Price target</label>
+          <input id="wp-above" name="price_above" type="number" step="any" min="0" placeholder="optional" class="{{ wcls }}" />
+        </div>
+        <div class="col-span-2">
+          <label class="kpi-label" for="wp-note">Horizon note</label>
+          <input id="wp-note" name="horizon_note" class="{{ wcls }}" placeholder="what should be true by then" />
+        </div>
+        <div class="col-span-2 md:col-span-6 flex flex-wrap items-center gap-3">
+          <button type="submit" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white">Save watch plan</button>
+          <button type="submit" name="remove" value="1"
+                  onclick="return confirm('Clear the kill criteria and horizon for this ticker?')"
+                  class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-red-400">Clear</button>
+          {# Re-anchoring moves a live kill line, so it is never a side effect of
+             saving — it is its own button, with its own confirmation. #}
+          <button type="submit" name="re_anchor" value="1"
+                  onclick="return confirm('Reset the drawdown line to measure from today\'s price? Do this after a fresh analysis — it clears the drop accumulated so far.')"
+                  class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-sky-400">Re-anchor to today</button>
+          <span class="text-[11px] text-slate-600">
+            Empty fields clear that line. Price floor/target are in the stock's own trading currency.
+            The drop is measured in SEK from the price on the day you set the line — not from cost —
+            so an old position is judged on your latest thesis. Re-anchor after a fresh analysis.
+          </span>
+        </div>
+      </form>
+      </div>
+    </details>
+    {% endif %}
+
+    {% if addplan_action %}
+    {% set acls = "w-full bg-slate-900/60 border border-slate-700/60 rounded-lg px-2 py-1.5 text-sm text-slate-200" %}
+    <details id="ap-details">
+      <summary class="text-xs text-slate-500 hover:text-slate-300 py-1.5" style="cursor:pointer;list-style:none">
+        ＋ Set an add plan <span class="text-slate-600">— book, ceiling, tranche, target, review anchor</span>
+      </summary>
+      <div id="ap-home">
+      <form method="post" action="{{ addplan_action }}" id="ap-form" class="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 mb-2">
+        <div>
+          <label class="kpi-label" for="ap-ticker">Ticker</label>
+          <input id="ap-ticker" name="ticker" list="ap-tickers" required class="{{ acls }}" />
+          <datalist id="ap-tickers">
+            {% for h in sleeve.holdings %}<option value="{{ h.ticker }}"></option>{% endfor %}
+          </datalist>
+        </div>
+        <div>
+          <label class="kpi-label" for="ap-book">Book</label>
+          <select id="ap-book" name="book" class="{{ acls }}">
+            {% for b, g in add_gates.items() %}<option value="{{ b }}">{{ b }} — {{ "{:g}".format(g.dislocation_pct) }}% / {{ "{:g}".format(g.min_expected_annual_return) }}%</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="kpi-label" for="ap-max">Max weight %</label>
+          <input id="ap-max" name="max_weight_pct" type="number" step="0.5" min="0" max="100" class="{{ acls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="ap-tranche">Tranche %</label>
+          <input id="ap-tranche" name="tranche_pct" type="number" step="0.5" min="0" max="100" placeholder="1" class="{{ acls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="ap-target">Target price (SEK)</label>
+          <input id="ap-target" name="target_price" type="number" step="any" min="0" class="{{ acls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="ap-review">Review anchor (SEK)</label>
+          <input id="ap-review" name="review_price" type="number" step="any" min="0" class="{{ acls }}" />
+        </div>
+        <div class="col-span-2 md:col-span-6 flex flex-wrap items-center gap-3">
+          <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold text-white">Save add plan</button>
+          {# Both of these stamp a date, so neither rides along with an ordinary
+             save — a confirmation that happens as a side effect is how a stale
+             anchor starts looking fresh. #}
+          <button type="submit" name="anchor_live" value="1"
+                  class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-emerald-400">Anchor review at today's price</button>
+          <button type="submit" name="proof" value="yes"
+                  class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-emerald-400">Proof confirmed</button>
+          <button type="submit" name="proof" value="no"
+                  class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-amber-400">Withdraw proof</button>
+          <button type="submit" name="remove" value="1"
+                  onclick="return confirm('Remove the whole add plan for this ticker?')"
+                  class="px-3 py-2 rounded-lg border border-slate-700/60 text-xs font-semibold text-slate-400 hover:text-red-400">Clear</button>
+          <span class="text-[11px] text-slate-600">
+            Target and review anchor are stamped with today's date. A report landing after that
+            stamp marks them stale, and a stale valuation suppresses every add until fair value is
+            recalculated — proof and target are cleared separately.
+          </span>
+        </div>
+      </form>
+      </div>
+    </details>
+    {% endif %}
+
+    <details>
+      <summary class="text-xs text-slate-500 hover:text-slate-300 py-1.5" style="cursor:pointer;list-style:none">
+        ⓘ How monitoring works
+      </summary>
+      <div class="text-[11px] text-slate-500 leading-relaxed space-y-2 mt-1 mb-2">
+        <p>Alerts push to Telegram. Kill lines are checked against prices every run — a breach pushes once,
+          then re-arms when the position recovers. The distance to a kill line is measured from the review
+          price when one is set, otherwise from cost.</p>
+        <p>Text criteria are judged daily against news summaries, article text and cached fundamentals; one
+          marked <span class="text-amber-400">not auto-checkable</span> needs figures only the report carries,
+          so it's quoted back to you at each print instead.</p>
+        <p>Horizons nudge at 30 / 14 / 7 / 1 days and on the day, as a prompt to re-run the thesis.
+          Drift ≥ 1.50× target fires the rebalance alert; the weight bar ends at that threshold and the tick marks the target.</p>
+        <p>An add signal needs (proof or dislocation) and valuation and weight, unless the kill criterion
+          is active. A price fall alone is never a kill — it makes the evidence more urgent to re-read.</p>
+        <p>Verify every alert before acting.</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<div class="space-y-3 mb-4" id="actions">
+  {% if fill_action %}
+  {% set rf = fill_refill or {} %}
+  <section class="card sl-action">
+    <details id="ff-details" {% if fill_refill %}open{% endif %}>
+      <summary class="sl-action-sum">
+        <span class="material-symbols-outlined text-sky-400" style="font-size:18px">add_circle</span>
+        <span class="card-title">Record a fill</span>
+        <span class="sl-action-hint">
+          {% if recent_fills %}Last recorded: <b class="text-slate-300">{{ recent_fills[0].day }}</b>
+            · {{ recent_fills[0].side }} {{ "%g"|format(recent_fills[0].shares) }} × {{ recent_fills[0].ticker }}
+          {% else %}No fills recorded yet{% endif %}
+        </span>
+        <span class="material-symbols-outlined sl-chev">expand_more</span>
+      </summary>
+      {% if recent_fills %}
+      {% set t = recent_fills[0] %}
+      <p class="text-xs text-slate-500 mt-1">
+        Check before adding — last: {{ t.date }} · <span class="badge badge-{{ t.side | lower }}">{{ t.side }}</span>
+        {{ "%g"|format(t.shares) }} × <b class="text-slate-300">{{ t.ticker }}</b> @ {{ "{:,.2f}".format(t.price) }} SEK, fee {{ "{:.2f}".format(t.fee) }}
+        · <a href="{{ book_prefix }}/transactions" class="text-sky-400 hover:text-sky-300">All {{ n_fills }} trade{{ '' if n_fills == 1 else 's' }} →</a>
+      </p>
+      {% endif %}
+      {% set fcls = 'w-full bg-slate-950/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500/60' %}
+      <form method="post" action="{{ fill_action }}" class="mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+        <div>
+          <label class="kpi-label" for="ff-ticker">Ticker</label>
+          <input id="ff-ticker" name="ticker" list="ff-tickers" required placeholder="NVDA" value="{{ rf.ticker or '' }}" class="{{ fcls }}" />
+          {% if sleeve.holdings %}
+          <datalist id="ff-tickers">
+            {% for h in sleeve.holdings %}<option value="{{ h.ticker }}"></option>{% endfor %}
+          </datalist>
+          {% endif %}
+        </div>
+        <div>
+          <label class="kpi-label" for="ff-side">Side</label>
+          <select id="ff-side" name="side" class="{{ fcls }}">
+            <option value="buy">Buy</option>
+            <option value="sell" {% if rf.side == 'sell' %}selected{% endif %}>Sell (trim)</option>
+          </select>
+        </div>
+        <div>
+          <label class="kpi-label" for="ff-shares">Shares</label>
+          <input id="ff-shares" name="shares" type="number" step="any" min="0" required placeholder="41" value="{{ rf.shares or '' }}" class="{{ fcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="ff-price">Price (SEK)</label>
+          <input id="ff-price" name="price_sek" type="number" step="0.01" min="0" required placeholder="avg cost" value="{{ rf.price or '' }}" class="{{ fcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="ff-fee">Fee (SEK)</label>
+          <input id="ff-fee" name="fee_sek" type="number" step="0.01" min="0" value="{{ rf.fee or '0' }}" class="{{ fcls }}" />
+        </div>
+        <div>
+          <label class="kpi-label" for="ff-date">Date (optional)</label>
+          <input id="ff-date" name="trade_date" type="date" value="{{ rf.date or '' }}" class="{{ fcls }}" />
+        </div>
+        {% if fill_refill %}
+        <label class="col-span-2 md:col-span-6 flex items-center gap-2 text-xs text-amber-400">
+          <input type="checkbox" name="allow_duplicate" value="1" />
+          This is a second, separate fill — record it even though an identical one is already recorded.
+        </label>
+        {% endif %}
+        <div class="col-span-2 md:col-span-6 flex flex-wrap items-center gap-3">
+          <button type="submit" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-semibold text-white">Record fill</button>
+          <span class="text-[11px] text-slate-600">
+            Price in SEK (your Montrose average cost). To seed a holding you already own, enter the shares at your avg cost with fee 0; a trim is a Sell.
+            A fill matching one already recorded (same ticker, side, shares and price within a week) is held back as a likely duplicate.
+          </span>
+        </div>
+      </form>
+    </details>
+  </section>
+  {% endif %}
+
+  {% if review %}
+  {% include "partials/_sleeve_review.html" %}
+  {% endif %}
+
+  {% if last_run %}
+  {# Last Decision — the latest review, in one line; the import is not a decision. #}
+  <section class="card sl-action" id="last-decision">
+    <details>
+      <summary class="sl-action-sum">
+        <span class="material-symbols-outlined text-blue-400" style="font-size:18px">auto_awesome</span>
+        <span class="card-title">Last Decision</span>
+        <span class="sl-action-hint">
+          {{ last_run.timestamp }} ·
+          <span class="text-emerald-400">{{ last_run.buys }} buy</span> ·
+          <span class="text-red-400">{{ last_run.sells }} sell</span> ·
+          {{ last_run.holds }} hold
+        </span>
+        <a href="{{ book_prefix }}/history" class="text-xs text-blue-400 hover:text-blue-300">All decisions →</a>
+        <span class="material-symbols-outlined sl-chev">expand_more</span>
+      </summary>
+      {% if last_run.market_summary %}
+      <p class="text-xs text-slate-400 leading-relaxed mb-3">{{ last_run.market_summary }}</p>
+      {% endif %}
+      {% if last_run.actions %}
+      <div class="overflow-x-auto mb-3">
+        <table class="data-table" style="font-size:11px">
+          <thead>
+            <tr>
+              <th>Ticker</th><th class="num">Shares</th><th class="num">≈ SEK</th>
+              <th class="num">Weight</th><th class="num">Conf</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in last_run.actions %}
+            <tr>
+              <td style="white-space:nowrap">
+                {% if a.side == "buy" %}<span class="badge badge-buy">BUY</span>
+                {% elif a.side == "sell" %}<span class="badge badge-sell">SELL</span>
+                {% else %}<span class="badge badge-hold">HOLD</span>{% endif %}
+                <span class="text-white font-medium ml-1">{{ a.ticker }}</span>
+              </td>
+              <td class="num {% if a.shares %}text-white font-semibold{% else %}text-slate-600{% endif %}">
+                {% if a.shares %}{{ "{:,.4g}".format(a.shares) }}{% else %}—{% endif %}</td>
+              <td class="num text-slate-300">{{ "{:,.0f}".format(a.sek_estimate) }}</td>
+              <td class="num text-slate-300">{{ a.target_weight_pct }}%</td>
+              <td class="num text-slate-300">{{ "%.2f"|format(a.confidence) }}</td>
+            </tr>
+            <tr>
+              <td colspan="5" class="text-slate-500" style="font-size:10.5px;padding-top:0;padding-bottom:6px">
+                {{ a.thesis }}{% if a.stop_loss_pct %} · stop −{{ a.stop_loss_pct }}%{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% if last_run.notes and last_run.actions %}
+      <p class="text-xs text-slate-600 leading-relaxed italic">{{ last_run.notes }}</p>
+      {% endif %}
+    </details>
+    {% if last_run.notes and not last_run.actions %}
+    {# An empty decision with a note is usually a failure to render — keep it in view. #}
+    <p class="text-xs text-slate-500 italic px-4 pb-3 -mt-1">{{ last_run.notes }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+
+<section class="card" id="performance">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-blue-400" style="font-size:17px">show_chart</span>
+      <h2 class="card-title">Portfolio vs {{ benchmark_label|default("Benchmark") }}</h2>
+    </div>
+    <div class="flex items-center gap-0.5" id="chart-period-tabs">
+      <button class="ptab" data-period="1m">1M</button>
+      <button class="ptab" data-period="3m">3M</button>
+      <button class="ptab active" data-period="all">All</button>
+    </div>
+  </div>
+  <div class="sl-perf">
+    <div>
+      {% if has_history %}
+      <div id="nav-chart" class="sl-chart"></div>
+      {% else %}
+      <p class="empty">No NAV history yet — it starts with the first daily valuation.</p>
+      {% endif %}
+    </div>
+    {% if positions %}
+    <div id="viz-card">
+      <div class="sl-sec">Composition</div>
+      <div class="sl-treemap"><div id="viz-treemap" style="position:absolute;inset:0"></div></div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+{% include "partials/_composition_script.html" %}
+
+{% if has_history %}
+{% with compact_chart = true %}{% include "partials/_nav_chart_script.html" %}{% endwith %}
+{% endif %}
+
+<script>
+(() => {
+  // Open the row an attention link points at, and bring it into view.
+  function openFromHash() {
+    const el = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (el && el.tagName === 'DETAILS') {
+      el.open = true;
+      el.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+  }
+  window.addEventListener('hashchange', openFromHash);
+  openFromHash();
+
+  // One kill-plan form and one add-plan form for the whole page. An edit button
+  // moves the form into its row and fills it in, so editing happens where the
+  // row is instead of a scroll away; opening the "for any ticker" panel moves it
+  // back home.
+  function wire(btnClass, formId, homeId, detailsId, fill) {
+    const form = document.getElementById(formId);
+    const home = document.getElementById(homeId);
+    const details = document.getElementById(detailsId);
+    if (!form || !home || !details) return;
+    document.querySelectorAll('.' + btnClass).forEach(btn => {
+      btn.addEventListener('click', () => {
+        const slot = btn.closest('.sl-full').querySelector('.sl-edit-slot');
+        if (form.parentElement === slot) { home.appendChild(form); return; }
+        slot.appendChild(form);
+        fill(form, btn.dataset);
+        form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      });
+    });
+    details.addEventListener('toggle', () => {
+      if (details.open && form.parentElement !== home) {
+        home.appendChild(form);
+        form.reset();
+      }
+    });
+  }
+
+  wire('wp-edit', 'wp-form', 'wp-home', 'wp-details', (form, d) => {
+    form.ticker.value           = d.ticker;
+    form.kill_criterion.value   = d.kill  || '';
+    form.add_criterion.value    = d.add   || '';
+    form.max_drawdown_pct.value = d.drop  || '';
+    form.price_below.value      = d.below || '';
+    form.price_above.value      = d.above || '';
+    form.horizon_date.value     = d.date  || '';
+    form.horizon_note.value     = d.note  || '';
+    form.horizon_months.value   = '';
+  });
+  wire('ap-edit', 'ap-form', 'ap-home', 'ap-details', (form, d) => {
+    form.ticker.value         = d.ticker;
+    form.book.value           = d.book    || 'A';
+    form.max_weight_pct.value = d.max     || '';
+    form.tranche_pct.value    = d.tranche || '';
+    form.target_price.value   = d.target  || '';
+    form.review_price.value   = d.review  || '';
+  });
+
+  // A date and a month count are two ways to say the same thing, and the date
+  // wins on the server. Typing in one clears the other so the form can never
+  // show two answers while acting on one.
+  const wp = document.getElementById('wp-form');
+  if (wp) {
+    const date = wp.horizon_date, months = wp.horizon_months;
+    months.addEventListener('input', () => { if (months.value) date.value = ''; });
+    date.addEventListener('input',   () => { if (date.value) months.value = ''; });
+  }
+})();
+</script>
+{% endblock %}

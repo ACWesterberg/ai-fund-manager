@@ -127,6 +127,21 @@ class DecisionOutcome:
     id: int | None = None
 
     @property
+    def decision_edge_pct(self) -> float | None:
+        """Alpha from the decision's side: the stock's alpha for a buy or hold,
+        its negative for a sell.
+
+        `outperformed` and `position_return_pct` describe the *stock*. Fed to
+        the lesson writer unsigned, a sell that the stock then rallied past
+        read as a winning trade, so the coach learned from the wrong side.
+        A hold keeps the exposure, so it is scored like the long it is.
+        """
+        if self.position_return_pct is None or self.benchmark_return_pct is None:
+            return None
+        alpha = self.position_return_pct - self.benchmark_return_pct
+        return -alpha if self.action == "sell" else alpha
+
+    @property
     def was_correct(self) -> bool | None:
         """A buy/sell is 'correct' if it outperformed the benchmark; hold is correct if it would have underperformed."""
         if self.outperformed is None:

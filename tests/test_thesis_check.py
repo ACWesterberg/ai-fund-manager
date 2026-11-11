@@ -156,12 +156,12 @@ def test_review_message_keeps_each_company_to_its_own_evidence():
 
 # ── the cross-tab ─────────────────────────────────────────────────────────────
 
-def _outcome_row(store, ticker, verdict, outperformed):
+def _outcome_row(store, ticker, verdict, outperformed, action="buy"):
     with store._conn() as conn:
         conn.execute(
             "INSERT INTO decision_outcomes (run_id, ticker, action, thesis_verdict, "
-            "outperformed, source) VALUES ('r1', ?, 'buy', ?, ?, 'run')",
-            (ticker, verdict, 1 if outperformed else 0),
+            "outperformed, source) VALUES ('r1', ?, ?, ?, ?, 'run')",
+            (ticker, action, verdict, 1 if outperformed else 0),
         )
 
 
@@ -179,6 +179,16 @@ def test_thesis_stats_separate_luck_from_skill(store):
     # unresolved is excluded from the rate rather than counted as a failure.
     assert stats["resolved"] == 4
     assert stats["hold_rate"] == pytest.approx(0.5)
+
+
+def test_thesis_stats_score_a_sell_from_its_own_side(store):
+    """A held sell thesis on a stock that then lagged is a call that came out ahead."""
+    _outcome_row(store, "A.ST", "held", False, action="sell")
+    _outcome_row(store, "B.ST", "broke", True, action="sell")
+
+    cells = store.get_thesis_stats()["cells"]
+    assert cells["held"] == {"beat": 1, "lagged": 0}
+    assert cells["broke"] == {"beat": 0, "lagged": 1}
 
 
 def test_thesis_stats_empty(store):

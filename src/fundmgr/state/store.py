@@ -1357,7 +1357,7 @@ class Store:
         """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT thesis_verdict, outperformed FROM decision_outcomes "
+                "SELECT thesis_verdict, outperformed, action FROM decision_outcomes "
                 "WHERE thesis_verdict IS NOT NULL AND outperformed IS NOT NULL "
                 "AND (source IS NULL OR source = 'run')"
             ).fetchall()
@@ -1365,7 +1365,9 @@ class Store:
         cells: dict[str, dict[str, int]] = {}
         for r in rows:
             verdict = r["thesis_verdict"]
-            side = "beat" if r["outperformed"] else "lagged"
+            # "beat" is the decision coming out ahead: a sell wins when the stock lags.
+            won = bool(r["outperformed"]) != (r["action"] == "sell")
+            side = "beat" if won else "lagged"
             cells.setdefault(verdict, {"beat": 0, "lagged": 0})[side] += 1
 
         resolved = sum(

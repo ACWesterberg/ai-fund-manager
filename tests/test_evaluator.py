@@ -167,8 +167,31 @@ def test_batch_review_message_reports_dispersion():
         _outcome("BBB.ST", ret=-4.0, bench=2.0),  # -6pp
     ]}
     msg = _batch_review_message(by_run, {"r1": ""}, "^OMXSPI", max_lessons=3)
-    assert "2 trades, 1 beat" in msg
-    assert "mean alpha +0.0pp" in msg and "spread 12.0pp" in msg
+    assert "2 trades, 1 came out ahead" in msg
+    assert "mean stock alpha +0.0pp" in msg and "spread 12.0pp" in msg
+    assert "sell edge" not in msg
+
+
+def test_batch_review_scores_a_sell_from_its_own_side():
+    """A sell the stock then rallied past is a losing decision, not a win."""
+    by_run = {"r1": [
+        _outcome("AAA.ST", ret=8.0, bench=2.0, action="sell"),   # stock +6pp, sell -6pp
+        _outcome("BBB.ST", ret=-4.0, bench=2.0, action="sell"),  # stock -6pp, sell +6pp
+        _outcome("CCC.ST", ret=-4.0, bench=2.0, action="buy"),   # -6pp
+    ]}
+    msg = _batch_review_message(by_run, {"r1": ""}, "^OMXSPI", max_lessons=3)
+    assert "3 trades, 1 came out ahead" in msg
+    assert "SELL AAA.ST" in msg and "sell edge -6.0pp" in msg
+    assert "sell edge +6.0pp" in msg
+    assert "A SELL came out ahead when that alpha was negative" in msg
+
+
+def test_decision_edge_flips_for_sells_and_keeps_holds_long():
+    assert _outcome("A", ret=8.0, bench=2.0, action="buy").decision_edge_pct == 6.0
+    assert _outcome("A", ret=8.0, bench=2.0, action="hold").decision_edge_pct == 6.0
+    assert _outcome("A", ret=8.0, bench=2.0, action="sell").decision_edge_pct == -6.0
+    unscored = DecisionOutcome(run_id="r", ticker="A", action="sell")
+    assert unscored.decision_edge_pct is None
 
 
 def test_generate_qualitative_learnings_no_outcomes_makes_no_call(store):

@@ -103,3 +103,25 @@ def test_screen_includes_pinned_regardless_of_score():
     )
     assert selected.keys() == {"PIN", "HIGH"}
     assert screened_out == 1
+
+
+def test_screen_score_ignores_sentiment():
+    """Sentiment at screening time reflects which names had news fetched, not the news.
+
+    News is fetched for candidates only, so ranking on it rewarded names that were
+    screened recently. It must not move the score in any pipeline that screens.
+    """
+    from fundmgr.data.screener import _score
+
+    plain = _feat("A")
+    plain.return_20d_pct = 5.0
+    glowing = _feat("B")
+    glowing.return_20d_pct = 5.0
+    glowing.sentiment_label = "positive"
+    glowing.sentiment_score = 0.9
+    gloomy = _feat("C")
+    gloomy.return_20d_pct = 5.0
+    gloomy.sentiment_label = "negative"
+    gloomy.sentiment_score = 0.9
+
+    assert _score(plain) == _score(glowing) == _score(gloomy)

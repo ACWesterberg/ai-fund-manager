@@ -47,11 +47,12 @@ def _score(feat: TickerFeatures) -> float:
         elif pct <= -50:
             score -= 2.0   # deep in a hole — avoid unless clear catalyst
 
-    # ── Sentiment ─────────────────────────────────────────────────────────────
-    if feat.sentiment_label == "positive" and feat.sentiment_score is not None:
-        score += feat.sentiment_score * 5.0
-    elif feat.sentiment_label == "negative" and feat.sentiment_score is not None:
-        score -= feat.sentiment_score * 5.0
+    # No sentiment term. News is fetched for screener candidates only, so at
+    # screening time the only names with fresh sentiment are held/pinned (always
+    # included anyway) and whatever was screened in the last few days. The term
+    # never fired in the weekly run (sentiment was attached after screening) and
+    # in the What-If Lab and sleeve review it ranked on news *coverage*, not news.
+    # Sentiment reaches the model through each candidate's headlines instead.
 
     # ── Fundamentals: growth ──────────────────────────────────────────────────
     # Accelerating revenue/earnings growth is a strong buy signal

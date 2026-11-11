@@ -14,6 +14,49 @@ Offline evidence auditing and non-overlapping-period aggregation are available.
 The next milestone is validated promotion thresholds and a tested promotion gate. The older exploration notes below are background, not the
 current delivery order.
 
+---
+
+## Decision memory and Cognee — deferred until the Mac Studio move
+
+**Picked up when** the project runs on the Mac Studio. Assessed 2026-11 against
+[Cognee](https://github.com/topoteretes/cognee) (agent memory: entity extraction
+→ knowledge graph + vectors → retrieval, with an `improve` step that keeps
+rewriting the graph).
+
+**Verdict: don't put Cognee in the decision path.** Hardware was never the main
+objection; three others stand regardless of machine:
+- **Retrieval isn't the bottleneck, evidence is.** At most `PROMPT_LEARNING_LIMIT`
+  (8) short lessons reach the prompt; the open problems are labels, reward and
+  the promotion gate ([LEARNING.md](LEARNING.md)).
+- **Point-in-time correctness.** A self-updating graph with no documented as-of
+  query leaks future knowledge into replays and frozen comparisons, and makes
+  "what the model saw" unreproducible.
+- **Measurement.** Per-run retrieved context escapes the learnings fingerprint
+  and the paired guidance comparison, so its effect can't be attributed.
+
+**Step 1 — per-ticker decision memory (build first, no new infrastructure).**
+The prompt carries general lessons and the current book, but nothing about what
+*this fund* previously concluded about a name that has come back into the
+candidate list. Add a block to `build_prompt` from the existing SQLite store:
+prior thesis, held/broke verdict, realised alpha, fired kill criterion.
+- Filter strictly by `run_date < snapshot date` — replays must not leak.
+- Candidates and held names only, one or two lines each.
+- Archive it in the snapshot and fingerprint it like `learnings_fingerprint`.
+
+**Step 2 — Cognee as a research track over filings.** Local extraction and
+embedding models (or a local LLM) make a continuously maintained graph over
+filings/releases cheap on the Mac: supplier/customer links, capex exposure,
+concentration. Run it as a separate process feeding **monitoring** first
+(`paper-track` kill/add criteria — advisory, fails open, easy to check by hand).
+Enter the weekly decision prompt only once it can answer "what did we know on
+date X", and only through the paired guidance comparison.
+
+**Later, if ever.** Relevance-based lesson selection (embeddings in SQLite) only
+once the active lesson count well exceeds 8 *and* the learnings fingerprint shows
+the channel helps at all.
+
+---
+
 ## Historical backtest / replay (bootstrap the optimizer's trainset)
 
 **Idea.** Replay the fund over historical weeks to generate `(decision → 28-day

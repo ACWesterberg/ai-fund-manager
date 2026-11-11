@@ -253,6 +253,10 @@ def _alpha(o: DecisionOutcome) -> float | None:
     return o.position_return_pct - o.benchmark_return_pct
 
 
+def _edge(o: DecisionOutcome) -> float | None:
+    return o.decision_edge_pct
+
+
 def _batch_review_message(
     by_run: dict[str, list[DecisionOutcome]],
     macro_by_run: dict[str, str],
@@ -268,7 +272,7 @@ def _batch_review_message(
         macro = macro_by_run.get(run_id) or "(not recorded)"
         lines.append(f"### Run {run_id}")
         lines.append(f"Macro context at entry (SHARED by every trade in this run): {macro}")
-        for o in sorted(run_outcomes, key=lambda x: (_alpha(x) is None, _alpha(x) or 0.0)):
+        for o in sorted(run_outcomes, key=lambda x: (_edge(x) is None, _edge(x) or 0.0)):
             alpha = _alpha(o)
             # Paper books seed outcomes without a confidence — the weekly runs
             # always carry one, so this must degrade rather than raise.
@@ -277,10 +281,13 @@ def _batch_review_message(
             if alpha is None:
                 lines.append(f"{head} | alpha unknown")
             else:
-                lines.append(
+                line = (
                     f"{head} | return {o.position_return_pct:+.1f}% | "
                     f"{bench_name} {o.benchmark_return_pct:+.1f}% | alpha {alpha:+.1f}pp"
                 )
+                if o.action == "sell":
+                    line += f" | sell edge {-alpha:+.1f}pp"
+                lines.append(line)
             lines.append(f"    thesis: {o.thesis or '(not recorded)'}")
             if o.thesis_verdict:
                 lines.append(
@@ -290,13 +297,20 @@ def _batch_review_message(
 
     alphas = [a for a in (_alpha(o) for rl in by_run.values() for o in rl) if a is not None]
     if alphas:
-        beat = sum(1 for a in alphas if a > 0)
         mean = sum(alphas) / len(alphas)
         spread = max(alphas) - min(alphas)
+        edges = [e for e in (_edge(o) for rl in by_run.values() for o in rl) if e is not None]
+        ahead = sum(1 for e in edges if e > 0)
         lines.append(
-            f"Batch dispersion: {len(alphas)} trades, {beat} beat {bench_name} and "
-            f"{len(alphas) - beat} lagged; mean alpha {mean:+.1f}pp, spread {spread:.1f}pp."
+            f"Batch dispersion: {len(alphas)} trades, {ahead} came out ahead of {bench_name} "
+            f"and {len(edges) - ahead} behind; mean stock alpha {mean:+.1f}pp, "
+            f"spread {spread:.1f}pp."
         )
+        if any(o.action == "sell" for rl in by_run.values() for o in rl):
+            lines.append(
+                "Alpha is the stock's move against the benchmark. A SELL came out ahead "
+                "when that alpha was negative — its sell edge is the alpha with the sign flipped."
+            )
         lines.append("")
 
     lines.append(

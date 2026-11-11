@@ -8,6 +8,7 @@ from the store) continues to work unchanged.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 from financedata import get_fundamentals as fd_get_fundamentals, ts_to_days
 
@@ -29,11 +30,49 @@ def fetch_and_cache_fundamentals(
     return refreshed
 
 
-def apply_to_features(features: dict, store: Store) -> None:
+# Yahoo quotes these venues in a minor unit (pence, cents, agorot) but reports
+# market cap in the major one, so the cap converts at the major unit's rate.
+_MINOR_UNITS = {"GBP": "GBP", "GBX": "GBP", "GBp": "GBP", "ZAc": "ZAR", "ZAC": "ZAR", "ILA": "ILS"}
+
+
+def _market_cap_currency(raw: object, fallback: str | None) -> str | None:
+    cur = raw if isinstance(raw, str) and raw.strip() else fallback
+    if not cur:
+        return None
+    cur = cur.strip()
+    return _MINOR_UNITS.get(cur, cur.upper())
+
+
+def apply_to_features(
+    features: dict,
+    store: Store,
+    rate_to_sek: Callable[[str], float | None] | None = None,
+) -> None:
     """
     Pull cached fundamentals from fund's store and attach to TickerFeatures objects.
     `features` is a dict[str, TickerFeatures] as returned by build_all_features.
+
+    Market cap is converted to SEK because every mandate states its size bands
+    in SEK ("small cap < 5B SEK"). Left native, a USD name read as ~10× smaller
+    than it is. Without a rate the SEK figure stays None and the prompt shows
+    the native figure with its currency code instead — never an unlabelled one.
     """
+    if rate_to_sek is None:
+        from fundmgr.data.fx import rate_to_sek as _fx
+
+        def rate_to_sek(cur: str) -> float | None:
+            return _fx(cur, store)
+
+    rates: dict[str, float | None] = {}
+
+    def _rate(cur: str) -> float | None:
+        if cur not in rates:
+            try:
+                rates[cur] = rate_to_sek(cur)
+            except Exception:
+                rates[cur] = None
+        return rates[cur]
+
     cached = store.get_all_fundamentals(list(features.keys()))
 
     for ticker, feat in features.items():
@@ -75,8 +114,12 @@ def apply_to_features(features: dict, store: Store) -> None:
             raw = data.get(frac_key)
             setattr(feat, attr, round(raw * 100, 1) if raw is not None else None)
 
-        mc = data.get("market_cap")
-        feat.market_cap_msek = round(mc / 1e6, 0) if mc is not None else None
+        mc = _safe(data.get("market_cap"))
+        cur = _market_cap_currency(data.get("currency"), getattr(feat, "currency", None))
+        feat.market_cap_m = round(mc / 1e6, 0) if mc is not None else None
+        feat.market_cap_currency = cur if mc is not None else None
+        rate = _rate(cur) if (mc is not None and cur) else None
+        feat.market_cap_msek = round(mc * rate / 1e6, 0) if rate else None
 
         high = data.get("fifty_two_week_high")
         if high and high > 0 and feat.last_price:

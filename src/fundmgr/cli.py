@@ -155,6 +155,27 @@ def _skip_on_market_holiday(cfg) -> bool:
     return True
 
 
+def _archive_run(cfg, store, run_id: str, features: dict, selected: set[str],
+                 held: set[str], pinned: set[str], universe_size: int) -> None:
+    """Write what this run could see that cannot be re-fetched later. Advisory."""
+    from fundmgr.data.screener import score_all
+    from fundmgr.state.archive import build_run_archive, write_run_archive
+
+    try:
+        payload = build_run_archive(
+            cfg, run_id, features, selected, score_all(features),
+            store.get_all_fundamentals(list(features)), held, pinned, universe_size,
+        )
+    except Exception as exc:
+        click.echo(f"      ⚠ Run archive not built: {exc}", err=True)
+        return
+    path = write_run_archive(cfg, run_id, payload)
+    if path is not None:
+        click.echo(f"      Archived {len(payload['population'])} screened names → {path.name}")
+    else:
+        click.echo("      ⚠ Run archive not written (see log)", err=True)
+
+
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Run pipeline but skip saving recommendation")
 @click.option("--force-refresh", is_flag=True, help="Re-fetch all prices even if cached")
@@ -415,6 +436,8 @@ def run(dry_run: bool, force_refresh: bool, skip_news: bool, skip_macro: bool,
             prices=decision_prices,
         )
         click.echo(f"      Recommendation saved (run_id: {run_id})")
+        _archive_run(cfg, store, run_id, features, set(screened_features),
+                     held_tickers, pinned, len(tickers))
 
         # Persist stop/take-profit levels per position so check-stops survives
         # multiple runs.

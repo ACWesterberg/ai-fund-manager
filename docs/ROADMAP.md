@@ -14,6 +14,90 @@ Offline evidence auditing and non-overlapping-period aggregation are available.
 The next milestone is validated promotion thresholds and a tested promotion gate. The older exploration notes below are background, not the
 current delivery order.
 
+---
+
+## Decision memory and Cognee — deferred until the Mac Studio move
+
+**Picked up when** the project runs on the Mac Studio. Assessed 2026-11 against
+[Cognee](https://github.com/topoteretes/cognee) (agent memory: entity extraction
+→ knowledge graph + vectors → retrieval, with an `improve` step that keeps
+rewriting the graph).
+
+**Verdict: don't put Cognee in the decision path.** Hardware was never the main
+objection; three others stand regardless of machine:
+- **Retrieval isn't the bottleneck, evidence is.** At most `PROMPT_LEARNING_LIMIT`
+  (8) short lessons reach the prompt; the open problems are labels, reward and
+  the promotion gate ([LEARNING.md](LEARNING.md)).
+- **Point-in-time correctness.** A self-updating graph with no documented as-of
+  query leaks future knowledge into replays and frozen comparisons, and makes
+  "what the model saw" unreproducible.
+- **Measurement.** Per-run retrieved context escapes the learnings fingerprint
+  and the paired guidance comparison, so its effect can't be attributed.
+
+**Step 1 — per-ticker decision memory (build first, no new infrastructure).**
+The prompt carries general lessons and the current book, but nothing about what
+*this fund* previously concluded about a name that has come back into the
+candidate list. Add a block to `build_prompt` from the existing SQLite store:
+prior thesis, held/broke verdict, realised alpha, fired kill criterion.
+- Filter strictly by `run_date < snapshot date` — replays must not leak.
+- Candidates and held names only, one or two lines each.
+- Archive it in the snapshot and fingerprint it like `learnings_fingerprint`.
+
+**Step 2 — Cognee as a research track over filings.** Local extraction and
+embedding models (or a local LLM) make a continuously maintained graph over
+filings/releases cheap on the Mac: supplier/customer links, capex exposure,
+concentration. Run it as a separate process feeding **monitoring** first
+(`paper-track` kill/add criteria — advisory, fails open, easy to check by hand).
+Enter the weekly decision prompt only once it can answer "what did we know on
+date X", and only through the paired guidance comparison.
+
+**Later, if ever.** Relevance-based lesson selection (embeddings in SQLite) only
+once the active lesson count well exceeds 8 *and* the learnings fingerprint shows
+the channel helps at all.
+
+
+## Decision-quality backlog (gap analysis, 2026-11)
+
+Done 2026-11: sells scored from their own side in lessons and the thesis
+cross-tab; the screener's coverage-biased sentiment term removed; market cap in
+SEK; and the per-run archive (`state/archive.py`) plus per-sample consensus
+logging, which the items below depend on. In priority order:
+
+1. **Score the unbought.** Compare the picks with an equal-weight basket of the
+   shown candidates, and score shown-but-not-chosen names. Today only approved
+   actions get outcomes and holds score zero in the optimizer reward
+   (`optimizer.py` side handling). Backfillable from 2026-09-22 via archived
+   candidate features.
+2. **Screener rank vs forward return** (rank correlation per week, e.g.
+   alphalens-reloaded) from the run archive. The prompt re-sorts by
+   `_signal_score`; measure both orderings.
+3. **Per-ticker decision memory** — see the Mac-move section above.
+4. **Surface fetched-but-dropped quality data**: operating/EBITDA margin, ROA,
+   FCF, debt/cash are cached by FinanceData but dropped in `apply_to_features`;
+   `data/statements.py` (net debt/EBITDA, interest cover) is wired to sleeves
+   only. The Buffett mandate asks for exactly these.
+5. **Earnings and analyst detail**: last surprise, estimate revisions
+   (`eps_trend`/`eps_revisions` must be snapshotted — current-only in yfinance),
+   upgrades/downgrades. Needs FinanceData support. `days_to_earnings` is
+   calendar days though labelled trading days.
+6. **Portfolio-aware features**: ADV in SEK (mandate liquidity rule is
+   unchecked), correlation to current holdings, sector-relative momentum.
+7. **Unused sources**: `get_insider_summary` (SEC Form 4 + Swedish FI register)
+   is never called; news window is 3 days on a 28–90 day horizon;
+   `get_macro_context` (policy rates) unused.
+8. **Measurement**: confidence/size vs alpha regression; GPT-vs-Claude paired
+   weekly differences with a block bootstrap; return attribution; forward test
+   of lessons via the archived `learnings_hash`.
+
+Outside projects worth borrowing from: Graphiti (bi-temporal graph memory —
+preferred over Cognee for the filings track, as it answers as-of queries), GEPA
+(`dspy.GEPA`, reflective prompt evolution that consumes textual feedback such as
+thesis verdicts — a candidate proposal step for the bounded optimizer), a
+bull/bear critique pass as in TradingAgents (only via `compare-guidance`),
+Börsdata API for Nordic historical fundamentals (check Pro+/non-commercial terms).
+
+---
+
 ## Historical backtest / replay (bootstrap the optimizer's trainset)
 
 **Idea.** Replay the fund over historical weeks to generate `(decision → 28-day

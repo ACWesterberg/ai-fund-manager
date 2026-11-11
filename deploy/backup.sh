@@ -11,12 +11,16 @@
 #   RCLONE_REMOTE    rclone remote:path         (default "gdrive:fund-manager-backups")
 #   RETENTION_DAYS   keep backups newer than N  (default 14)
 #   BACKUP_ENV       "1" to also back up .env    (default 0 — contains secrets!)
+#   RCLONE_ARCHIVE_REMOTE  where data/archive/ goes (default "<RCLONE_REMOTE>-archive").
+#                    Kept apart from RCLONE_REMOTE because that path is pruned
+#                    by age, and the run archive is history that cannot be refetched.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${FUND_DIR:-$SCRIPT_DIR/..}"
 RCLONE_REMOTE="${RCLONE_REMOTE:-gdrive:fund-manager-backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
+RCLONE_ARCHIVE_REMOTE="${RCLONE_ARCHIVE_REMOTE:-${RCLONE_REMOTE}-archive}"
 BACKUP_ENV="${BACKUP_ENV:-0}"
 
 cd "$REPO_DIR"
@@ -71,6 +75,13 @@ else
     LOG "  ⚠ rclone not installed — kept local archive only (see deploy/BACKUP.md)"
 fi
 
-# 4. Prune old local archives.
+# 4. Run archive (data/archive/<fund>/<run_id>.json.gz): immutable, one file per
+#    run, so an incremental copy sends only new files. Never pruned.
+if [ -d data/archive ] && command -v rclone >/dev/null 2>&1; then
+    rclone copy data/archive "$RCLONE_ARCHIVE_REMOTE" --ignore-existing --quiet
+    LOG "  run archive synced → $RCLONE_ARCHIVE_REMOTE"
+fi
+
+# 5. Prune old local archives.
 find data/backups -name 'fund-backup-*.tgz' -mtime "+${RETENTION_DAYS}" -delete 2>/dev/null || true
 LOG "=== Backup complete ==="

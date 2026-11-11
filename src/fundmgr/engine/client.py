@@ -330,10 +330,15 @@ def call_llm_consensus(
         "succeeded": len(results),
         "failed":    len(errors),
         "errors":    [e[:200] for e in errors],  # truncated for storage
+        # Every individual run, not just the vote. The minority proposals are
+        # the free counterfactuals, and agreement is a confidence signal that
+        # cannot be measured once only the merged consensus survives.
+        "samples":   [r.model_dump(mode="json") for r in results],
     }
 
     if len(results) == 1:
         return results[0], raw_responses[0], {a.ticker: 1 for a in results[0].actions}, sampling
 
     consensus, vote_counts = _aggregate_decisions(results)
+    sampling["vote_counts"] = dict(vote_counts)
     return consensus, consensus.model_dump_json(), vote_counts, sampling

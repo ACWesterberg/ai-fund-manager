@@ -32,7 +32,9 @@ class TickerFeatures:
     pb_ratio: float | None = None           # price / book
     ev_to_ebitda: float | None = None       # enterprise value / EBITDA
     price_to_sales: float | None = None     # trailing P/S
-    market_cap_msek: float | None = None    # market cap, millions (native currency)
+    market_cap_msek: float | None = None    # market cap, millions of SEK (None if no FX)
+    market_cap_m: float | None = None       # market cap, millions, in market_cap_currency
+    market_cap_currency: str | None = None
     dividend_yield_pct: float | None = None
     # ── Quality / profitability ───────────────────────────────────────────────
     gross_margin_pct: float | None = None
@@ -87,7 +89,9 @@ class TickerFeatures:
         if self.needs_fx:
             price_line += f"  [FX: {self.currency}]"
         if self.market_cap_msek is not None:
-            price_line += f"  mktcap {self.market_cap_msek:,.0f}M"
+            price_line += f"  mktcap {self.market_cap_msek:,.0f}M SEK"
+        elif self.market_cap_m is not None:
+            price_line += f"  mktcap {self.market_cap_m:,.0f}M {self.market_cap_currency or '?'}"
         lines.append(price_line)
 
         # Returns

@@ -79,12 +79,13 @@ def test_a_split_inside_the_horizon_is_not_scored_as_a_loss(tmp_path):
     assert o.outperformed is True
 
 
-def test_a_dividend_adjustment_keeps_the_recorded_decision_price(tmp_path):
+def test_the_entry_is_the_decision_day_close_not_the_09_30_price(tmp_path):
+    """The benchmark starts at the day's close, so the stock does too."""
     from fundmgr.engine.evaluator import evaluate_pending_outcomes
     store = Store(tmp_path / "f.db")
     _seed_outcome(store, price_at_decision=100.0, decision_close=98.0, eval_close=110.0)
     [o] = evaluate_pending_outcomes(store, lookback_days=28)
-    assert o.position_return_pct == pytest.approx(10.0)
+    assert o.position_return_pct == pytest.approx((110 / 98 - 1) * 100, abs=0.01)
 
 
 def _prior_close(store, close: float) -> None:
@@ -93,17 +94,21 @@ def _prior_close(store, close: float) -> None:
                                   "close": close, "volume": 0}])
 
 
-def test_a_decision_day_collapse_is_scored_not_rebased_away(tmp_path):
-    """Bought at 100 at 09:30, closed the day at 80 and stayed there: −20%, not 0%."""
+def test_a_decision_day_move_is_left_out_of_both_legs(tmp_path):
+    """Bought at 09:30 at 100, closed the day at 80 and stayed: 0%, as for the index.
+
+    The deliberate cost of close-to-close labels — the decision day's own
+    move is in neither the stock's return nor the benchmark's.
+    """
     from fundmgr.engine.evaluator import evaluate_pending_outcomes
     store = Store(tmp_path / "f.db")
     _seed_outcome(store, price_at_decision=100.0, decision_close=80.0, eval_close=80.0)
-    _prior_close(store, 99.0)                         # the session before saw ~100
+    _prior_close(store, 99.0)
     [o] = evaluate_pending_outcomes(store, lookback_days=28)
-    assert o.position_return_pct == pytest.approx(-20.0)
+    assert o.position_return_pct == pytest.approx(0.0)
 
 
-def test_a_split_that_rebased_the_prior_close_too_is_still_rebased(tmp_path):
+def test_a_split_is_scored_on_one_price_basis(tmp_path):
     from fundmgr.engine.evaluator import evaluate_pending_outcomes
     store = Store(tmp_path / "f.db")
     _seed_outcome(store, price_at_decision=200.0, decision_close=100.0, eval_close=110.0)

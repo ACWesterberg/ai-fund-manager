@@ -91,9 +91,22 @@ done
 # Ensure we're on the right branch
 git fetch origin "$BRANCH" --quiet
 TARGET=$(git rev-parse "origin/$BRANCH")
-if [ -n "${EXPECTED_REVISION:-}" ] && [ "$TARGET" != "$EXPECTED_REVISION" ]; then
-    log "Branch advanced beyond the tested revision — aborting; run checks again"
-    exit 1
+# Only a revision whose tests passed goes live. GitHub Actions calls this with
+# EXPECTED_REVISION after its test job, and that revision is recorded as tested.
+# The webhook and the 5-minute poll have no test result of their own: they used
+# to deploy any push at once, so a red commit reached the live host before (or
+# whatever) the tests said. Now they may only deploy — or retry — the revision
+# Actions recorded; anything newer waits for its own passing run.
+TESTED_FILE="$REPO_DIR/data/tested-revision"
+if [ -n "${EXPECTED_REVISION:-}" ]; then
+    if [ "$TARGET" != "$EXPECTED_REVISION" ]; then
+        log "Branch advanced beyond the tested revision — aborting; run checks again"
+        exit 1
+    fi
+    echo "$TARGET" > "$TESTED_FILE"
+elif [ "$TARGET" != "$(cat "$TESTED_FILE" 2>/dev/null || true)" ]; then
+    log "Not deploying $TARGET: no passing test run on record for it — GitHub Actions deploys it once its tests pass"
+    exit 0
 fi
 BEFORE="${DEPLOY_BEFORE:-$(git rev-parse HEAD)}"
 git reset --hard "origin/$BRANCH" --quiet

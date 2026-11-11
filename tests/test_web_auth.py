@@ -227,3 +227,36 @@ def test_another_site_cannot_sign_the_owner_out():
     _login(c)
     assert c.post("/logout", headers={"Origin": "https://attacker.example"}).status_code == 403
     assert c.get("/", headers={"Accept": "application/json"}).status_code == 200
+
+
+
+# ── Sessions are signed with a host key, not the password alone ──────────────
+
+def test_a_cookie_cannot_be_forged_from_the_password_alone(monkeypatch):
+    import hashlib
+    import hmac as _hmac
+
+    from fundmgr.web import auth
+    old_style = hashlib.sha256(b"fund-session:test-password").digest()
+    expiry = 9999999999
+    forged = f"{expiry}." + _hmac.new(old_style, str(expiry).encode(), hashlib.sha256).hexdigest()
+    c = _anon()
+    c.cookies.set(auth.COOKIE, forged)
+    assert c.get("/", headers={"Accept": "application/json"}).status_code == 401
+    c.cookies.set(auth.COOKIE, auth._sign(expiry, "test-password"))
+    assert c.get("/", headers={"Accept": "application/json"}).status_code == 200
+
+
+def test_the_host_key_is_created_once_private_and_reused(tmp_path, monkeypatch):
+    import stat
+
+    from fundmgr.web import auth
+    monkeypatch.delenv("FUND_WEB_SESSION_SECRET")
+    monkeypatch.setattr(auth, "SESSION_KEY_FILE", tmp_path / "web" / "session.key")
+    monkeypatch.setattr(auth, "_session_key", None)
+    first = auth._sign(9999999999, "pw")
+    mode = stat.S_IMODE((tmp_path / "web" / "session.key").stat().st_mode)
+    assert mode == 0o600
+    monkeypatch.setattr(auth, "_session_key", None)           # another process, same file
+    assert auth._sign(9999999999, "pw") == first
+    assert auth._sign(9999999999, "changed") != first         # a new password signs out

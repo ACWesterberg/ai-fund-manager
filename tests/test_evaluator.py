@@ -62,6 +62,7 @@ def test_evaluation_pinned_to_fixed_horizon(store):
     )
     # Pinned close at the 28-day mark = 110; a much higher "live" close today = 200.
     store.save_prices("AAA.ST", [
+        {"date": decision, "open": 0, "high": 0, "low": 0, "close": 100.0, "volume": 0},
         {"date": target, "open": 0, "high": 0, "low": 0, "close": 110.0, "volume": 0},
         {"date": _iso(0), "open": 0, "high": 0, "low": 0, "close": 200.0, "volume": 0},
     ])
@@ -474,6 +475,7 @@ def test_outcome_records_the_horizon_it_was_scored_over(store):
         {"ticker": "AAA.ST", "side": "buy", "confidence": 0.7, "thesis": "t"},
     ]), prices={"AAA.ST": 100.0})
     store.save_prices("AAA.ST", [
+        {"date": decision, "open": 0, "high": 0, "low": 0, "close": 100.0, "volume": 0},
         {"date": target, "open": 0, "high": 0, "low": 0, "close": 120.0, "volume": 0}])
     store.save_benchmark([{"date": decision, "close": 1000.0},
                           {"date": target, "close": 1050.0}])
@@ -519,7 +521,9 @@ def test_missing_horizon_history_stays_pending_until_backfilled(store):
         {"ticker": "AAA", "side": "buy", "confidence": 0.8, "thesis": "t"}]),
         prices={"AAA": 100})
     target = _iso(12)
-    store.save_prices("AAA", [{"date": _iso(0), "open": 0, "high": 0, "low": 0,
+    store.save_prices("AAA", [{"date": _iso(40), "open": 0, "high": 0, "low": 0,
+                              "close": 100, "volume": 0},
+                             {"date": _iso(0), "open": 0, "high": 0, "low": 0,
                               "close": 200, "volume": 0}])
     store.save_benchmark([{"date": _iso(40), "close": 100}, {"date": target, "close": 105}])
     assert evaluate_pending_outcomes(store) == []
@@ -567,3 +571,16 @@ def test_a_failed_lesson_call_says_so(store, monkeypatch):
     assert batch
     assert evaluator.generate_qualitative_learnings(store, batch, AppConfig(), report=report) == []
     assert report == {"failed": True}
+
+
+
+def test_without_a_decision_day_close_the_outcome_waits(store):
+    """Close-to-close on both legs: no entry close, no label yet."""
+    _save_run(store, "r", days_ago=40)
+    store.seed_outcomes_for_run("r", json.dumps([
+        {"ticker": "AAA", "side": "buy", "confidence": 0.8, "thesis": "t"}]), prices={"AAA": 100})
+    target = _iso(12)
+    store.save_prices("AAA", [{"date": target, "open": 0, "high": 0, "low": 0,
+                              "close": 110, "volume": 0}])
+    store.save_benchmark([{"date": _iso(40), "close": 100}, {"date": target, "close": 105}])
+    assert evaluate_pending_outcomes(store) == []

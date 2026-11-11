@@ -55,12 +55,15 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28,
             continue
         if not store.get_benchmark(since_date=eval_date):
             continue  # benchmark not yet cached through the evaluation date
+        entry = _entry_close(store, outcome)
+        if entry is None or entry[0] >= eval_date:
+            continue  # no decision-day close cached yet
 
-        position_return = (eval_price / _entry_price(store, outcome) - 1) * 100
+        position_return = (eval_price / entry[1] - 1) * 100
 
-        # Benchmark over the same window as the position: decision date -> eval date.
+        # Benchmark over the same window as the position: entry close -> eval close.
         bench_return = get_benchmark_return_pct(
-            store, since_date=outcome.decision_date, until_date=eval_date
+            store, since_date=entry[0], until_date=eval_date
         )
 
         if bench_return is None:
@@ -80,32 +83,17 @@ def evaluate_pending_outcomes(store: Store, lookback_days: int = 28,
     return evaluated
 
 
-# Further from the stored decision price than a normal decision-day move: a
-# 6:5 split (−16.7%) clears it, a dividend adjustment of a few percent doesn't.
-REBASE_TOLERANCE = 0.15
+def _entry_close(store: Store, outcome: DecisionOutcome) -> tuple[str, float] | None:
+    """The stock's close on the decision day — the same point the benchmark starts.
 
-
-def _entry_price(store: Store, outcome: DecisionOutcome) -> float:
-    """The decision price on the same basis as the evaluation close.
-
-    `price_at_decision` is frozen when the run decides, but every run rewrites
-    the price cache with split-adjusted history, so after a split the two no
-    longer share a basis and a 2:1 split scored as −50%. When the cache's own
-    close for the decision day is further from the stored price than a day
-    can move, the history was rebased and both ends come from it.
+    The label is close-to-close on both legs. It used to run from the 09:30
+    decision price for the stock but from the decision day's close for the
+    benchmark, so the day's intraday move counted for one and not the other.
+    Both ends now come from the same price cache, which every run rewrites with
+    split-adjusted history, so a split needs no special case either. The cost
+    is deliberate: the move between 09:30 and that day's close is not scored.
     """
-    cached = store.close_on_or_before(outcome.ticker, outcome.decision_date, max_delta_days=7)
-    if cached is None or abs(cached[1] / outcome.price_at_decision - 1) <= REBASE_TOLERANCE:
-        return outcome.price_at_decision
-    # A split rescales every close before it, the session before the decision
-    # included; a real decision-day move (a report-day collapse after the
-    # 09:30 run) leaves that close where the decision saw it. Rebasing on the
-    # decision-day close alone scored a −20% day as 0% and erased the tails.
-    before = (datetime.strptime(outcome.decision_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-    prior = store.close_on_or_before(outcome.ticker, before, max_delta_days=7)
-    if prior is not None and abs(prior[1] / outcome.price_at_decision - 1) <= REBASE_TOLERANCE:
-        return outcome.price_at_decision
-    return cached[1]
+    return store.close_on_or_after(outcome.ticker, outcome.decision_date, max_delta_days=7)
 
 
 def _evaluation_price(

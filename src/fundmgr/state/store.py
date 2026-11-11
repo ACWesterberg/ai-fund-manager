@@ -1946,6 +1946,24 @@ class Store:
             return None
         return row["date"], float(row["close"])
 
+    def close_on_or_after(
+        self, ticker: str, target_date: str, max_delta_days: int = 7
+    ) -> tuple[str, float] | None:
+        """First finite positive close on or after a date, within a week of it."""
+        import math
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT date, close FROM price_cache WHERE ticker = ? "
+                "AND date >= ? AND date <= DATE(?, ?) AND close > 0 "
+                "ORDER BY date ASC",
+                (ticker, target_date, target_date, f"+{max_delta_days} days"),
+            ).fetchall()
+        for row in rows:
+            if math.isfinite(row["close"]):
+                return row["date"], float(row["close"])
+        return None
+
     def close_on_or_before(
         self, ticker: str, target_date: str, max_delta_days: int = 7
     ) -> tuple[str, float] | None:

@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import html
 import os
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from urllib.parse import quote, urlsplit
@@ -23,7 +24,7 @@ from dotenv import load_dotenv
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from fundmgr.config import ROOT
+from fundmgr.config import DATA_DIR, ROOT
 
 load_dotenv(ROOT / ".env")
 
@@ -36,9 +37,41 @@ _failures: dict[str, list[float]] = {}
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 
+SESSION_KEY_FILE = DATA_DIR / "web" / "session.key"
+_session_key: bytes | None = None
+
+
+def _server_key() -> bytes:
+    """A random key, created once on the host and shared by both dashboard ports.
+
+    The cookie used to be signed with a key derived from the password alone, so
+    anyone holding one cookie could test password guesses offline at hash
+    speed — and the password is also the Basic credential. Created exclusively
+    (0600) so the two web processes starting together can't write two keys.
+    `FUND_WEB_SESSION_SECRET` overrides the file.
+    """
+    global _session_key
+    if env := os.getenv("FUND_WEB_SESSION_SECRET"):
+        return env.encode()
+    if _session_key is None:
+        SESSION_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(SESSION_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(secrets.token_hex(32))
+        key = SESSION_KEY_FILE.read_text().strip()
+        if len(key) < 32:
+            raise RuntimeError(f"{SESSION_KEY_FILE} is empty or truncated — delete it to make a new one")
+        _session_key = key.encode()
+    return _session_key
+
+
 def _secret(password: str) -> bytes:
-    # Derived from the password, so changing it signs every old session out.
-    return hashlib.sha256(f"fund-session:{password}".encode()).digest()
+    # The password is mixed in so that changing it still signs every session out.
+    return hmac.new(_server_key(), f"fund-session:{password}".encode(), hashlib.sha256).digest()
 
 
 def _sign(expiry: int, password: str) -> str:

@@ -58,7 +58,7 @@ EXCLUDED_NAMES = {"data/deploy.lock", "data/deploy.pid", "data/deployed-revision
 # Credentials: API keys, and the Montrose OAuth token (its refresh token reaches the
 # real broker account without BankID). A migration needs them; a backup bound for cloud
 # storage does not, so --no-secrets leaves every one out.
-SECRETS = (".env", "data/montrose/token.json")
+SECRETS = (".env", "data/montrose/token.json", "data/web/session.key")
 EXCLUDED_SUFFIXES = ("-wal", "-shm", "-journal", ".pyc", ".pyo")
 
 

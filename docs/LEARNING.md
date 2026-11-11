@@ -19,10 +19,12 @@ they are not interchangeable with profitable allocations.
   leaves the outcome pending instead of generating an incomplete lesson batch.
   A bar dated today is still filling and is never a label (the outcome waits
   for the next run), and the benchmark must be cached through the evaluation
-  date. The entry is rebased for a split only when the close before the
-  decision moved too, so a real decision-day collapse is scored, not erased.
-  The benchmark still starts at the decision day's close while the entry is
-  the decision-time price — a known, unfixed intraday mismatch.
+  date. Labels are close-to-close on both legs: the stock's entry is its close
+  on the decision day (the first cached close on or after it), the same point
+  the benchmark starts from. Both ends come from one split-adjusted price
+  cache, so splits need no special case. The decision day's own move (09:30 to
+  close) is deliberately in neither leg; before 2026-11-11 the stock leg ran
+  from the 09:30 decision price while the benchmark ran from the close.
 - **Thesis evidence:** include only news both published and cached inside the
   inclusive UTC date window, ending at the earlier of the actual evaluation date
   and the requested horizon. Undated/unparseable news is excluded. Repeated cache

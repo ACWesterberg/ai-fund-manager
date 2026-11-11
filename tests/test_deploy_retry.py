@@ -44,8 +44,15 @@ def deployment(tmp_path):
         path.chmod(0o755)
     (tmp_path / "FinanceData").mkdir()
     env = {**os.environ, "PATH": f"{binaries}:{os.environ['PATH']}", "FUND_DIR": str(repo),
-           "FINANCEDATA_DIR": str(tmp_path / "FinanceData")}
+           "FINANCEDATA_DIR": str(tmp_path / "FinanceData"),
+           # As GitHub Actions calls it, once the tests passed.
+           "EXPECTED_REVISION": run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()}
     return repo, env
+
+
+def untested(env: dict) -> dict:
+    """The environment the webhook and the poll run in: no test result."""
+    return {k: v for k, v in env.items() if k != "EXPECTED_REVISION"}
 
 
 @pytest.mark.parametrize("failure", ["fail-install", "fail-restart", "fail-health"])
@@ -58,8 +65,9 @@ def test_same_revision_retries_until_success(deployment, failure):
     assert first.returncode != 0
     assert not marker.exists()
     fault.unlink()
-    # Polling also retries when HEAD already equals origin/deploy.
-    run("bash", str(repo / "deploy/poll-deploy.sh"), env=env)
+    # Polling also retries when HEAD already equals origin/deploy — for the
+    # revision Actions handed over as tested.
+    run("bash", str(repo / "deploy/poll-deploy.sh"), env=untested(env))
     assert marker.read_text().strip() == run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
     events = (repo / "data/events").read_text()
     run("bash", str(repo / "deploy/deploy.sh"), env=env)
@@ -119,6 +127,7 @@ def test_a_changed_deploy_script_runs_its_new_steps_in_the_same_deploy(deploymen
     script.write_text(old.replace(marker, 'echo new-step >> "$FUND_DIR/data/events"\n' + marker))
     run("git", "commit", "-qam", "add a deploy step", cwd=repo)
     run("git", "push", "-q", "origin", "deploy", cwd=repo)
+    env = {**env, "EXPECTED_REVISION": run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()}
     run("git", "reset", "-q", "--hard", "HEAD~1", cwd=repo)          # the Pi, one deploy behind
     assert script.read_text() == old
 
@@ -139,3 +148,23 @@ def test_a_retired_host_refuses_every_deploy(deployment):
     assert result.returncode != 0
     assert "retired" in (repo / "data/logs/deploy.log").read_text()
     assert not (repo / "data/events").exists()  # nothing installed, nothing restarted
+
+
+
+def test_an_untested_push_is_not_deployed_by_the_poll_or_webhook(deployment):
+    """A red commit on `deploy` used to go live via the poll before its tests ran."""
+    repo, env = deployment
+    run("bash", str(repo / "deploy/deploy.sh"), env=env)            # Actions: tested HEAD
+    tested = (repo / "data/deployed-revision").read_text().strip()
+    (repo / "data/events").unlink()
+
+    (repo / "new.txt").write_text("untested change")
+    run("git", "add", "new.txt", cwd=repo)
+    run("git", "commit", "-qm", "untested", cwd=repo)
+    run("git", "push", "-q", "origin", "deploy", cwd=repo)
+    run("git", "reset", "-q", "--hard", "HEAD~1", cwd=repo)
+
+    run("bash", str(repo / "deploy/poll-deploy.sh"), env=untested(env))
+    assert not (repo / "data/events").exists()                      # nothing installed
+    assert run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip() == tested
+    assert "no passing test run" in (repo / "data/logs/deploy.log").read_text()

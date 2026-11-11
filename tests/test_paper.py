@@ -450,7 +450,10 @@ def test_track_runs_evaluation_after_horizon(paper_dir, mock_market, monkeypatch
     with store._conn() as conn:
         conn.execute("UPDATE recommendations SET timestamp = ?", (past,))
     eval_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-    store.save_prices("AAPL", [{"date": eval_date, "open": 240, "high": 240,
+    decision_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    store.save_prices("AAPL", [{"date": decision_date, "open": 200, "high": 200,
+                                "low": 200, "close": 200, "volume": 1000},
+                               {"date": eval_date, "open": 240, "high": 240,
                                 "low": 240, "close": 240, "volume": 1000}])
     store.save_benchmark([
         {"date": (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d"), "close": 100.0},

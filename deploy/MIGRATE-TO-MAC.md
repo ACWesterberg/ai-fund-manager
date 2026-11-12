@@ -15,9 +15,24 @@ Everything git does not hold is state, and most of it exists only on the Pi:
 | Active guidance, inactive candidates, search checkpoints, batch ids, request cache | `config/compiled/` (not in git) | **No** (paid for) |
 | Shadow comparisons (immutable, scored later) | `data/shadow/` | **No** |
 | What-If results, ticker aliases, reports, logs | `data/whatif/`, `data/ticker_aliases.json`, `data/reports*/`, `data/logs/` | Mostly no |
-| API keys, Telegram, dashboard password | `.env` | Re-enterable |
+| Run archive: what each run could see (every screened name, raw fundamentals) | `data/archive/` | **No** |
+| API keys, Telegram, dashboard password, session key | `.env`, `data/web/session.key` | Re-enterable |
 | Montrose OAuth token, instrument map | `data/montrose/` | Token: BankID login again; map: rebuilt by hand |
-| FinanceData cache (prices, fundamentals, news) | `~/.financedata/` | Prices yes; aged-off news no |
+| FinanceData cache (prices, fundamentals, news, universe change history) | `~/.financedata/cache.db`, or wherever `FINANCEDATA_DB` points | Prices yes; aged-off news and the universe history no |
+
+### FinanceData comes too, as code and as a cache
+
+FinanceData has no state in its own checkout, only code and a committed universe
+snapshot. On the Mac it is a fresh clone beside the fund (step 0). Its state is one
+SQLite cache, which the export carries: `~/.financedata/` by default, or the file
+`FINANCEDATA_DB` names (in the environment or the fund's `.env`; `export` refuses if that
+is outside the home directory rather than leave it behind). If that path is not the
+default, set `FINANCEDATA_DB` in the Mac's `.env` to its new location.
+
+**DeepSwing stays on the Pi and keeps using FinanceData there.** So the Pi keeps its
+FinanceData checkout and its cache. The move copies the cache and removes nothing. After
+the cutover the two caches drift apart (each machine fetches its own), which costs a
+little duplicate fetching and nothing else. Move DeepSwing later the same way.
 
 The funds cannot be split across machines: each fund's optimizer pools training
 examples from the other four databases (`optimizer.pool_configs`), and one Telegram bot
@@ -67,7 +82,15 @@ ai-studio must already be running there (its `docs/day-one.md`), then:
    cd ai-fund-manager && git checkout deploy
    uv venv .venv && uv pip install -e ../FinanceData && uv pip install -e .
    ```
-   Put it next to `ai-studio` (or pass `--studio` below).
+   Put it next to `ai-studio` (or pass `--studio` below). FinanceData stays on `main`
+   (`deploy.sh` checks that on every deploy).
+7. **FinanceData's API keys** (`EODHD_API_TOKEN`, `ALPHA_VANTAGE_KEY`, `NEWS_API_KEY`,
+   `FINNHUB_API_KEY`, `FRED_API_KEY`). If they are in the fund's `.env`, the archive
+   carries them. If the Pi sets them elsewhere, add them to the Mac's `.env`. To check
+   on the Pi:
+   ```bash
+   grep -lE 'EODHD|ALPHA_VANTAGE|NEWS_API|FINNHUB|FRED' ~/Documents/ai-fund-manager/.env ~/.bashrc ~/.profile /etc/systemd/system/*.service 2>/dev/null
+   ```
 
 ## 1. Rehearse (the Pi keeps running)
 
@@ -94,13 +117,17 @@ refresh token, the Pi's copy can stop working and need a fresh BankID login.
 
 ## 2. Cut over
 
-Choose a Saturday: no market, no scheduled job, and Sunday's optimize run will be the
-first job on the Mac.
+Choose a Saturday after 09:00: no market, and the weekly `account-plan` (08:41) has run.
+Sunday's optimize checks are then the first jobs on the Mac.
 
 First point deploys at the Mac (**Deploys** below), so that no deploy reaches the Pi
-after this point. Then, on the Pi, stop everything that writes:
+after this point. Then, on the Pi, stop everything that writes. **Do not use
+`crontab -r`.** DeepSwing's jobs share that crontab. `pi-crontab.sh strip` removes only
+the fund's lines and the `managed_cron.sh` block, and saves the whole table first:
 ```bash
-crontab -l > ~/crontab.before-mac && crontab -r   # also removes the managed_cron.sh block
+cd ~/Documents/ai-fund-manager
+deploy/pi-crontab.sh strip      # → ~/crontab.before-mac, then the fund's lines removed
+crontab -l                      # check: DeepSwing and anything else still there
 pgrep -af fund        # wait until nothing but the services is left
 sudo systemctl disable --now fundmgr-bot fundmgr-web fundmgr-global-web
 cd ~/Documents/ai-fund-manager && python3 deploy/migrate.py export
@@ -116,6 +143,10 @@ python3 deploy/migrate.py restore ~/fund-migration-<final>.tgz --force   # --for
 python3 deploy/macos/launchd.py install
 python3 deploy/migrate.py verify
 ```
+The fund's `tested-revision` came across in the archive, so the Mac's poller and
+webhook will deploy only what CI last passed. To deploy the current `deploy` head by
+hand: `EXPECTED_REVISION=$(git rev-parse origin/deploy) deploy/deploy.sh`. A push to
+`deploy` does the same once the GitHub secrets point at the Mac.
 Then check that `/status` answers in Telegram, the dashboard loads at `http://mac-studio:8010`
 (sims under `/sim*`), and `launchctl list | grep fundmgr` lists the jobs.
 Delete the archives once restored: they contain `.env`.
@@ -126,7 +157,7 @@ by accident:
 cd ~/Documents/ai-fund-manager
 mv data data.moved-to-mac-$(date +%Y%m%d) && mkdir -p data/logs
 echo "$(date +%F), mac-studio" > data/moved-to-mac   # deploy.sh now refuses to run here
-crontab deploy/cron.pi-watchdog
+deploy/pi-crontab.sh watchdog   # adds the watchdog lines next to DeepSwing's
 MAC_FUND_URL=http://mac-studio:8010/ deploy/watchdog.sh    # prints nothing when the Mac is up
 ```
 Keep `data.moved-to-mac-*` for a few weeks. It is the fallback if the Mac copy has a problem.
@@ -151,9 +182,11 @@ or ask for a launchd job for it.
   Sunday night. The Monday 11:00 and 18:00 snapshots fall inside the window.
 - **Every job runs under `studio power run`**, so a long `paper-track` or report analysis
   finishes even if it runs past midnight.
-- **Backups** stay this repo's own (`deploy/backup.sh` → Google Drive). It now takes the
-  same export as the migration, so live sleeves, compiled guidance and shadow comparisons
-  are included. ai-studio's `pg_dumpall` does not cover SQLite.
+- **Backups** stay this repo's own (`deploy/backup.sh` → Google Drive). It takes the same
+  export as the migration, so live sleeves, compiled guidance and shadow comparisons are
+  included, and the run archive syncs to its own never-pruned remote. The Mac uses the
+  same remotes with the copied `rclone.conf`. ai-studio's `pg_dumpall` does not cover
+  SQLite.
 - **The watchdog** alerts once if the Mac does not answer for two checks in a row between
   08:45 and 22:15 (inside the window, covering every market-hours job), and again when it recovers. It does not yet run `check-stops`
   itself.
@@ -162,6 +195,6 @@ or ask for a launchd job for it.
 
 Stop the Mac (`python3 deploy/macos/launchd.py uninstall`). Then take a final
 `python3 deploy/migrate.py export` on the Mac, restore it on the Pi (`--force`), put the
-old crontab back with `crontab ~/crontab.before-mac`, and run
+old crontab back with `deploy/pi-crontab.sh restore`, remove `data/moved-to-mac`, and run
 `sudo systemctl enable --now fundmgr-bot fundmgr-web fundmgr-global-web`. The same
 tool works in both directions.

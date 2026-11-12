@@ -166,9 +166,22 @@ def _entry(path: Path, arc: str) -> dict:
     return entry
 
 
+def financedata_db(root: Path) -> Path:
+    """Where FinanceData keeps its cache: $FINANCEDATA_DB, else the fund's .env (which the
+    fund loads for every command), else its default. The same rule the library uses."""
+    value = os.environ.get("FINANCEDATA_DB")
+    env_file = root / ".env"
+    if not value and env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            key, sep, val = line.strip().partition("=")
+            if sep and key.strip().removeprefix("export ").strip() == "FINANCEDATA_DB":
+                value = val.strip().strip("'\"")
+    return Path(value or "~/.financedata/cache.db").expanduser()
+
+
 def build_stage(root: Path, stage: Path, *, include_env: bool, home_dirs: list[Path],
                 live: bool, include_logs: bool = True,
-                include_run_archive: bool = True) -> dict:
+                include_run_archive: bool = True, home_files: list[Path] | None = None) -> dict:
     files: list[dict] = []
     for rel in state_files(root):
         if (rel in SECRETS and not include_env) or (rel.startswith("data/logs/") and not include_logs):
@@ -184,20 +197,23 @@ def build_stage(root: Path, stage: Path, *, include_env: bool, home_dirs: list[P
         files.append(_entry(dst, REPO_PREFIX + rel))
 
     home = Path.home()
-    for base in home_dirs:
-        if not base.is_dir():
-            continue
-        for src in sorted(p for p in base.rglob("*") if p.is_file()):
+    sources = [p for base in home_dirs if base.is_dir() for p in sorted(base.rglob("*"))
+               if p.is_file()]
+    sources += [p for p in home_files or [] if p.is_file() and p not in sources]
+    for src in sources:
+        try:
             rel = src.relative_to(home).as_posix()
-            if _excluded(rel):
-                continue
-            dst = stage / HOME_PREFIX / rel
-            if is_sqlite(src):
-                snapshot_sqlite(src, dst)
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-            files.append(_entry(dst, HOME_PREFIX + rel))
+        except ValueError:  # reached through a symlinked home
+            rel = src.resolve().relative_to(home.resolve()).as_posix()
+        if _excluded(rel):
+            continue
+        dst = stage / HOME_PREFIX / rel
+        if is_sqlite(src):
+            snapshot_sqlite(src, dst)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        files.append(_entry(dst, HOME_PREFIX + rel))
 
     patch = _git(root, "diff", "--binary", "HEAD")
     if patch:
@@ -245,12 +261,27 @@ def cmd_export(args: argparse.Namespace) -> int:
             return 1
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(args.out or Path.home() / f"fund-migration-{stamp}.tgz").expanduser()
-    home_dirs = [] if args.no_financedata_cache else [Path.home() / ".financedata"]
+    home_dirs, home_files = [], []
+    if not args.no_financedata_cache:
+        # FinanceData's cache: prices and fundamentals refetch, but aged-off news and the
+        # universe's change history do not. DeepSwing shares it, so this is a copy.
+        home_dirs = [Path.home() / ".financedata"]
+        db = financedata_db(root).resolve()
+        if not db.is_relative_to(Path.home().resolve()):
+            print(f"FinanceData's cache is at {db}, outside the home directory, so the "
+                  "archive cannot carry it. Copy it by hand, or pass --no-financedata-cache.",
+                  file=sys.stderr)
+            return 1
+        if db.parent != (Path.home() / ".financedata").resolve():
+            home_files = [db]
+            print(f"  FinanceData cache at {db} (FINANCEDATA_DB): carried; set FINANCEDATA_DB "
+                  "on the new machine to its new path")
     with tempfile.TemporaryDirectory() as tmp:
         stage = Path(tmp)
         manifest = build_stage(root, stage, include_env=not args.no_secrets, home_dirs=home_dirs,
                                live=args.live, include_logs=not args.no_logs,
-                               include_run_archive=not args.no_run_archive)
+                               include_run_archive=not args.no_run_archive,
+                               home_files=home_files)
         (stage / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True))
         bad = [f["path"] for f in manifest["files"]
                if "sqlite" in f and f["sqlite"]["integrity"] != "ok"]

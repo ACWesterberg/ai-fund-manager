@@ -260,3 +260,26 @@ def test_backup_script_takes_a_live_export_without_secrets(pi, mac):
     assert manifest["live"] is True
     assert restore(dst, home, archive) == 0
     assert count(dst / "data" / "fund.db") == 4
+
+
+def test_a_financedata_cache_moved_by_financedata_db_is_carried(pi, mac, tmp_path, monkeypatch):
+    (src, home), (dst, mac_home) = pi, mac
+    make_db(home / "data" / "fd.db", 7).close()
+    (src / ".env").write_text(f'OPENAI_API_KEY=x\nexport FINANCEDATA_DB="{home}/data/fd.db"\n')
+    monkeypatch.delenv("FINANCEDATA_DB", raising=False)
+    archive = tmp_path / "move.tgz"
+    assert export(src, archive) == 0
+    assert restore(dst, mac_home, archive) == 0
+    assert count(mac_home / "data" / "fd.db") == 7
+    assert count(mac_home / ".financedata" / "cache.db") == 5  # the default dir still comes too
+
+
+def test_a_financedata_cache_outside_home_is_refused_not_dropped(pi, tmp_path, monkeypatch):
+    src, _ = pi
+    outside = tmp_path / "srv" / "fd.db"
+    make_db(outside, 1).close()
+    monkeypatch.setenv("FINANCEDATA_DB", str(outside))
+    archive = tmp_path / "move.tgz"
+    assert export(src, archive) == 1
+    assert not archive.exists()
+    assert export(src, archive, "--no-financedata-cache") == 0

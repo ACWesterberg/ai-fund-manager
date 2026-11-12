@@ -1,6 +1,7 @@
-# The Pi's whole crontab once the fund runs on the Mac Studio (deploy/MIGRATE-TO-MAC.md).
-# Install with: crontab deploy/cron.pi-watchdog   (replaces the old table; keep a copy:
-#               crontab -l > ~/crontab.before-mac)
+# The fund's only Pi jobs once it runs on the Mac Studio (deploy/MIGRATE-TO-MAC.md).
+# Install with: deploy/pi-crontab.sh watchdog. It adds these lines beside the rest of
+# the crontab (DeepSwing's jobs live there too). Never `crontab` this file directly,
+# because that would replace the whole table.
 #
 # Checks only while the Mac must be awake: 08:45 (before the first stops check at 09:00)
 # to 22:15 (after the last US one), well inside its trading-day window (ai-studio config
